@@ -9,6 +9,10 @@ updated: 2026-04-24
 
 # Charon: credential proxy MVP
 
+## Context
+
+Read ./docs/vision/2026-04-24-01-pensive-why-charon.md for context. 
+
 ## Problem
 
 AI agents that access user services (Gmail, Calendar, banking) must never see OAuth tokens or credentials. Current approaches either emit tokens to the calling process (aws-vault, 1password CLI) or are heavyweight (Infisical Agent Vault). We need a simple, single-binary credential proxy that:
