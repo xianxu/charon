@@ -17,13 +17,20 @@ import (
 
 const charonAccountHeader = "X-Charon-Account"
 
+// Refresher can refresh expired credentials.
+type Refresher interface {
+	Refresh(cred *vault.Credential) (*vault.Credential, error)
+}
+
 // Server is the Charon HTTPS forward proxy.
 type Server struct {
-	Vault     vault.Store
-	Audit     *AuditLog
-	Addr      string // listen address, e.g. "127.0.0.1:8230"
-	CA        *CA
-	Transport http.RoundTripper
+	Vault      vault.Store
+	Audit      *AuditLog
+	Addr       string // listen address, e.g. "127.0.0.1:8230"
+	CA         *CA
+	Transport  http.RoundTripper
+	Refreshers map[string]Refresher // provider name → refresher (e.g. "google" → GoogleProvider)
+	Verbose    bool                 // enable debug logging
 	// Now returns the current time. Defaults to time.Now. Override in tests.
 	Now func() time.Time
 
@@ -44,6 +51,12 @@ func (s *Server) ClearCache() {
 	s.accountCache.Range(func(k, v any) bool { s.accountCache.Delete(k); return true })
 }
 
+func (s *Server) debug(format string, args ...any) {
+	if s.Verbose {
+		log.Printf(format, args...)
+	}
+}
+
 func (s *Server) now() time.Time {
 	if s.Now != nil {
 		return s.Now()
@@ -51,11 +64,17 @@ func (s *Server) now() time.Time {
 	return time.Now()
 }
 
+// http1Transport is used for CONNECT interception — forces HTTP/1.1 upstream
+// since our client-side MITM connection is HTTP/1.1.
+var http1Transport = &http.Transport{
+	TLSNextProto: make(map[string]func(string, *tls.Conn) http.RoundTripper), // disable HTTP/2
+}
+
 func (s *Server) transport() http.RoundTripper {
 	if s.Transport != nil {
 		return s.Transport
 	}
-	return http.DefaultTransport
+	return http1Transport
 }
 
 // ListenAndServe starts the proxy server.
@@ -146,8 +165,10 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		log.Printf("TLS handshake with client failed: %v", err)
 		return
 	}
+	s.debug("CONNECT %s: TLS handshake complete", hostname)
 
 	clientReader := bufio.NewReader(tlsClientConn)
+	reqNum := 0
 	for {
 		req, err := http.ReadRequest(clientReader)
 		if err != nil {
@@ -156,6 +177,9 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+
+		reqNum++
+		s.debug("CONNECT %s: request #%d %s %s", hostname, reqNum, req.Method, req.URL.Path)
 
 		start := s.now()
 		account := req.Header.Get(charonAccountHeader)
@@ -211,12 +235,21 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		entry.LatencyMs = time.Since(start).Milliseconds()
 		s.Audit.Log(entry)
 
-		// Stream response: write status/headers, then copy body.
-		fmt.Fprintf(tlsClientConn, "HTTP/%d.%d %s\r\n", resp.ProtoMajor, resp.ProtoMinor, resp.Status)
-		_ = resp.Header.Write(tlsClientConn)
-		_, _ = fmt.Fprintf(tlsClientConn, "\r\n")
-		_, _ = io.Copy(tlsClientConn, resp.Body)
+		// Ensure response has proper framing so the client knows where the body ends.
+		// Go's transport strips Transfer-Encoding and dechunks the body, leaving
+		// ContentLength=-1. Without framing, the client waits for connection close.
+		if resp.ContentLength < 0 && len(resp.TransferEncoding) == 0 {
+			resp.TransferEncoding = []string{"chunked"}
+		}
+
+		_ = resp.Write(tlsClientConn)
 		_ = resp.Body.Close()
+
+		// Honor Connection: close from either client or upstream.
+		if req.Close || resp.Close {
+			s.debug("CONNECT %s: closing (req.Close=%v, resp.Close=%v)", hostname, req.Close, resp.Close)
+			return
+		}
 	}
 }
 
@@ -361,9 +394,30 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 		return cred.AccessToken, account, nil
 	}
 
+	// Token expired or missing — try to refresh.
+	if cred.RefreshToken != "" && s.Refreshers != nil {
+		if refresher, ok := s.Refreshers[providerName]; ok {
+			refreshed, err := refresher.Refresh(cred)
+			if err != nil {
+				log.Printf("token refresh failed for %s/%s: %v", providerName, account, err)
+			} else {
+				// Store refreshed credential in vault (persists new refresh token if rotated).
+				if storeErr := s.Vault.Set(refreshed); storeErr != nil {
+					log.Printf("failed to store refreshed token for %s/%s: %v", providerName, account, storeErr)
+				}
+				s.tokenCache.Store(cacheKey, &cachedToken{
+					token:  refreshed.AccessToken,
+					expiry: refreshed.Expiry,
+				})
+				return refreshed.AccessToken, account, nil
+			}
+		}
+	}
+
+	// Fallback: return whatever token we have (may be expired).
 	if cred.AccessToken != "" {
 		return cred.AccessToken, account, nil
 	}
 
-	return "", account, fmt.Errorf("no access token for %s/%s (refresh not yet implemented)", providerName, account)
+	return "", account, fmt.Errorf("no access token for %s/%s and refresh not available", providerName, account)
 }

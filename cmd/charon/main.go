@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/xianxu/charon/internal/oauth"
 	"github.com/xianxu/charon/internal/proxy"
 	"github.com/xianxu/charon/internal/vault"
 	"github.com/xianxu/charon/internal/vault/keychain"
@@ -22,6 +23,7 @@ var (
 	listenAddr string
 	auditPath  string
 	configDir  string
+	verbose    bool
 )
 
 func defaultConfigDir() string {
@@ -41,6 +43,7 @@ func main() {
 
 	root.AddCommand(serveCmd())
 	root.AddCommand(runCmd())
+	root.AddCommand(authCmd())
 	root.AddCommand(accountsCmd())
 	root.AddCommand(statusCmd())
 	root.AddCommand(vaultCmd())
@@ -78,16 +81,26 @@ func serveCmd() *cobra.Command {
 			}
 			defer audit.Close()
 
+			refreshers := make(map[string]proxy.Refresher)
+			if gp, err := oauth.NewGoogleProvider(); err == nil {
+				refreshers["google"] = gp
+			} else {
+				log.Printf("warning: Google OAuth not available: %v", err)
+			}
+
 			srv := &proxy.Server{
-				Vault: newVault(),
-				Audit: audit,
-				Addr:  listenAddr,
-				CA:    ca,
+				Vault:      newVault(),
+				Audit:      audit,
+				Addr:       listenAddr,
+				CA:         ca,
+				Refreshers: refreshers,
+				Verbose:    verbose,
 			}
 			return srv.ListenAndServe()
 		},
 	}
 	cmd.Flags().StringVar(&auditPath, "audit-log", "", "audit log path (default: <config-dir>/audit.log)")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "enable debug logging")
 	return cmd
 }
 
@@ -150,6 +163,62 @@ Example:
 			return syscall.Exec(binary, args, env)
 		},
 	}
+	return cmd
+}
+
+func authCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "auth",
+		Short: "Authenticate with a service provider",
+	}
+	cmd.AddCommand(authGoogleCmd())
+	return cmd
+}
+
+func authGoogleCmd() *cobra.Command {
+	var scopes []string
+	cmd := &cobra.Command{
+		Use:   "google <account-email>",
+		Short: "Authenticate a Google account via OAuth",
+		Long: `Runs the Google OAuth 2.0 flow: opens a browser for authorization,
+then stores the tokens in the OS keychain.
+
+Example:
+  charon auth google user@gmail.com
+  charon auth google user@gmail.com --scope https://www.googleapis.com/auth/calendar.readonly`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			account := args[0]
+			out := cmd.OutOrStdout()
+
+			gp, err := oauth.NewGoogleProvider()
+			if err != nil {
+				return err
+			}
+
+			// Check for existing scopes for incremental auth.
+			v := newVault()
+			var existingScopes []string
+			if existing, err := v.Get("google", account); err == nil {
+				existingScopes = existing.Scopes
+			}
+
+			fmt.Fprintf(out, "Authenticating %s with Google...\n", account)
+			cred, err := gp.Auth(account, scopes, existingScopes)
+			if err != nil {
+				return err
+			}
+
+			if err := v.Set(cred); err != nil {
+				return fmt.Errorf("failed to store credential: %w", err)
+			}
+
+			notifyProxyCacheClear()
+			fmt.Fprintf(out, "Authenticated %s (scopes: %v)\n", account, cred.Scopes)
+			return nil
+		},
+	}
+	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "OAuth scopes (default: gmail.readonly)")
 	return cmd
 }
 

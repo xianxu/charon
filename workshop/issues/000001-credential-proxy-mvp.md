@@ -106,12 +106,12 @@ Config stored alongside credentials or in a simple YAML/JSON file.
 
 ### Milestone 2: OAuth PKCE flow
 
-- [ ] Google OAuth 2.0 + PKCE flow
-- [ ] `charon auth google user@gmail.com` — opens browser, completes OAuth, stores tokens
-- [ ] Automatic access token refresh on proxy requests
-- [ ] Refresh token rotation
-- [ ] Incremental scope support
-- [ ] Provider interface for future services
+- [x] Google OAuth 2.0 flow (installed app with client_secret, not PKCE-only)
+- [x] `charon auth google user@gmail.com` — opens browser, completes OAuth, stores tokens
+- [x] Automatic access token refresh on proxy requests
+- [x] Refresh token rotation (new refresh token stored when Google rotates)
+- [x] Incremental scope support (`--scope` flag, merges with existing)
+- [x] Refresher interface for future services
 
 ### Milestone 3: Polish
 
