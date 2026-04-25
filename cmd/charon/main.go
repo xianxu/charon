@@ -92,7 +92,7 @@ func serveCmd() *cobra.Command {
 			return srv.ListenAndServe()
 		},
 	}
-	cmd.Flags().StringVar(&auditPath, "audit-log", "", "audit log path (default: <config-dir>/audit.log)")
+	cmd.Flags().StringVar(&auditPath, "audit-log", "", "audit log file path (default: stderr)")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "enable debug logging")
 	return cmd
 }

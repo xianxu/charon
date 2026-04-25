@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,8 +13,9 @@ import (
 // in a temp directory. Returns the path to the bundle file.
 // The bundle is ephemeral — regenerated each time the proxy starts.
 func BuildCABundle(charonCAPEM []byte) (bundlePath string, cleanup func(), err error) {
-	dir, err := os.MkdirTemp("", "charon-ca-*")
-	if err != nil {
+	// Use a fixed temp dir so `charon run` reuses it instead of accumulating dirs.
+	dir := filepath.Join(os.TempDir(), fmt.Sprintf("charon-ca-%d", os.Getuid()))
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", nil, err
 	}
 	cleanup = func() { os.RemoveAll(dir) }

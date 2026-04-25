@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"log"
 	"net"
 	"net/http"
@@ -206,7 +207,7 @@ func waitForCallback(ln net.Listener) (string, error) {
 				if errMsg == "" {
 					errMsg = "no authorization code received"
 				}
-				fmt.Fprintf(w, "<html><body><h1>Authorization Failed</h1><p>%s</p><p>You can close this tab.</p></body></html>", errMsg)
+				fmt.Fprintf(w, "<html><body><h1>Authorization Failed</h1><p>%s</p><p>You can close this tab.</p></body></html>", html.EscapeString(errMsg))
 				errCh <- fmt.Errorf("OAuth error: %s", errMsg)
 				return
 			}
@@ -262,5 +263,7 @@ func openBrowser(url string) {
 		log.Printf("Please open this URL manually: %s", url)
 		return
 	}
-	_ = cmd.Start()
+	if err := cmd.Start(); err == nil {
+		go cmd.Wait() // reap child process
+	}
 }

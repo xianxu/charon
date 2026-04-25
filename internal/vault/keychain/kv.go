@@ -23,13 +23,8 @@ func GetRaw(service, account string) (string, error) {
 }
 
 // SetRaw writes a raw string value to the keychain.
+// The -U flag on add-generic-password handles both create and update atomically.
 func SetRaw(service, account, value string) error {
-	// Delete first, then add with -U to handle both create and update.
-	_ = exec.Command("security", "delete-generic-password",
-		"-s", service,
-		"-a", account,
-	).Run()
-
 	return exec.Command("security", "add-generic-password",
 		"-s", service,
 		"-a", account,

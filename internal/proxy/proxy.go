@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/xianxu/charon/internal/vault"
+	"golang.org/x/sync/singleflight"
 )
 
 const charonAccountHeader = "X-Charon-Account"
@@ -38,6 +39,8 @@ type Server struct {
 	tokenCache sync.Map
 	// accountCache caches provider→account resolution for single-account providers.
 	accountCache sync.Map
+	// refreshGroup deduplicates concurrent refresh calls for the same provider:account.
+	refreshGroup singleflight.Group
 }
 
 type cachedToken struct {
@@ -395,13 +398,22 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 	}
 
 	// Token expired or missing — try to refresh.
+	// Use singleflight to prevent concurrent refreshes for the same account
+	// (thundering herd when multiple requests arrive with an expired token).
 	if cred.RefreshToken != "" && s.Refreshers != nil {
 		if refresher, ok := s.Refreshers[providerName]; ok {
-			refreshed, err := refresher.Refresh(cred)
-			if err != nil {
-				log.Printf("token refresh failed for %s/%s: %v", providerName, account, err)
-			} else {
-				// Store refreshed credential in vault (persists new refresh token if rotated).
+			result, err, _ := s.refreshGroup.Do(cacheKey, func() (any, error) {
+				// Double-check cache — another goroutine may have refreshed while we waited.
+				if cached, ok := s.tokenCache.Load(cacheKey); ok {
+					ct := cached.(*cachedToken)
+					if ct.expiry.IsZero() || now.Before(ct.expiry.Add(-vault.GracePeriod)) {
+						return ct.token, nil
+					}
+				}
+				refreshed, err := refresher.Refresh(cred)
+				if err != nil {
+					return nil, err
+				}
 				if storeErr := s.Vault.Set(refreshed); storeErr != nil {
 					log.Printf("failed to store refreshed token for %s/%s: %v", providerName, account, storeErr)
 				}
@@ -409,7 +421,12 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 					token:  refreshed.AccessToken,
 					expiry: refreshed.Expiry,
 				})
-				return refreshed.AccessToken, account, nil
+				return refreshed.AccessToken, nil
+			})
+			if err != nil {
+				log.Printf("token refresh failed for %s/%s: %v", providerName, account, err)
+			} else {
+				return result.(string), account, nil
 			}
 		}
 	}
