@@ -73,12 +73,17 @@ func TestAuditLogWritesJSONLines(t *testing.T) {
 }
 
 func TestAuditLogDefaultPath(t *testing.T) {
-	// Just verify it doesn't crash with empty path (uses default).
-	log, err := NewAuditLog("")
+	// Test with a temp dir to avoid writing to real home directory.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.log")
+	log, err := NewAuditLog(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	log.Close()
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("expected audit log file to exist at %s", path)
+	}
 }
 
 func TestAuditLogAppends(t *testing.T) {

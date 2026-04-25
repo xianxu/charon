@@ -71,7 +71,7 @@ func generateCA() (*CA, error) {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: randomSerial(),
 		Subject: pkix.Name{
 			CommonName:   "Charon Proxy CA",
 			Organization: []string{"Charon"},

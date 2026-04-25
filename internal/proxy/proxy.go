@@ -212,7 +212,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		s.Audit.Log(entry)
 
 		// Stream response: write status/headers, then copy body.
-		fmt.Fprintf(tlsClientConn, "HTTP/%d.%d %d %s\r\n", resp.ProtoMajor, resp.ProtoMinor, resp.StatusCode, resp.Status)
+		fmt.Fprintf(tlsClientConn, "HTTP/%d.%d %s\r\n", resp.ProtoMajor, resp.ProtoMinor, resp.Status)
 		_ = resp.Header.Write(tlsClientConn)
 		_, _ = fmt.Fprintf(tlsClientConn, "\r\n")
 		_, _ = io.Copy(tlsClientConn, resp.Body)

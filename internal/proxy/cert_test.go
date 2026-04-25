@@ -54,8 +54,8 @@ func TestLoadOrCreateCA_ReusesExisting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Should have the same serial number (same cert).
-	if ca1.Cert.SerialNumber.Cmp(ca2.Cert.SerialNumber) != 0 {
+	// Should have the same cert bytes (reused, not regenerated).
+	if string(ca1.CertPEM) != string(ca2.CertPEM) {
 		t.Error("expected same CA cert to be reused")
 	}
 }

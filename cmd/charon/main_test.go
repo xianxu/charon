@@ -3,14 +3,15 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/xianxu/charon/internal/proxy"
 )
 
 // executeCmd runs a cobra command with args and returns stdout, stderr, and error.
@@ -38,6 +39,41 @@ func buildRoot() *cobra.Command {
 	root.AddCommand(statusCmd())
 	root.AddCommand(vaultCmd())
 	return root
+}
+
+// startTestProxy starts a proxy server on a dynamic port and returns its address.
+// The proxy is stopped when the test completes.
+func startTestProxy(t *testing.T) (addr string, cfgDir string) {
+	t.Helper()
+	cfgDir = t.TempDir()
+
+	ca, err := proxy.LoadOrCreateCA(cfgDir)
+	if err != nil {
+		t.Fatalf("failed to create CA: %v", err)
+	}
+	_, err = proxy.BuildCABundle(cfgDir, ca.CertPEM)
+	if err != nil {
+		t.Fatalf("failed to build CA bundle: %v", err)
+	}
+
+	audit := proxy.NopAuditLog()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	addr = ln.Addr().String()
+
+	srv := &proxy.Server{
+		Vault: newVault(),
+		Audit: audit,
+		Addr:  addr,
+		CA:    ca,
+	}
+	httpSrv := &http.Server{Handler: srv}
+	go httpSrv.Serve(ln)
+	t.Cleanup(func() { httpSrv.Close() })
+
+	return addr, cfgDir
 }
 
 func TestRootHelp(t *testing.T) {
@@ -100,7 +136,6 @@ func TestRunRequiresArgs(t *testing.T) {
 
 func TestRunRequiresProxy(t *testing.T) {
 	root := buildRoot()
-	// Use a port that nothing listens on.
 	_, _, err := executeCmd(root, "--addr", "127.0.0.1:19999", "run", "--", "echo", "hi")
 	if err == nil {
 		t.Error("expected error when proxy not running")
@@ -111,29 +146,12 @@ func TestRunRequiresProxy(t *testing.T) {
 }
 
 func TestRunRequiresCABundle(t *testing.T) {
-	// Start a real proxy so health check passes.
-	root := buildRoot()
-	tmpDir := t.TempDir()
-
-	// Start proxy briefly to make healthz respond.
-	go func() {
-		r := buildRoot()
-		executeCmd(r, "--addr", "127.0.0.1:18231", "--config-dir", tmpDir, "serve")
-	}()
-	// Wait for proxy to start.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := http.Get("http://127.0.0.1:18231/healthz")
-		if err == nil {
-			resp.Body.Close()
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	addr, _ := startTestProxy(t)
 
 	// Run with a different config-dir that has no CA bundle.
 	emptyDir := t.TempDir()
-	_, _, err := executeCmd(root, "--addr", "127.0.0.1:18231", "--config-dir", emptyDir, "run", "--", "echo", "hi")
+	root := buildRoot()
+	_, _, err := executeCmd(root, "--addr", addr, "--config-dir", emptyDir, "run", "--", "echo", "hi")
 	if err == nil {
 		t.Error("expected error about missing CA bundle")
 	}
@@ -148,7 +166,7 @@ func TestVaultSetHelp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--provider", "--account", "--token"} {
+	for _, want := range []string{"--provider", "--account", "--token", "--ttl"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("vault set help missing flag %q", want)
 		}
@@ -221,23 +239,10 @@ func TestStatusWhenProxyNotRunning(t *testing.T) {
 }
 
 func TestStatusWhenProxyRunning(t *testing.T) {
-	tmpDir := t.TempDir()
-	go func() {
-		r := buildRoot()
-		executeCmd(r, "--addr", "127.0.0.1:18232", "--config-dir", tmpDir, "serve")
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := http.Get("http://127.0.0.1:18232/healthz")
-		if err == nil {
-			resp.Body.Close()
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	addr, cfgDir := startTestProxy(t)
 
 	root := buildRoot()
-	stdout, _, err := executeCmd(root, "--addr", "127.0.0.1:18232", "--config-dir", tmpDir, "status")
+	stdout, _, err := executeCmd(root, "--addr", addr, "--config-dir", cfgDir, "status")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,24 +252,10 @@ func TestStatusWhenProxyRunning(t *testing.T) {
 }
 
 func TestServeCreatesCAFiles(t *testing.T) {
-	tmpDir := t.TempDir()
-	go func() {
-		r := buildRoot()
-		executeCmd(r, "--addr", "127.0.0.1:18233", "--config-dir", tmpDir, "serve")
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := http.Get("http://127.0.0.1:18233/healthz")
-		if err == nil {
-			resp.Body.Close()
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	_, cfgDir := startTestProxy(t)
 
-	// Check CA files were created.
 	for _, name := range []string{"ca.pem", "ca-key.pem", "ca-bundle.pem"} {
-		path := filepath.Join(tmpDir, name)
+		path := filepath.Join(cfgDir, name)
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Errorf("expected %s to exist: %v", name, err)
@@ -275,30 +266,16 @@ func TestServeCreatesCAFiles(t *testing.T) {
 		}
 	}
 
-	// ca-key.pem should be mode 0600.
-	info, _ := os.Stat(filepath.Join(tmpDir, "ca-key.pem"))
+	info, _ := os.Stat(filepath.Join(cfgDir, "ca-key.pem"))
 	if info != nil && info.Mode().Perm() != 0600 {
 		t.Errorf("ca-key.pem should be 0600, got %o", info.Mode().Perm())
 	}
 }
 
 func TestServeHealthEndpointJSON(t *testing.T) {
-	tmpDir := t.TempDir()
-	go func() {
-		r := buildRoot()
-		executeCmd(r, "--addr", "127.0.0.1:18234", "--config-dir", tmpDir, "serve")
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := http.Get("http://127.0.0.1:18234/healthz")
-		if err == nil {
-			resp.Body.Close()
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	addr, _ := startTestProxy(t)
 
-	resp, err := http.Get("http://127.0.0.1:18234/healthz")
+	resp, err := http.Get("http://" + addr + "/healthz")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,8 +291,8 @@ func TestServeHealthEndpointJSON(t *testing.T) {
 	if health.Status != "ok" {
 		t.Errorf("expected status 'ok', got %q", health.Status)
 	}
-	if health.Addr != "127.0.0.1:18234" {
-		t.Errorf("expected addr '127.0.0.1:18234', got %q", health.Addr)
+	if health.Addr != addr {
+		t.Errorf("expected addr %q, got %q", addr, health.Addr)
 	}
 }
 
