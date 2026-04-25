@@ -1,6 +1,6 @@
 ---
 id: 000001
-status: open
+status: working
 deps: []
 github_issue:
 created: 2026-04-24
@@ -95,14 +95,14 @@ Config stored alongside credentials or in a simple YAML/JSON file.
 
 ### Milestone 1: Proxy + Keychain + manual token
 
-- [ ] Go project setup (go.mod, basic structure)
-- [ ] Vault interface + macOS Keychain backend
-- [ ] HTTPS proxy server (CONNECT method, TLS interception)
-- [ ] Token injection based on destination host
-- [ ] X-Charon-Account header for multi-account
-- [ ] CLI: `charon serve`, `charon accounts`, `charon status`
-- [ ] Audit logging to file
-- [ ] Manual token storage for testing: `charon vault set --service google --account user@gmail.com --token <token>`
+- [x] Go project setup (go.mod, basic structure)
+- [x] Vault interface + macOS Keychain backend
+- [x] HTTPS proxy server (CONNECT method, TLS interception)
+- [x] Token injection based on destination host
+- [x] X-Charon-Account header for multi-account
+- [x] CLI: `charon serve`, `charon accounts`, `charon status`
+- [x] Audit logging to file
+- [x] Manual token storage for testing: `charon vault set --provider google --account user@gmail.com --token <token>`
 
 ### Milestone 2: OAuth PKCE flow
 
@@ -127,3 +127,26 @@ Config stored alongside credentials or in a simple YAML/JSON file.
 - Issue created
 - Inspired by Infisical Agent Vault model but simpler: no UI, no dashboard, no approval workflow
 - Name "Charon" — the ferryman who carries you across but doesn't let you see what's underneath
+
+### 2026-04-24 — Milestone 1 Design Decisions
+- **Pure Go, no CGo** — keeps hermetic build story clean, no C toolchain needed
+- Keychain access via `security` CLI or pure-Go keychain library (no CGo bindings)
+- Go 1.21+ `toolchain` directive in go.mod for hermetic Go version pinning
+- HTTPS proxy: forward proxy model — proxy sees CONNECT target, makes its own TLS upstream connection, injects auth. No local CA cert needed
+- Use `github.com/spf13/cobra` for CLI
+- Audit log: JSON lines to `~/.config/charon/audit.log`
+- Service routing: hardcoded map for M1, config file in M3
+
+### 2026-04-24 — Milestone 1 Implementation
+- All M1 items complete: vault interface, keychain backend, proxy, CLI, audit log
+- Code review findings fixed:
+  - C5: Response streaming (was buffering entire body in memory via resp.Write)
+  - C6: Cert serial number collision (switched to crypto/rand)
+  - C7: Zero-expiry tokens not cached (treat zero expiry as "never expires")
+  - I1: Fragile type assertion on DefaultTransport (added Server.Transport field)
+  - I2: Goroutine leak in tunnel passthrough (added explicit close+sync)
+  - Error messages sanitized (no raw errors returned to client)
+- Known limitations (acceptable for MVP):
+  - No proxy auth — any local process can use the proxy
+  - CLI `vault set --token` visible in process listing — use stdin for production
+  - Keychain List() parsing is fragile (dump-keychain format varies)

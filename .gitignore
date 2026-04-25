@@ -1,3 +1,4 @@
+bin/
 .constitution-check-state
 .goto
 .openshell/.bootstrap/

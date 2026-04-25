@@ -1,2 +1,19 @@
 # Repo-specific Makefile targets.
 # This file is included by Makefile — add your own targets here.
+
+.PHONY: build test run clean
+
+build:
+	go build -o bin/charon ./cmd/charon
+
+test:
+	go test ./...
+
+run: build
+	./bin/charon serve
+
+test-integration:
+	go test -tags integration ./...
+
+clean:
+	rm -rf bin/

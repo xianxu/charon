@@ -20,7 +20,7 @@ We closed path 2 by making all credential functions private and changing the lib
 
 For a toy Gmail tool, that's fine. But brain is heading toward banking, calendar, documents — real sensitive services. Convention barriers won't cut it.
 
-## The Security Model We Want
+## The Security Model We Wan
 
 **The AI should be able to use services the user has authorized, but never see the credential.** The credential and the API call must happen in the same trust boundary, and the AI must be outside that boundary.
 
