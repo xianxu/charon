@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/xianxu/charon/internal/oauth"
 	"github.com/xianxu/charon/internal/proxy"
+	"github.com/xianxu/charon/internal/service"
 	"github.com/xianxu/charon/internal/vault"
 	"github.com/xianxu/charon/internal/vault/keychain"
 )
@@ -39,6 +40,7 @@ func main() {
 	root.AddCommand(authCmd())
 	root.AddCommand(accountsCmd())
 	root.AddCommand(statusCmd())
+	root.AddCommand(serviceCmd())
 	root.AddCommand(vaultCmd())
 
 	if err := root.Execute(); err != nil {
@@ -196,6 +198,118 @@ func printProxyInfo(cmd *cobra.Command) error {
 	fmt.Fprintf(out, "  charon run -- python my_agent.py\n")
 	fmt.Fprintf(out, "  charon run -- gmail search \"from:alice subject:invoice\"\n")
 	return nil
+}
+
+func serviceCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "service",
+		Short: "Manage charon as an OS service",
+	}
+	cmd.AddCommand(serviceInstallCmd())
+	cmd.AddCommand(serviceUninstallCmd())
+	cmd.AddCommand(serviceStartCmd())
+	cmd.AddCommand(serviceStopCmd())
+	cmd.AddCommand(serviceStatusCmd())
+	return cmd
+}
+
+func serviceInstallCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "install",
+		Short: "Install charon as a system service (starts on login)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr, err := service.New()
+			if err != nil {
+				return err
+			}
+			binary, err := os.Executable()
+			if err != nil {
+				return fmt.Errorf("could not determine binary path: %w", err)
+			}
+			serveArgs := []string{"serve"}
+			if listenAddr != "127.0.0.1:8230" {
+				serveArgs = append(serveArgs, "--addr", listenAddr)
+			}
+			if err := mgr.Install(binary, serveArgs); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Service installed and started.\n")
+			return nil
+		},
+	}
+}
+
+func serviceUninstallCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "uninstall",
+		Short: "Uninstall charon system service",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr, err := service.New()
+			if err != nil {
+				return err
+			}
+			if err := mgr.Uninstall(); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Service uninstalled.\n")
+			return nil
+		},
+	}
+}
+
+func serviceStartCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "start",
+		Short: "Start the charon service",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr, err := service.New()
+			if err != nil {
+				return err
+			}
+			if err := mgr.Start(); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Service started.\n")
+			return nil
+		},
+	}
+}
+
+func serviceStopCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop",
+		Short: "Stop the charon service",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr, err := service.New()
+			if err != nil {
+				return err
+			}
+			if err := mgr.Stop(); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Service stopped.\n")
+			return nil
+		},
+	}
+}
+
+func serviceStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show charon service status",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr, err := service.New()
+			if err != nil {
+				return err
+			}
+			status, err := mgr.Status()
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Service: %s\n", status)
+			return nil
+		},
+	}
 }
 
 func authCmd() *cobra.Command {

@@ -15,5 +15,19 @@ run: build
 test-integration:
 	go test -tags integration ./...
 
+install: build
+	@mkdir -p ~/.local/bin
+	@rm -f ~/.local/bin/charon
+	@cp bin/charon ~/.local/bin/charon
+	@echo "Installed charon to ~/.local/bin/charon"
+	@case ":$$PATH:" in \
+		*":$$HOME/.local/bin:"*) ;; \
+		*) echo "" ; \
+		   echo "~/.local/bin is not in your PATH. Add it with:" ; \
+		   echo '  export PATH="$$HOME/.local/bin:$$PATH"' ; \
+		   echo "" ; \
+		   echo "To make it permanent, add that line to your ~/.zshrc or ~/.bashrc" ;; \
+	esac
+
 clean:
 	rm -rf bin/
