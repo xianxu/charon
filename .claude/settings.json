@@ -4,7 +4,9 @@
       "Bash(mkdir:*)",
       "Bash(cp:*)",
       "Bash(rm:*)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(domain:proxy.golang.org)",
+      "WebFetch(domain:sum.golang.org)"
     ]
   },
   "sandbox": {
