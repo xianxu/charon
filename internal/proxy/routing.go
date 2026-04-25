@@ -1,7 +1,10 @@
 // Package proxy implements the Charon HTTPS forward proxy.
 package proxy
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // AuthMethod defines how credentials are injected into requests.
 type AuthMethod string
@@ -28,26 +31,34 @@ func (p *Provider) InjectAuth(setHeader func(key, value string), token string) e
 	}
 }
 
-// HostToProvider maps API hosts to credential providers.
-var HostToProvider = map[string]*Provider{
-	"gmail.googleapis.com":            {Name: "google", Auth: AuthBearer},
-	"www.googleapis.com":              {Name: "google", Auth: AuthBearer},
-	"oauth2.googleapis.com":           {Name: "google", Auth: AuthBearer},
-	"people.googleapis.com":           {Name: "google", Auth: AuthBearer},
-	"calendar-json.googleapis.com":    {Name: "google", Auth: AuthBearer},
-	"sheets.googleapis.com":           {Name: "google", Auth: AuthBearer},
-	"drive.googleapis.com":            {Name: "google", Auth: AuthBearer},
-	"admin.googleapis.com":            {Name: "google", Auth: AuthBearer},
-	"chat.googleapis.com":             {Name: "google", Auth: AuthBearer},
-	"docs.googleapis.com":             {Name: "google", Auth: AuthBearer},
-	"slides.googleapis.com":           {Name: "google", Auth: AuthBearer},
-	"tasks.googleapis.com":            {Name: "google", Auth: AuthBearer},
-	"youtube.googleapis.com":          {Name: "google", Auth: AuthBearer},
-	"youtubeanalytics.googleapis.com": {Name: "google", Auth: AuthBearer},
-	"storage.googleapis.com":          {Name: "google", Auth: AuthBearer},
+// HostToProvider maps exact API hosts to credential providers.
+var HostToProvider = map[string]*Provider{}
+
+// SuffixToProvider maps host suffixes (e.g. ".googleapis.com") to providers.
+// Checked when no exact match is found in HostToProvider.
+// suffixRule pairs a host suffix with a provider.
+type suffixRule struct {
+	Suffix   string
+	Provider *Provider
+}
+
+// SuffixToProvider maps host suffixes (e.g. ".googleapis.com") to providers.
+// Checked when no exact match is found in HostToProvider.
+var SuffixToProvider = []suffixRule{
+	{".googleapis.com", &Provider{Name: "google", Auth: AuthBearer}},
 }
 
 // ProviderForHost returns the provider config for a given host, or nil if unknown.
 func ProviderForHost(host string) *Provider {
-	return HostToProvider[host]
+	// Exact match first.
+	if p, ok := HostToProvider[host]; ok {
+		return p
+	}
+	// Suffix match.
+	for _, sp := range SuffixToProvider {
+		if strings.HasSuffix(host, sp.Suffix) {
+			return sp.Provider
+		}
+	}
+	return nil
 }

@@ -171,6 +171,7 @@ func authCmd() *cobra.Command {
 		Short: "Authenticate with a service provider",
 	}
 	cmd.AddCommand(authGoogleCmd())
+	cmd.AddCommand(authRemoveCmd())
 	return cmd
 }
 
@@ -219,6 +220,28 @@ Example:
 	}
 	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "OAuth scopes (default: gmail.readonly)")
 	return cmd
+}
+
+func authRemoveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove <provider> <account>",
+		Short: "Remove stored credentials for an account",
+		Long: `Removes OAuth tokens from the keychain for the given provider and account.
+
+Example:
+  charon auth remove google user@gmail.com`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			provider, account := args[0], args[1]
+			v := newVault()
+			if err := v.Delete(provider, account); err != nil {
+				return fmt.Errorf("failed to remove credential: %w", err)
+			}
+			notifyProxyCacheClear()
+			fmt.Fprintf(cmd.OutOrStdout(), "Removed credential for %s/%s\n", provider, account)
+			return nil
+		},
+	}
 }
 
 // setEnv sets a key=value in an env slice, replacing if exists.

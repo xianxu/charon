@@ -40,7 +40,7 @@ request host → Provider (routing table) → {provider.Name, account} → token
   → if expired and has refresh_token → Refresher.Refresh() → updated token + vault persist
   → InjectAuth (bearer header)
 ```
-- Routing: exact host match → `Provider{Name, Auth}` (e.g. `gmail.googleapis.com` → `{google, bearer}`)
+- Routing: exact host match first, then suffix match (e.g. `*.googleapis.com` → `{google, bearer}`)
 - Account resolution: single account auto-selected; multiple requires `X-Charon-Account` header
 - Token cache: in-memory `sync.Map`, keyed by `provider:account`, respects expiry with 30s grace
 - Cache invalidation: `vault set/delete` POSTs to `/cache/clear` on the proxy
@@ -99,12 +99,32 @@ Agent sends `X-Charon-Account: user@gmail.com` header to select account when mul
 - **OAuth** (3) — XOR round-trip, invalid hex, empty string
 - **Keychain integration** (5) — behind `integration` build tag
 
+## Zero-Config Deployment
+Single binary, everything in keychain:
+- CA cert + key → keychain (service: `charon`, accounts: `_ca:cert`, `_ca:key`)
+- OAuth credentials → keychain (service: `charon`, account: `provider:email`)
+- CA bundle → ephemeral temp dir, regenerated on each `serve` start
+- Audit log → stderr by default, `--audit-log <path>` for file output
+- No config directory needed
+
 ## Logging
 - Normal mode: startup info and errors only
 - `charon serve -v`: debug logging (TLS handshakes, per-request details, connection close reasons)
-- Audit log: JSON lines at `~/.config/charon/audit.log` (method, host, path, status, latency, provider, account)
+- Audit log: JSON lines to stderr (method, host, path, status, latency, provider, account)
+
+## CLI
+```
+charon serve [-v] [--audit-log path]  # start proxy
+charon run -- <cmd>                    # run child with proxy env
+charon auth google <email>             # OAuth flow
+charon auth remove <provider> <email>  # remove credential
+charon accounts                        # list credentials
+charon status                          # check proxy
+charon vault set/delete                # manual token management
+```
 
 ## Status
-- M1 (proxy + keychain + manual token + `charon run` + tests): done
-- M2 (OAuth + auto-refresh + keep-alive + verbose logging): done
-- M3 (Linux, config file, wildcard host matching, polish): not started
+- M1 (proxy + keychain + manual token + `charon run`): done
+- M2 (OAuth + auto-refresh + keep-alive): done
+- M3 (wildcard routing + auth remove + zero-config + integration test): done
+- Future: Linux secret service (#000002), code signing + Keychain ACL (#000003), PKCE

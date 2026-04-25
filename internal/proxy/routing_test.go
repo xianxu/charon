@@ -4,7 +4,8 @@ import (
 	"testing"
 )
 
-func TestProviderForHost_AllGoogleHosts(t *testing.T) {
+func TestProviderForHost_GoogleSuffix(t *testing.T) {
+	// All *.googleapis.com hosts should match via suffix rule.
 	googleHosts := []string{
 		"gmail.googleapis.com",
 		"www.googleapis.com",
@@ -21,6 +22,7 @@ func TestProviderForHost_AllGoogleHosts(t *testing.T) {
 		"youtube.googleapis.com",
 		"youtubeanalytics.googleapis.com",
 		"storage.googleapis.com",
+		"some-future-api.googleapis.com", // not in any explicit list — suffix catches it
 	}
 	for _, host := range googleHosts {
 		p := ProviderForHost(host)
@@ -37,11 +39,22 @@ func TestProviderForHost_AllGoogleHosts(t *testing.T) {
 	}
 }
 
+func TestProviderForHost_ExactMatchOverridesSuffix(t *testing.T) {
+	// Add an exact match that overrides the suffix rule.
+	HostToProvider["special.googleapis.com"] = &Provider{Name: "special", Auth: AuthBearer}
+	defer delete(HostToProvider, "special.googleapis.com")
+
+	p := ProviderForHost("special.googleapis.com")
+	if p == nil || p.Name != "special" {
+		t.Errorf("exact match should take precedence, got %+v", p)
+	}
+}
+
 func TestProviderForHost_UnknownReturnsNil(t *testing.T) {
 	unknowns := []string{
 		"example.com",
 		"api.github.com",
-		"notgoogleapis.com",
+		"notgoogleapis.com", // no dot prefix — should NOT match ".googleapis.com"
 		"",
 	}
 	for _, host := range unknowns {

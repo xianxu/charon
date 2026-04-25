@@ -116,9 +116,12 @@ Config stored alongside credentials or in a simple YAML/JSON file.
 
 ### Milestone 3: Polish
 
-- [ ] Service routing config file (wildcard host matching)
-- [ ] `charon auth remove`
-- [ ] Integration test with brain's lib/gmail
+- [x] Wildcard host matching (suffix rules: `*.googleapis.com` → google)
+- [x] `charon auth remove <provider> <account>`
+- [x] Integration test script (`test/integration/gmail_test.sh`)
+- [x] CA stored in keychain (no config dir needed)
+- [x] Audit log defaults to stderr (no files on disk)
+- [x] Verbose logging (`charon serve -v`)
 
 Deferred to separate issues:
 - Linux secret service backend → issue #000002
