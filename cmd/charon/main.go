@@ -84,12 +84,13 @@ func serveCmd() *cobra.Command {
 			}
 
 			srv := &proxy.Server{
-				Vault:      newVault(),
-				Audit:      audit,
-				Addr:       listenAddr,
-				CA:         ca,
-				Refreshers: refreshers,
-				Verbose:    verbose,
+				Vault:        newVault(),
+				Audit:        audit,
+				Addr:         listenAddr,
+				CA:           ca,
+				Refreshers:   refreshers,
+				Verbose:      verbose,
+				ScopeTracker: proxy.NewScopeTracker(100, 24*time.Hour),
 			}
 			return srv.ListenAndServe()
 		},
@@ -319,23 +320,29 @@ func authCmd() *cobra.Command {
 	}
 	cmd.AddCommand(authGoogleCmd())
 	cmd.AddCommand(authRemoveCmd())
+	cmd.AddCommand(authFixCmd())
 	return cmd
 }
 
 func authGoogleCmd() *cobra.Command {
-	var scopes []string
 	cmd := &cobra.Command{
-		Use:   "google <account-email>",
+		Use:   "google [account-email]",
 		Short: "Authenticate a Google account via OAuth",
 		Long: `Runs the Google OAuth 2.0 flow: opens a browser for authorization,
 then stores the tokens in the OS keychain.
 
+If no email is provided, the account is detected from the OAuth response.
+If an email is provided, it's used as a login hint to pre-select the account.
+
 Example:
-  charon auth google user@gmail.com
-  charon auth google user@gmail.com --scope https://www.googleapis.com/auth/calendar.readonly`,
-		Args: cobra.ExactArgs(1),
+  charon auth google
+  charon auth google user@gmail.com`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			account := args[0]
+			var account string
+			if len(args) > 0 {
+				account = args[0]
+			}
 			out := cmd.OutOrStdout()
 
 			gp, err := oauth.NewGoogleProvider()
@@ -346,11 +353,125 @@ Example:
 			// Check for existing scopes for incremental auth.
 			v := newVault()
 			var existingScopes []string
+			if account != "" {
+				if existing, err := v.Get("google", account); err == nil {
+					existingScopes = existing.Scopes
+				}
+			}
+
+			if account != "" {
+				fmt.Fprintf(out, "Authenticating %s with Google...\n", account)
+			} else {
+				fmt.Fprintf(out, "Authenticating with Google...\n")
+			}
+			cred, err := gp.Auth(account, nil, existingScopes)
+			if err != nil {
+				return err
+			}
+
+			if err := v.Set(cred); err != nil {
+				return fmt.Errorf("failed to store credential: %w", err)
+			}
+
+			notifyProxyCacheClear()
+			fmt.Fprintf(out, "Authenticated %s (scopes: %v)\n", cred.Account, cred.Scopes)
+			return nil
+		},
+	}
+	cmd.AddCommand(authGoogleScopesCmd())
+	cmd.AddCommand(authGoogleGrantCmd())
+	cmd.AddCommand(authGoogleFixCmd())
+	return cmd
+}
+
+func authGoogleScopesCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "scopes [account-email]",
+		Short: "List Google OAuth scopes",
+		Long: `Without an account email, shows the catalog of known Google scopes.
+With an account email, shows granted scopes for that account.
+
+Example:
+  charon auth google scopes
+  charon auth google scopes user@gmail.com`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
+
+			if len(args) == 0 {
+				// Show scope catalog.
+				fmt.Fprintln(out, "Known Google OAuth scopes:")
+				fmt.Fprintln(out)
+				for _, s := range oauth.GoogleScopeCatalog {
+					fmt.Fprintf(out, "  %-25s %s\n", s.Short, s.Description)
+				}
+				fmt.Fprintln(out)
+				fmt.Fprintln(out, "Use full scope URLs or short names with 'charon auth google grant'.")
+				return nil
+			}
+
+			// Show granted scopes for account.
+			account := args[0]
+			v := newVault()
+			cred, err := v.Get("google", account)
+			if err != nil {
+				return fmt.Errorf("no credentials found for google/%s", account)
+			}
+
+			if len(cred.Scopes) == 0 {
+				fmt.Fprintf(out, "google / %s: no scopes recorded\n", account)
+				return nil
+			}
+
+			fmt.Fprintf(out, "google / %s:\n", account)
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, "  Granted:")
+			for _, scope := range cred.Scopes {
+				info := oauth.LookupGoogleScope(scope)
+				if info != nil {
+					fmt.Fprintf(out, "    %-25s %s\n", info.Short, info.Description)
+				} else {
+					fmt.Fprintf(out, "    %s\n", scope)
+				}
+			}
+			return nil
+		},
+	}
+}
+
+func authGoogleGrantCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "grant <account-email> <scope> [scope...]",
+		Short: "Grant additional scopes to a Google account",
+		Long: `Triggers an incremental OAuth flow to add scopes to an existing account.
+Scopes can be specified as short names or full URLs.
+
+Example:
+  charon auth google grant user@gmail.com calendar.readonly
+  charon auth google grant user@gmail.com calendar.readonly drive.readonly`,
+		Args: cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			account := args[0]
+			out := cmd.OutOrStdout()
+
+			// Resolve short scope names to full URLs.
+			var scopes []string
+			for _, s := range args[1:] {
+				scopes = append(scopes, oauth.ResolveGoogleScope(s))
+			}
+
+			gp, err := oauth.NewGoogleProvider()
+			if err != nil {
+				return err
+			}
+
+			v := newVault()
+			var existingScopes []string
 			if existing, err := v.Get("google", account); err == nil {
 				existingScopes = existing.Scopes
 			}
 
-			fmt.Fprintf(out, "Authenticating %s with Google...\n", account)
+			fmt.Fprintf(out, "Granting scopes to %s: %v\n", account, scopes)
 			cred, err := gp.Auth(account, scopes, existingScopes)
 			if err != nil {
 				return err
@@ -361,12 +482,197 @@ Example:
 			}
 
 			notifyProxyCacheClear()
-			fmt.Fprintf(out, "Authenticated %s (scopes: %v)\n", account, cred.Scopes)
+			fmt.Fprintf(out, "Authenticated %s (scopes: %v)\n", cred.Account, cred.Scopes)
 			return nil
 		},
 	}
-	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "OAuth scopes (default: gmail.readonly)")
-	return cmd
+}
+
+func authGoogleFixCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "fix [account-email]",
+		Short: "Grant missing scopes detected by the proxy",
+		Long: `Shows scopes that were requested by callers but not granted, and offers
+to grant them via an incremental OAuth flow.
+
+Example:
+  charon auth google fix
+  charon auth google fix user@gmail.com`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
+
+			// Query the running proxy for scope denials.
+			var url string
+			if len(args) > 0 {
+				url = fmt.Sprintf("http://%s/scopes/denied?provider=google&account=%s", listenAddr, args[0])
+			} else {
+				url = fmt.Sprintf("http://%s/scopes/denied?provider=google", listenAddr)
+			}
+
+			resp, err := http.Get(url)
+			if err != nil {
+				return fmt.Errorf("proxy not reachable at %s — is 'charon serve' running?", listenAddr)
+			}
+			defer resp.Body.Close()
+
+			var denials []struct {
+				Provider  string `json:"provider"`
+				Account   string `json:"account"`
+				Scope     string `json:"scope"`
+				Count     int    `json:"count"`
+				LastSeen  string `json:"last_seen"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&denials); err != nil {
+				return fmt.Errorf("failed to parse proxy response: %w", err)
+			}
+
+			if len(denials) == 0 {
+				fmt.Fprintln(out, "No missing scopes detected.")
+				return nil
+			}
+
+			// Group by account.
+			byAccount := make(map[string][]string)
+			for _, d := range denials {
+				byAccount[d.Account] = append(byAccount[d.Account], d.Scope)
+			}
+
+			gp, err := oauth.NewGoogleProvider()
+			if err != nil {
+				return err
+			}
+			v := newVault()
+
+			i := 0
+			total := len(byAccount)
+			for account, scopes := range byAccount {
+				i++
+				fmt.Fprintf(out, "\n[%d/%d] google / %s (%d scopes: %s)\n",
+					i, total, account, len(scopes), strings.Join(scopes, ", "))
+				fmt.Fprintf(out, "Grant? [Y/n] ")
+
+				var answer string
+				fmt.Scanln(&answer)
+				if answer != "" && answer != "y" && answer != "Y" {
+					fmt.Fprintln(out, "Skipped.")
+					continue
+				}
+
+				var existingScopes []string
+				if existing, err := v.Get("google", account); err == nil {
+					existingScopes = existing.Scopes
+				}
+
+				cred, err := gp.Auth(account, scopes, existingScopes)
+				if err != nil {
+					fmt.Fprintf(out, "Error: %v\n", err)
+					continue
+				}
+				if err := v.Set(cred); err != nil {
+					fmt.Fprintf(out, "Error storing credential: %v\n", err)
+					continue
+				}
+				notifyProxyCacheClear()
+				fmt.Fprintf(out, "Granted. Scopes: %v\n", cred.Scopes)
+			}
+			return nil
+		},
+	}
+}
+
+func authFixCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "fix",
+		Short: "Grant missing scopes across all providers",
+		Long: `Shows scopes that were requested by callers but not granted across all
+providers and accounts, and offers to grant them sequentially.
+
+Example:
+  charon auth fix`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
+
+			resp, err := http.Get(fmt.Sprintf("http://%s/scopes/denied", listenAddr))
+			if err != nil {
+				return fmt.Errorf("proxy not reachable at %s — is 'charon serve' running?", listenAddr)
+			}
+			defer resp.Body.Close()
+
+			var denials []struct {
+				Provider string `json:"provider"`
+				Account  string `json:"account"`
+				Scope    string `json:"scope"`
+				Count    int    `json:"count"`
+				LastSeen string `json:"last_seen"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&denials); err != nil {
+				return fmt.Errorf("failed to parse proxy response: %w", err)
+			}
+
+			if len(denials) == 0 {
+				fmt.Fprintln(out, "No missing scopes detected.")
+				return nil
+			}
+
+			// Group by provider:account.
+			type key struct{ provider, account string }
+			byKey := make(map[key][]string)
+			var order []key
+			for _, d := range denials {
+				k := key{d.Provider, d.Account}
+				if _, exists := byKey[k]; !exists {
+					order = append(order, k)
+				}
+				byKey[k] = append(byKey[k], d.Scope)
+			}
+
+			fmt.Fprintf(out, "Missing scopes detected (%d provider/account pairs):\n", len(order))
+
+			for i, k := range order {
+				scopes := byKey[k]
+				fmt.Fprintf(out, "\n[%d/%d] %s / %s (%d scopes: %s)\n",
+					i+1, len(order), k.provider, k.account, len(scopes), strings.Join(scopes, ", "))
+
+				if k.provider != "google" {
+					fmt.Fprintf(out, "  Provider %q not yet supported for auto-fix.\n", k.provider)
+					continue
+				}
+
+				fmt.Fprintf(out, "Grant? [Y/n] ")
+				var answer string
+				fmt.Scanln(&answer)
+				if answer != "" && answer != "y" && answer != "Y" {
+					fmt.Fprintln(out, "Skipped.")
+					continue
+				}
+
+				gp, err := oauth.NewGoogleProvider()
+				if err != nil {
+					fmt.Fprintf(out, "Error: %v\n", err)
+					continue
+				}
+				v := newVault()
+				var existingScopes []string
+				if existing, err := v.Get("google", k.account); err == nil {
+					existingScopes = existing.Scopes
+				}
+
+				cred, err := gp.Auth(k.account, scopes, existingScopes)
+				if err != nil {
+					fmt.Fprintf(out, "Error: %v\n", err)
+					continue
+				}
+				if err := v.Set(cred); err != nil {
+					fmt.Fprintf(out, "Error storing credential: %v\n", err)
+					continue
+				}
+				notifyProxyCacheClear()
+				fmt.Fprintf(out, "Granted. Scopes: %v\n", cred.Scopes)
+			}
+			return nil
+		},
+	}
 }
 
 func authRemoveCmd() *cobra.Command {
@@ -429,7 +735,11 @@ func accountsCmd() *cobra.Command {
 				return nil
 			}
 			for _, c := range creds {
-				fmt.Fprintf(out, "  %s / %s\n", c.Provider, c.Account)
+				if len(c.Scopes) > 0 {
+					fmt.Fprintf(out, "  %s / %s (scopes: %s)\n", c.Provider, c.Account, strings.Join(c.Scopes, ", "))
+				} else {
+					fmt.Fprintf(out, "  %s / %s\n", c.Provider, c.Account)
+				}
 			}
 			return nil
 		},

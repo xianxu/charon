@@ -31,8 +31,10 @@ Agent → HTTPS request (real URL) → Charon proxy (CONNECT + TLS interception)
 - `internal/proxy/cabundle.go` — builds combined CA bundle (system CAs + charon CA)
 - `internal/proxy/routing.go` — host → `Provider` mapping with pluggable `AuthMethod`
 - `internal/proxy/audit.go` — append-only JSON lines audit log
-- `internal/oauth/google.go` — Google OAuth flow: browser auth, local callback, token exchange, refresh with rotation
+- `internal/oauth/google.go` — Google OAuth flow: browser auth, local callback, token exchange, refresh with rotation, ID token email extraction
+- `internal/oauth/scope_catalog.go` — known Google scope definitions with short names
 - `internal/oauth/obfuscate.go` — XOR encode/decode for baked-in client credentials (same mechanism as brain)
+- `internal/proxy/scope_tracker.go` — scope denial tracking (ring buffer) + scope enforcement helpers
 
 ## Credential Flow
 ```
@@ -47,10 +49,10 @@ request host → Provider (routing table) → {provider.Name, account} → token
 
 ## OAuth
 - Google OAuth 2.0 installed app flow (client_id + client_secret baked in, XOR-obfuscated)
-- `charon auth google user@gmail.com` — opens browser, local callback server on dynamic port
+- `charon auth google [email]` — opens browser, email auto-detected from ID token; optional email used as `login_hint`
 - Tokens stored in macOS Keychain (refresh_token persisted, access_token cached in memory)
 - Auto-refresh: proxy detects expired tokens, calls `Refresher.Refresh()`, persists rotated refresh tokens
-- Incremental scopes: `--scope` flag merges with existing grants
+- Incremental scopes via `charon auth google grant user@gmail.com scope1 scope2`
 - `Refresher` interface: pluggable per-provider, wired into `Server.Refreshers` map
 
 ## Auth Method (pluggable)
@@ -74,6 +76,14 @@ The MITM proxy operates at HTTP/1.1 on both sides (client↔proxy and proxy↔up
 ## Multi-account
 Agent sends `X-Charon-Account: user@gmail.com` header to select account when multiple exist for same provider. Charon strips it before forwarding.
 
+## Scope Management
+- **Scope enforcement**: Callers can declare required scopes via `X-Charon-Scope: gmail.readonly,calendar.readonly` header. Proxy checks against granted scopes and returns 407 with structured JSON error on mismatch.
+- **Scope tracking**: Proxy tracks scope denials (bounded ring buffer, 100 entries, 24h expiry). Exposed via `/scopes/denied` endpoint.
+- **Scope catalog**: `charon auth google scopes` lists known Google scopes. `charon auth google scopes user@gmail.com` shows granted scopes.
+- **Grant command**: `charon auth google grant user@gmail.com calendar.readonly` triggers incremental OAuth.
+- **Fix command**: `charon auth fix` / `charon auth google fix [email]` queries proxy for denied scopes and offers to grant them interactively, one provider×account pair at a time.
+- **Scope resolution**: Short names (e.g. `calendar.readonly`) resolve to full URLs (e.g. `https://www.googleapis.com/auth/calendar.readonly`).
+
 ## Design Decisions
 - **Pure Go, no CGo** — hermetic builds, no C toolchain needed
 - **Persistent CA** — stored in `~/.config/charon/`, reused across restarts
@@ -84,9 +94,11 @@ Agent sends `X-Charon-Account: user@gmail.com` header to select account when mul
 - Health endpoint at `/healthz`, CA download at `/ca.pem`, cache clear at `/cache/clear`
 - Auth method configurable per provider, defaults to bearer
 
-## Test Coverage (69 tests)
+## Test Coverage (90+ tests)
 - **CLI** (17) — all commands, flags, validation, help text, proxy lifecycle
 - **Proxy** (9) — HTTP/CONNECT injection, passthrough, multi-account, health, CA endpoint
+- **Scope enforcement** (7) — scope granted/missing, multiple scopes, denial tracking, /scopes/denied endpoint
+- **Scope tracker** (5) — track, filter, expiry, max size, missing scope detection
 - **Refresh** (4) — auto-refresh on expiry, failure fallback, vault persistence, no-refresher case
 - **Cache** (8) — expiry simulation with mock clock, cache clear, account resolution, vault fetch count
 - **Keep-alive** (2) — 5 requests to same host = 1 CONNECT tunnel; different hosts = separate tunnels
@@ -96,7 +108,7 @@ Agent sends `X-Charon-Account: user@gmail.com` header to select account when mul
 - **Vault** (8) — expiry logic with `IsExpiredAt` (7), grace period boundary
 - **Memory store** (2) — CRUD, not-found
 - **Keychain** (5) — `security` CLI contract tests (flags/subcommands exist)
-- **OAuth** (3) — XOR round-trip, invalid hex, empty string
+- **OAuth** (14) — ID token parsing (7), login_hint (2), scope merging, required scopes, scope catalog (3), XOR
 - **Keychain integration** (5) — behind `integration` build tag
 
 ## Zero-Config Deployment
@@ -114,17 +126,22 @@ Single binary, everything in keychain:
 
 ## CLI
 ```
-charon serve [-v] [--audit-log path]  # start proxy
-charon run -- <cmd>                    # run child with proxy env
-charon auth google <email>             # OAuth flow
-charon auth remove <provider> <email>  # remove credential
-charon accounts                        # list credentials
-charon status                          # check proxy
-charon vault set/delete                # manual token management
+charon serve [-v] [--audit-log path]                  # start proxy
+charon run -- <cmd>                                    # run child with proxy env
+charon auth google [email]                             # OAuth flow (email auto-detected or login_hint)
+charon auth google scopes [email]                      # scope catalog / per-account granted scopes
+charon auth google grant <email> <scope> [scope...]    # grant additional scopes
+charon auth google fix [email]                         # fix missing scopes from proxy denials
+charon auth fix                                        # fix across all providers
+charon auth remove <provider> <email>                  # remove credential
+charon accounts                                        # list credentials with scopes
+charon status                                          # check proxy
+charon vault set/delete                                # manual token management
 ```
 
 ## Status
 - M1 (proxy + keychain + manual token + `charon run`): done
 - M2 (OAuth + auto-refresh + keep-alive): done
 - M3 (wildcard routing + auth remove + zero-config + integration test): done
-- Future: Linux secret service (#000002), code signing + Keychain ACL (#000003), PKCE
+- M4 (scope management + auth flow improvements): done (#000004)
+- Future: Linux secret service (#000002), code signing + Keychain ACL (#000003), suppress list for scope denials, PKCE

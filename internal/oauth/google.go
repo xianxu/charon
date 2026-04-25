@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -31,6 +32,12 @@ var DefaultGoogleScopes = []string{
 	"https://www.googleapis.com/auth/gmail.readonly",
 }
 
+// requiredGoogleScopes are always included to enable email extraction from ID token.
+var requiredGoogleScopes = []string{
+	"openid",
+	"email",
+}
+
 // GoogleProvider implements the OAuth flow for Google accounts.
 type GoogleProvider struct {
 	clientID     string
@@ -53,6 +60,7 @@ func NewGoogleProvider() (*GoogleProvider, error) {
 type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
+	IDToken      string `json:"id_token"`
 	ExpiresIn    int    `json:"expires_in"`
 	TokenType    string `json:"token_type"`
 	Scope        string `json:"scope"`
@@ -61,12 +69,14 @@ type tokenResponse struct {
 }
 
 // Auth runs the OAuth authorization flow: opens browser, waits for callback, exchanges code for tokens.
+// If account is provided, it's used as a login_hint to pre-select the Google account.
+// The actual authenticated email is extracted from the ID token and set as the credential's Account.
 func (g *GoogleProvider) Auth(account string, scopes []string, existingScopes []string) (*vault.Credential, error) {
 	if len(scopes) == 0 {
 		scopes = DefaultGoogleScopes
 	}
-	// Merge with existing scopes for incremental authorization.
-	allScopes := mergeScopes(scopes, existingScopes)
+	// Always include openid+email for ID token email extraction.
+	allScopes := mergeScopes(mergeScopes(scopes, existingScopes), requiredGoogleScopes)
 
 	// Start local callback server.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -76,8 +86,8 @@ func (g *GoogleProvider) Auth(account string, scopes []string, existingScopes []
 	port := ln.Addr().(*net.TCPAddr).Port
 	redirectURI := fmt.Sprintf("http://localhost:%d", port)
 
-	// Build authorization URL.
-	authURL := g.buildAuthURL(redirectURI, allScopes)
+	// Build authorization URL with optional login hint.
+	authURL := g.buildAuthURL(redirectURI, allScopes, account)
 
 	// Open browser.
 	fmt.Printf("Opening browser for Google OAuth...\n")
@@ -90,8 +100,18 @@ func (g *GoogleProvider) Auth(account string, scopes []string, existingScopes []
 		return nil, fmt.Errorf("OAuth callback failed: %w", err)
 	}
 
-	// Exchange code for tokens.
-	return g.exchangeCode(code, redirectURI, account)
+	// Exchange code for tokens — email extracted from ID token.
+	cred, err := g.exchangeCode(code, redirectURI)
+	if err != nil {
+		return nil, err
+	}
+
+	// Warn if authenticated account doesn't match the requested one.
+	if account != "" && cred.Account != account {
+		fmt.Printf("Note: requested %s but authenticated as %s\n", account, cred.Account)
+	}
+
+	return cred, nil
 }
 
 // Refresh uses a refresh token to get a new access token.
@@ -143,7 +163,7 @@ func (g *GoogleProvider) Refresh(cred *vault.Credential) (*vault.Credential, err
 	return updated, nil
 }
 
-func (g *GoogleProvider) buildAuthURL(redirectURI string, scopes []string) string {
+func (g *GoogleProvider) buildAuthURL(redirectURI string, scopes []string, loginHint string) string {
 	params := url.Values{
 		"client_id":             {g.clientID},
 		"redirect_uri":         {redirectURI},
@@ -153,10 +173,13 @@ func (g *GoogleProvider) buildAuthURL(redirectURI string, scopes []string) strin
 		"prompt":               {"consent"}, // force consent to get refresh token
 		"include_granted_scopes": {"true"},  // incremental authorization
 	}
+	if loginHint != "" {
+		params.Set("login_hint", loginHint)
+	}
 	return googleAuthURL + "?" + params.Encode()
 }
 
-func (g *GoogleProvider) exchangeCode(code, redirectURI, account string) (*vault.Credential, error) {
+func (g *GoogleProvider) exchangeCode(code, redirectURI string) (*vault.Credential, error) {
 	data := url.Values{
 		"client_id":     {g.clientID},
 		"client_secret": {g.clientSecret},
@@ -179,6 +202,12 @@ func (g *GoogleProvider) exchangeCode(code, redirectURI, account string) (*vault
 		return nil, fmt.Errorf("token exchange error: %s: %s", tok.Error, tok.ErrorDesc)
 	}
 
+	// Extract authenticated email from ID token.
+	account, err := parseIDTokenEmail(tok.IDToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to identify account: %w", err)
+	}
+
 	var scopes []string
 	if tok.Scope != "" {
 		scopes = strings.Split(tok.Scope, " ")
@@ -192,6 +221,32 @@ func (g *GoogleProvider) exchangeCode(code, redirectURI, account string) (*vault
 		Expiry:       time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second),
 		Scopes:       scopes,
 	}, nil
+}
+
+// parseIDTokenEmail extracts the email claim from a Google ID token (JWT).
+// No signature verification needed — token comes directly from Google's token endpoint over HTTPS.
+func parseIDTokenEmail(idToken string) (string, error) {
+	if idToken == "" {
+		return "", fmt.Errorf("no ID token in response (openid scope may not be granted)")
+	}
+	parts := strings.Split(idToken, ".")
+	if len(parts) != 3 {
+		return "", fmt.Errorf("invalid ID token format")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("failed to decode ID token payload: %w", err)
+	}
+	var claims struct {
+		Email string `json:"email"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return "", fmt.Errorf("failed to parse ID token claims: %w", err)
+	}
+	if claims.Email == "" {
+		return "", fmt.Errorf("no email claim in ID token")
+	}
+	return claims.Email, nil
 }
 
 // waitForCallback starts an HTTP server, waits for the OAuth callback, extracts the code.

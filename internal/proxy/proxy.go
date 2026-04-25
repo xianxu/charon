@@ -34,6 +34,8 @@ type Server struct {
 	Verbose    bool                 // enable debug logging
 	// Now returns the current time. Defaults to time.Now. Override in tests.
 	Now func() time.Time
+	// ScopeTracker tracks scope denials for the fix command. Nil disables tracking.
+	ScopeTracker *ScopeTracker
 
 	// tokenCache caches access tokens in memory keyed by "provider:account".
 	tokenCache sync.Map
@@ -46,6 +48,7 @@ type Server struct {
 type cachedToken struct {
 	token  string
 	expiry time.Time
+	scopes []string
 }
 
 // ClearCache invalidates all cached tokens and account resolutions.
@@ -121,6 +124,13 @@ func (s *Server) handleDirect(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/x-pem-file")
 		w.Write(s.CA.CertPEM)
+	case "/scopes/denied":
+		if s.ScopeTracker != nil {
+			s.ScopeTracker.HandleDeniedScopes(w, r)
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, "[]")
+		}
 	default:
 		http.Error(w, "charon proxy — use HTTPS_PROXY to route traffic", http.StatusOK)
 	}
@@ -187,8 +197,10 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		start := s.now()
 		account := req.Header.Get(charonAccountHeader)
 		req.Header.Del(charonAccountHeader)
+		requestedScopes := req.Header.Get(charonScopeHeader)
+		req.Header.Del(charonScopeHeader)
 
-		token, resolvedAccount, err := s.resolveToken(provider.Name, account)
+		token, resolvedAccount, grantedScopes, err := s.resolveToken(provider.Name, account)
 		entry := AuditEntry{
 			Timestamp: start,
 			Method:    req.Method,
@@ -213,6 +225,34 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 			}
 			_ = resp.Write(tlsClientConn)
 			return
+		}
+
+		// Check requested scopes against granted scopes.
+		if requestedScopes != "" {
+			requested := strings.Split(requestedScopes, ",")
+			for i := range requested {
+				requested[i] = strings.TrimSpace(requested[i])
+			}
+			missing := findMissingScopes(requested, grantedScopes)
+			if len(missing) > 0 {
+				if s.ScopeTracker != nil {
+					s.ScopeTracker.Track(provider.Name, resolvedAccount, missing)
+				}
+				errBody := scopeErrorJSON(provider.Name, resolvedAccount, missing)
+				entry.Error = "scope_missing: " + strings.Join(missing, ",")
+				s.Audit.Log(entry)
+				resp := &http.Response{
+					StatusCode: http.StatusProxyAuthRequired,
+					Status:     "407 Proxy Authentication Required",
+					Proto:      "HTTP/1.1",
+					ProtoMajor: 1,
+					ProtoMinor: 1,
+					Header:     http.Header{"Content-Type": {"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(errBody)),
+				}
+				_ = resp.Write(tlsClientConn)
+				return
+			}
 		}
 
 		if err := provider.InjectAuth(req.Header.Set, token); err != nil {
@@ -306,8 +346,10 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		entry.Provider = provider.Name
 		account := r.Header.Get(charonAccountHeader)
 		r.Header.Del(charonAccountHeader)
+		requestedScopes := r.Header.Get(charonScopeHeader)
+		r.Header.Del(charonScopeHeader)
 
-		token, resolvedAccount, err := s.resolveToken(provider.Name, account)
+		token, resolvedAccount, grantedScopes, err := s.resolveToken(provider.Name, account)
 		entry.Account = resolvedAccount
 		if err != nil {
 			entry.Error = err.Error()
@@ -315,6 +357,27 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "charon: credential required", http.StatusProxyAuthRequired)
 			return
 		}
+
+		// Check requested scopes against granted scopes.
+		if requestedScopes != "" {
+			requested := strings.Split(requestedScopes, ",")
+			for i := range requested {
+				requested[i] = strings.TrimSpace(requested[i])
+			}
+			missing := findMissingScopes(requested, grantedScopes)
+			if len(missing) > 0 {
+				if s.ScopeTracker != nil {
+					s.ScopeTracker.Track(provider.Name, resolvedAccount, missing)
+				}
+				entry.Error = "scope_missing: " + strings.Join(missing, ",")
+				s.Audit.Log(entry)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusProxyAuthRequired)
+				fmt.Fprint(w, scopeErrorJSON(provider.Name, resolvedAccount, missing))
+				return
+			}
+		}
+
 		if err := provider.InjectAuth(r.Header.Set, token); err != nil {
 			entry.Error = err.Error()
 			s.Audit.Log(entry)
@@ -346,8 +409,8 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-// resolveToken gets an access token for the given provider/account.
-func (s *Server) resolveToken(providerName, account string) (token, resolvedAccount string, err error) {
+// resolveToken gets an access token and granted scopes for the given provider/account.
+func (s *Server) resolveToken(providerName, account string) (token, resolvedAccount string, scopes []string, err error) {
 	if account == "" {
 		// Check account cache first to avoid calling security dump-keychain.
 		if cached, ok := s.accountCache.Load(providerName); ok {
@@ -355,7 +418,7 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 		} else {
 			creds, err := s.Vault.List()
 			if err != nil {
-				return "", "", fmt.Errorf("failed to list credentials: %w", err)
+				return "", "", nil, fmt.Errorf("failed to list credentials: %w", err)
 			}
 			var matches []*vault.Credential
 			for _, c := range creds {
@@ -365,12 +428,12 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 			}
 			switch len(matches) {
 			case 0:
-				return "", "", fmt.Errorf("no credentials for provider %q", providerName)
+				return "", "", nil, fmt.Errorf("no credentials for provider %q", providerName)
 			case 1:
 				account = matches[0].Account
 				s.accountCache.Store(providerName, account)
 			default:
-				return "", "", fmt.Errorf("multiple accounts for provider %q, set %s header", providerName, charonAccountHeader)
+				return "", "", nil, fmt.Errorf("multiple accounts for provider %q, set %s header", providerName, charonAccountHeader)
 			}
 		}
 	}
@@ -380,21 +443,22 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 	if cached, ok := s.tokenCache.Load(cacheKey); ok {
 		ct := cached.(*cachedToken)
 		if ct.expiry.IsZero() || now.Before(ct.expiry.Add(-vault.GracePeriod)) {
-			return ct.token, account, nil
+			return ct.token, account, ct.scopes, nil
 		}
 	}
 
 	cred, err := s.Vault.Get(providerName, account)
 	if err != nil {
-		return "", account, err
+		return "", account, nil, err
 	}
 
 	if cred.AccessToken != "" && !cred.IsExpiredAt(now) {
 		s.tokenCache.Store(cacheKey, &cachedToken{
 			token:  cred.AccessToken,
 			expiry: cred.Expiry,
+			scopes: cred.Scopes,
 		})
-		return cred.AccessToken, account, nil
+		return cred.AccessToken, account, cred.Scopes, nil
 	}
 
 	// Token expired or missing — try to refresh.
@@ -402,12 +466,16 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 	// (thundering herd when multiple requests arrive with an expired token).
 	if cred.RefreshToken != "" && s.Refreshers != nil {
 		if refresher, ok := s.Refreshers[providerName]; ok {
+			type refreshResult struct {
+				token  string
+				scopes []string
+			}
 			result, err, _ := s.refreshGroup.Do(cacheKey, func() (any, error) {
 				// Double-check cache — another goroutine may have refreshed while we waited.
 				if cached, ok := s.tokenCache.Load(cacheKey); ok {
 					ct := cached.(*cachedToken)
 					if ct.expiry.IsZero() || now.Before(ct.expiry.Add(-vault.GracePeriod)) {
-						return ct.token, nil
+						return &refreshResult{ct.token, ct.scopes}, nil
 					}
 				}
 				refreshed, err := refresher.Refresh(cred)
@@ -420,21 +488,23 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 				s.tokenCache.Store(cacheKey, &cachedToken{
 					token:  refreshed.AccessToken,
 					expiry: refreshed.Expiry,
+					scopes: refreshed.Scopes,
 				})
-				return refreshed.AccessToken, nil
+				return &refreshResult{refreshed.AccessToken, refreshed.Scopes}, nil
 			})
 			if err != nil {
 				log.Printf("token refresh failed for %s/%s: %v", providerName, account, err)
 			} else {
-				return result.(string), account, nil
+				rr := result.(*refreshResult)
+				return rr.token, account, rr.scopes, nil
 			}
 		}
 	}
 
 	// Fallback: return whatever token we have (may be expired).
 	if cred.AccessToken != "" {
-		return cred.AccessToken, account, nil
+		return cred.AccessToken, account, cred.Scopes, nil
 	}
 
-	return "", account, fmt.Errorf("no access token for %s/%s and refresh not available", providerName, account)
+	return "", account, nil, fmt.Errorf("no access token for %s/%s and refresh not available", providerName, account)
 }
