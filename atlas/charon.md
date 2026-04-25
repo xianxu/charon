@@ -89,6 +89,7 @@ Agent sends `X-Charon-Account: user@gmail.com` header to select account when mul
 - **Proxy** (9) — HTTP/CONNECT injection, passthrough, multi-account, health, CA endpoint
 - **Refresh** (4) — auto-refresh on expiry, failure fallback, vault persistence, no-refresher case
 - **Cache** (8) — expiry simulation with mock clock, cache clear, account resolution, vault fetch count
+- **Keep-alive** (2) — 5 requests to same host = 1 CONNECT tunnel; different hosts = separate tunnels
 - **Routing** (6) — all Google hosts, unknown hosts, InjectAuth dispatch
 - **CA/Cert** (5) — generation, persistence, DNS/IP SANs, serial uniqueness
 - **Audit** (4) — JSON lines format, append mode, default path
@@ -98,7 +99,12 @@ Agent sends `X-Charon-Account: user@gmail.com` header to select account when mul
 - **OAuth** (3) — XOR round-trip, invalid hex, empty string
 - **Keychain integration** (5) — behind `integration` build tag
 
+## Logging
+- Normal mode: startup info and errors only
+- `charon serve -v`: debug logging (TLS handshakes, per-request details, connection close reasons)
+- Audit log: JSON lines at `~/.config/charon/audit.log` (method, host, path, status, latency, provider, account)
+
 ## Status
 - M1 (proxy + keychain + manual token + `charon run` + tests): done
-- M2 (OAuth + auto-refresh + keep-alive): done
+- M2 (OAuth + auto-refresh + keep-alive + verbose logging): done
 - M3 (Linux, config file, wildcard host matching, polish): not started

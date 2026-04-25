@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 )
@@ -28,18 +27,10 @@ type AuditLog struct {
 	w  io.WriteCloser
 }
 
-// NewAuditLog creates an audit log writer. If path is empty, uses ~/.config/charon/audit.log.
+// NewAuditLog creates an audit log writer. If path is empty, writes to stderr.
 func NewAuditLog(path string) (*AuditLog, error) {
 	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, err
-		}
-		dir := filepath.Join(home, ".config", "charon")
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return nil, err
-		}
-		path = filepath.Join(dir, "audit.log")
+		return &AuditLog{w: nopCloseWriter{os.Stderr}}, nil
 	}
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
@@ -72,3 +63,8 @@ type nopWriteCloser struct{}
 
 func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
 func (nopWriteCloser) Close() error                { return nil }
+
+// nopCloseWriter wraps a writer and makes Close a no-op (for stderr).
+type nopCloseWriter struct{ io.Writer }
+
+func (nopCloseWriter) Close() error { return nil }

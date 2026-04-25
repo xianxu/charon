@@ -4,15 +4,22 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"fmt"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
 	"net"
-	"os"
-	"path/filepath"
 	"time"
+
+	"github.com/xianxu/charon/internal/vault/keychain"
+)
+
+const (
+	caKeychainService = "charon"
+	caCertAccount     = "_ca:cert"
+	caKeyAccount      = "_ca:key"
 )
 
 // CA holds a certificate authority for TLS interception.
@@ -22,17 +29,13 @@ type CA struct {
 	CertPEM []byte // PEM-encoded certificate
 }
 
-// LoadOrCreateCA loads an existing CA from dir, or creates a new one.
-// The CA key and cert are stored as PEM files in dir.
-func LoadOrCreateCA(dir string) (*CA, error) {
-	certPath := filepath.Join(dir, "ca.pem")
-	keyPath := filepath.Join(dir, "ca-key.pem")
-
-	// Try loading existing CA.
-	certPEM, certErr := os.ReadFile(certPath)
-	keyPEM, keyErr := os.ReadFile(keyPath)
+// LoadOrCreateCA loads the CA from macOS Keychain, or creates and stores a new one.
+func LoadOrCreateCA() (*CA, error) {
+	// Try loading existing CA from keychain.
+	certPEM, certErr := keychain.GetRaw(caKeychainService, caCertAccount)
+	keyPEM, keyErr := keychain.GetRaw(caKeychainService, caKeyAccount)
 	if certErr == nil && keyErr == nil {
-		ca, err := parseCA(certPEM, keyPEM)
+		ca, err := parseCA([]byte(certPEM), []byte(keyPEM))
 		if err == nil && time.Now().Before(ca.Cert.NotAfter.Add(-24*time.Hour)) {
 			return ca, nil
 		}
@@ -45,23 +48,27 @@ func LoadOrCreateCA(dir string) (*CA, error) {
 		return nil, err
 	}
 
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(certPath, ca.CertPEM, 0644); err != nil {
+	// Store cert in keychain.
+	if err := keychain.SetRaw(caKeychainService, caCertAccount, string(ca.CertPEM)); err != nil {
 		return nil, err
 	}
 
+	// Store key in keychain.
 	keyDER, err := x509.MarshalECPrivateKey(ca.Key)
 	if err != nil {
 		return nil, err
 	}
-	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+	keyPEMBytes := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	if err := keychain.SetRaw(caKeychainService, caKeyAccount, string(keyPEMBytes)); err != nil {
 		return nil, err
 	}
 
 	return ca, nil
+}
+
+// NewTestCA creates a new CA without keychain storage. For testing only.
+func NewTestCA() (*CA, error) {
+	return generateCA()
 }
 
 func generateCA() (*CA, error) {
@@ -101,12 +108,18 @@ func generateCA() (*CA, error) {
 
 func parseCA(certPEM, keyPEM []byte) (*CA, error) {
 	certBlock, _ := pem.Decode(certPEM)
+	if certBlock == nil {
+		return nil, fmt.Errorf("failed to decode CA cert PEM")
+	}
 	cert, err := x509.ParseCertificate(certBlock.Bytes)
 	if err != nil {
 		return nil, err
 	}
 
 	keyBlock, _ := pem.Decode(keyPEM)
+	if keyBlock == nil {
+		return nil, fmt.Errorf("failed to decode CA key PEM")
+	}
 	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
 	if err != nil {
 		return nil, err
@@ -150,6 +163,11 @@ func (ca *CA) GenerateCert(hostname string) (*tls.Certificate, error) {
 		Certificate: [][]byte{certDER},
 		PrivateKey:  key,
 	}, nil
+}
+
+func marshalKeyPEM(key *ecdsa.PrivateKey) []byte {
+	keyDER, _ := x509.MarshalECPrivateKey(key)
+	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 }
 
 func randomSerial() *big.Int {

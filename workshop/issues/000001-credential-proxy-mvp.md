@@ -104,9 +104,10 @@ Config stored alongside credentials or in a simple YAML/JSON file.
 - [x] Audit logging to file
 - [x] Manual token storage for testing: `charon vault set --provider google --account user@gmail.com --token <token>`
 
-### Milestone 2: OAuth PKCE flow
+### Milestone 2: OAuth flow
 
-- [x] Google OAuth 2.0 flow (installed app with client_secret, not PKCE-only)
+- [x] Google OAuth 2.0 flow (installed app with client_secret, reused from brain)
+- [ ] PKCE support (not implemented — current flow uses client_secret which is sufficient for desktop apps)
 - [x] `charon auth google user@gmail.com` — opens browser, completes OAuth, stores tokens
 - [x] Automatic access token refresh on proxy requests
 - [x] Refresh token rotation (new refresh token stored when Google rotates)
@@ -115,11 +116,13 @@ Config stored alongside credentials or in a simple YAML/JSON file.
 
 ### Milestone 3: Polish
 
-- [ ] Linux secret service backend
-- [ ] Service routing config file
+- [ ] Service routing config file (wildcard host matching)
 - [ ] `charon auth remove`
-- [ ] Cross-compile and test on Linux
 - [ ] Integration test with brain's lib/gmail
+
+Deferred to separate issues:
+- Linux secret service backend → issue #000002
+- Code signing + Keychain ACL → issue #000003
 
 ## Log
 

@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -31,7 +30,6 @@ func buildRoot() *cobra.Command {
 		Use:   "charon",
 		Short: "Credential proxy for AI agents",
 	}
-	root.PersistentFlags().StringVar(&configDir, "config-dir", defaultConfigDir(), "configuration directory")
 	root.PersistentFlags().StringVar(&listenAddr, "addr", "127.0.0.1:8230", "proxy listen address")
 	root.AddCommand(serveCmd())
 	root.AddCommand(runCmd())
@@ -43,18 +41,19 @@ func buildRoot() *cobra.Command {
 
 // startTestProxy starts a proxy server on a dynamic port and returns its address.
 // The proxy is stopped when the test completes.
-func startTestProxy(t *testing.T) (addr string, cfgDir string) {
+func startTestProxy(t *testing.T) (addr string, bundlePath string) {
 	t.Helper()
-	cfgDir = t.TempDir()
 
-	ca, err := proxy.LoadOrCreateCA(cfgDir)
+	// Generate a test CA (don't hit real keychain).
+	ca, err := proxy.NewTestCA()
 	if err != nil {
 		t.Fatalf("failed to create CA: %v", err)
 	}
-	_, err = proxy.BuildCABundle(cfgDir, ca.CertPEM)
+	bundlePath, cleanup, err := proxy.BuildCABundle(ca.CertPEM)
 	if err != nil {
 		t.Fatalf("failed to build CA bundle: %v", err)
 	}
+	t.Cleanup(cleanup)
 
 	audit := proxy.NopAuditLog()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -73,7 +72,7 @@ func startTestProxy(t *testing.T) (addr string, cfgDir string) {
 	go httpSrv.Serve(ln)
 	t.Cleanup(func() { httpSrv.Close() })
 
-	return addr, cfgDir
+	return addr, bundlePath
 }
 
 func TestRootHelp(t *testing.T) {
@@ -95,7 +94,7 @@ func TestServeHelp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--audit-log", "--addr", "--config-dir"} {
+	for _, want := range []string{"--audit-log", "--addr", "--verbose"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("serve help missing flag %q", want)
 		}
@@ -145,20 +144,6 @@ func TestRunRequiresProxy(t *testing.T) {
 	}
 }
 
-func TestRunRequiresCABundle(t *testing.T) {
-	addr, _ := startTestProxy(t)
-
-	// Run with a different config-dir that has no CA bundle.
-	emptyDir := t.TempDir()
-	root := buildRoot()
-	_, _, err := executeCmd(root, "--addr", addr, "--config-dir", emptyDir, "run", "--", "echo", "hi")
-	if err == nil {
-		t.Error("expected error about missing CA bundle")
-	}
-	if err != nil && !strings.Contains(err.Error(), "CA bundle not found") {
-		t.Errorf("expected 'CA bundle not found' error, got: %v", err)
-	}
-}
 
 func TestVaultSetHelp(t *testing.T) {
 	root := buildRoot()
@@ -239,10 +224,10 @@ func TestStatusWhenProxyNotRunning(t *testing.T) {
 }
 
 func TestStatusWhenProxyRunning(t *testing.T) {
-	addr, cfgDir := startTestProxy(t)
+	addr, _ := startTestProxy(t)
 
 	root := buildRoot()
-	stdout, _, err := executeCmd(root, "--addr", addr, "--config-dir", cfgDir, "status")
+	stdout, _, err := executeCmd(root, "--addr", addr, "status")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,24 +236,22 @@ func TestStatusWhenProxyRunning(t *testing.T) {
 	}
 }
 
-func TestServeCreatesCAFiles(t *testing.T) {
-	_, cfgDir := startTestProxy(t)
+func TestServeCreatesCABundle(t *testing.T) {
+	_, bundlePath := startTestProxy(t)
 
-	for _, name := range []string{"ca.pem", "ca-key.pem", "ca-bundle.pem"} {
-		path := filepath.Join(cfgDir, name)
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Errorf("expected %s to exist: %v", name, err)
-			continue
-		}
-		if info.Size() == 0 {
-			t.Errorf("%s is empty", name)
-		}
+	// Bundle should exist and contain PEM data.
+	info, err := os.Stat(bundlePath)
+	if err != nil {
+		t.Fatalf("expected CA bundle at %s: %v", bundlePath, err)
+	}
+	if info.Size() == 0 {
+		t.Error("CA bundle is empty")
 	}
 
-	info, _ := os.Stat(filepath.Join(cfgDir, "ca-key.pem"))
-	if info != nil && info.Mode().Perm() != 0600 {
-		t.Errorf("ca-key.pem should be 0600, got %o", info.Mode().Perm())
+	// ca.pem should also be in the same temp dir.
+	caPath := proxy.CAPathFromBundle(bundlePath)
+	if _, err := os.Stat(caPath); err != nil {
+		t.Errorf("expected ca.pem at %s: %v", caPath, err)
 	}
 }
 
@@ -296,11 +279,3 @@ func TestServeHealthEndpointJSON(t *testing.T) {
 	}
 }
 
-func TestConfigDirDefault(t *testing.T) {
-	home, _ := os.UserHomeDir()
-	want := filepath.Join(home, ".config", "charon")
-	got := defaultConfigDir()
-	if got != want {
-		t.Errorf("defaultConfigDir() = %q, want %q", got, want)
-	}
-}

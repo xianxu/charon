@@ -2,8 +2,6 @@ package proxy
 
 import (
 	"crypto/x509"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -23,40 +21,20 @@ func TestGenerateCA(t *testing.T) {
 	}
 }
 
-func TestLoadOrCreateCA_CreatesNew(t *testing.T) {
-	dir := t.TempDir()
-	ca, err := LoadOrCreateCA(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ca == nil {
-		t.Fatal("expected non-nil CA")
-	}
-
-	// Files should exist.
-	for _, name := range []string{"ca.pem", "ca-key.pem"} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-			t.Errorf("expected %s to exist", name)
-		}
-	}
-}
-
-func TestLoadOrCreateCA_ReusesExisting(t *testing.T) {
-	dir := t.TempDir()
-
-	ca1, err := LoadOrCreateCA(dir)
+func TestGenerateCA_ParseRoundTrip(t *testing.T) {
+	ca, err := generateCA()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	ca2, err := LoadOrCreateCA(dir)
+	// Serialize key to PEM, then parse back.
+	keyPEM := marshalKeyPEM(ca.Key)
+	ca2, err := parseCA(ca.CertPEM, keyPEM)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("parseCA round-trip failed: %v", err)
 	}
-
-	// Should have the same cert bytes (reused, not regenerated).
-	if string(ca1.CertPEM) != string(ca2.CertPEM) {
-		t.Error("expected same CA cert to be reused")
+	if string(ca.CertPEM) != string(ca2.CertPEM) {
+		t.Error("cert PEM mismatch after round-trip")
 	}
 }
 
@@ -83,7 +61,6 @@ func TestGenerateCert_DNSName(t *testing.T) {
 		t.Errorf("expected no IP SANs for hostname, got %v", leaf.IPAddresses)
 	}
 
-	// Verify cert is signed by CA.
 	pool := x509.NewCertPool()
 	pool.AddCert(ca.Cert)
 	if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool}); err != nil {

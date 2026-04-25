@@ -8,16 +8,28 @@ import (
 	"strings"
 )
 
-// BuildCABundle creates a combined PEM file with system root CAs + Charon CA.
-// Returns the path to the bundle file.
-func BuildCABundle(dir string, charonCAPEM []byte) (string, error) {
-	bundlePath := filepath.Join(dir, "ca-bundle.pem")
-
-	systemPEM, err := loadSystemCAs()
+// BuildCABundle creates a combined PEM file with system root CAs + Charon CA
+// in a temp directory. Returns the path to the bundle file.
+// The bundle is ephemeral — regenerated each time the proxy starts.
+func BuildCABundle(charonCAPEM []byte) (bundlePath string, cleanup func(), err error) {
+	dir, err := os.MkdirTemp("", "charon-ca-*")
 	if err != nil {
-		// If we can't load system CAs, just use our CA alone.
-		// Non-intercepted hosts use passthrough tunneling anyway,
-		// so they do their own TLS with system CAs.
+		return "", nil, err
+	}
+	cleanup = func() { os.RemoveAll(dir) }
+
+	// Write charon CA cert (needed for NODE_EXTRA_CA_CERTS which is additive).
+	caPath := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(caPath, charonCAPEM, 0644); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+
+	// Build combined bundle.
+	bundlePath = filepath.Join(dir, "ca-bundle.pem")
+
+	systemPEM, sysErr := loadSystemCAs()
+	if sysErr != nil {
 		systemPEM = nil
 	}
 
@@ -31,9 +43,15 @@ func BuildCABundle(dir string, charonCAPEM []byte) (string, error) {
 	bundle = append(bundle, charonCAPEM...)
 
 	if err := os.WriteFile(bundlePath, bundle, 0644); err != nil {
-		return "", err
+		cleanup()
+		return "", nil, err
 	}
-	return bundlePath, nil
+	return bundlePath, cleanup, nil
+}
+
+// CAPathFromBundle returns the ca.pem path in the same directory as the bundle.
+func CAPathFromBundle(bundlePath string) string {
+	return filepath.Join(filepath.Dir(bundlePath), "ca.pem")
 }
 
 func loadSystemCAs() ([]byte, error) {
@@ -42,7 +60,6 @@ func loadSystemCAs() ([]byte, error) {
 		return exec.Command("security", "find-certificate", "-a", "-p",
 			"/System/Library/Keychains/SystemRootCertificates.keychain").Output()
 	default:
-		// Common Linux CA bundle paths.
 		for _, path := range []string{
 			"/etc/ssl/certs/ca-certificates.crt",
 			"/etc/pki/tls/certs/ca-bundle.crt",
