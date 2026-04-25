@@ -108,15 +108,18 @@ The proxy must already be running (charon serve).
 
 Example:
   charon run -- python my_agent.py
-  charon run -- curl https://gmail.googleapis.com/gmail/v1/users/me/profile`,
-		Args: cobra.MinimumNArgs(1),
+  charon run -- curl https://gmail.googleapis.com/gmail/v1/users/me/profile
+
+Without arguments, prints the proxy environment variables for debugging.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Strip leading "--" if present (cobra passes it through with ArgsOnly).
-			if args[0] == "--" {
+			// Strip leading "--" if present.
+			if len(args) > 0 && args[0] == "--" {
 				args = args[1:]
 			}
+
+			// No args: print proxy info for debugging.
 			if len(args) == 0 {
-				return fmt.Errorf("usage: charon run -- <command> [args...]")
+				return printProxyInfo(cmd)
 			}
 
 			// Check proxy is running and fetch CA cert.
@@ -163,6 +166,36 @@ Example:
 		},
 	}
 	return cmd
+}
+
+func printProxyInfo(cmd *cobra.Command) error {
+	out := cmd.OutOrStdout()
+	proxyURL := fmt.Sprintf("http://%s", listenAddr)
+
+	// Check if proxy is running.
+	resp, err := http.Get(proxyURL + "/healthz")
+	if err != nil {
+		fmt.Fprintf(out, "Proxy: not running (cannot reach %s)\n", listenAddr)
+		return nil
+	}
+	resp.Body.Close()
+
+	fmt.Fprintf(out, "Proxy: %s\n", proxyURL)
+	fmt.Fprintf(out, "\nEnvironment variables set by 'charon run':\n")
+	fmt.Fprintf(out, "  HTTPS_PROXY=%s\n", proxyURL)
+	fmt.Fprintf(out, "  HTTP_PROXY=%s\n", proxyURL)
+	fmt.Fprintf(out, "  SSL_CERT_FILE=<temp>/ca-bundle.pem\n")
+	fmt.Fprintf(out, "  REQUESTS_CA_BUNDLE=<temp>/ca-bundle.pem\n")
+	fmt.Fprintf(out, "  CURL_CA_BUNDLE=<temp>/ca-bundle.pem\n")
+	fmt.Fprintf(out, "  NODE_EXTRA_CA_CERTS=<temp>/ca.pem\n")
+	fmt.Fprintf(out, "  GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=<temp>/ca-bundle.pem\n")
+	fmt.Fprintf(out, "\nUsage:\n")
+	fmt.Fprintf(out, "  charon run -- <command> [args...]\n")
+	fmt.Fprintf(out, "\nExamples:\n")
+	fmt.Fprintf(out, "  charon run -- curl -s https://gmail.googleapis.com/gmail/v1/users/me/profile\n")
+	fmt.Fprintf(out, "  charon run -- python my_agent.py\n")
+	fmt.Fprintf(out, "  charon run -- gmail search \"from:alice subject:invoice\"\n")
+	return nil
 }
 
 func authCmd() *cobra.Command {

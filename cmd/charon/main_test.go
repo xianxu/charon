@@ -125,11 +125,15 @@ func TestRunHelp(t *testing.T) {
 	}
 }
 
-func TestRunRequiresArgs(t *testing.T) {
+func TestRunNoArgsPrintsProxyInfo(t *testing.T) {
+	addr, _ := startTestProxy(t)
 	root := buildRoot()
-	_, _, err := executeCmd(root, "run")
-	if err == nil {
-		t.Error("expected error when run has no args")
+	stdout, _, err := executeCmd(root, "--addr", addr, "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "HTTPS_PROXY") {
+		t.Errorf("expected proxy info output, got: %q", stdout)
 	}
 }
 
