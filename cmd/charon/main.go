@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/xianxu/charon/internal/proxy"
@@ -243,7 +244,7 @@ func vaultCmd() *cobra.Command {
 }
 
 func vaultSetCmd() *cobra.Command {
-	var provider, account, token string
+	var provider, account, token, ttl string
 	cmd := &cobra.Command{
 		Use:   "set",
 		Short: "Manually store a token (for testing)",
@@ -251,12 +252,20 @@ func vaultSetCmd() *cobra.Command {
 			if provider == "" || account == "" || token == "" {
 				return fmt.Errorf("--provider, --account, and --token are required")
 			}
-			v := newVault()
-			err := v.Set(&vault.Credential{
+			cred := &vault.Credential{
 				Provider:    provider,
 				Account:     account,
 				AccessToken: token,
-			})
+			}
+			if ttl != "" {
+				d, err := time.ParseDuration(ttl)
+				if err != nil {
+					return fmt.Errorf("invalid --ttl: %w", err)
+				}
+				cred.Expiry = time.Now().Add(d)
+			}
+			v := newVault()
+			err := v.Set(cred)
 			if err != nil {
 				return err
 			}
@@ -268,6 +277,7 @@ func vaultSetCmd() *cobra.Command {
 	cmd.Flags().StringVar(&provider, "provider", "", "credential provider (e.g. google)")
 	cmd.Flags().StringVar(&account, "account", "", "account identifier (e.g. user@gmail.com)")
 	cmd.Flags().StringVar(&token, "token", "", "access token")
+	cmd.Flags().StringVar(&ttl, "ttl", "", "token time-to-live (e.g. 1h, 30m, 3600s). omit for no expiry")
 	return cmd
 }
 

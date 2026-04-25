@@ -13,15 +13,23 @@ type Credential struct {
 	Scopes       []string  `json:"scopes"`        // granted scopes
 }
 
+// GracePeriod is how far before expiry a token is considered expired.
+const GracePeriod = 30 * time.Second
+
 // IsExpired returns true if the access token has expired or will expire within the grace period.
 func (c *Credential) IsExpired() bool {
+	return c.IsExpiredAt(time.Now())
+}
+
+// IsExpiredAt returns true if the access token is expired at the given time.
+func (c *Credential) IsExpiredAt(now time.Time) bool {
 	if c.AccessToken == "" {
 		return true
 	}
 	if c.Expiry.IsZero() {
 		return false // manual tokens with no expiry never expire
 	}
-	return time.Now().After(c.Expiry.Add(-30 * time.Second))
+	return now.After(c.Expiry.Add(-GracePeriod))
 }
 
 // Store is the interface for credential storage backends.

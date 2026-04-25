@@ -24,14 +24,14 @@ type Server struct {
 	Addr      string // listen address, e.g. "127.0.0.1:8230"
 	CA        *CA
 	Transport http.RoundTripper
+	// Now returns the current time. Defaults to time.Now. Override in tests.
+	Now func() time.Time
 
 	// tokenCache caches access tokens in memory keyed by "provider:account".
 	tokenCache sync.Map
 	// accountCache caches provider→account resolution for single-account providers.
 	accountCache sync.Map
 }
-
-const cacheTTL = 5 * time.Second
 
 type cachedToken struct {
 	token  string
@@ -42,6 +42,13 @@ type cachedToken struct {
 func (s *Server) ClearCache() {
 	s.tokenCache.Range(func(k, v any) bool { s.tokenCache.Delete(k); return true })
 	s.accountCache.Range(func(k, v any) bool { s.accountCache.Delete(k); return true })
+}
+
+func (s *Server) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 func (s *Server) transport() http.RoundTripper {
@@ -150,7 +157,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		start := time.Now()
+		start := s.now()
 		account := req.Header.Get(charonAccountHeader)
 		req.Header.Del(charonAccountHeader)
 
@@ -248,7 +255,7 @@ func (s *Server) tunnelPassthrough(w http.ResponseWriter, r *http.Request, host 
 
 // handleHTTP handles plain HTTP requests (non-CONNECT).
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
+	start := s.now()
 	hostname := r.URL.Hostname()
 	provider := ProviderForHost(hostname)
 
@@ -333,9 +340,10 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 	}
 
 	cacheKey := providerName + ":" + account
+	now := s.now()
 	if cached, ok := s.tokenCache.Load(cacheKey); ok {
 		ct := cached.(*cachedToken)
-		if ct.expiry.IsZero() || time.Now().Before(ct.expiry.Add(-30*time.Second)) {
+		if ct.expiry.IsZero() || now.Before(ct.expiry.Add(-vault.GracePeriod)) {
 			return ct.token, account, nil
 		}
 	}
@@ -345,7 +353,7 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 		return "", account, err
 	}
 
-	if cred.AccessToken != "" && !cred.IsExpired() {
+	if cred.AccessToken != "" && !cred.IsExpiredAt(now) {
 		s.tokenCache.Store(cacheKey, &cachedToken{
 			token:  cred.AccessToken,
 			expiry: cred.Expiry,

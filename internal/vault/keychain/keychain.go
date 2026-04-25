@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/xianxu/charon/internal/vault"
 )
@@ -28,11 +29,12 @@ func keyName(provider, account string) string {
 // For MVP, access_token is stored directly for manual testing.
 // In production (M2+), only refresh_token is persisted; access_token is cached in memory.
 type storedCredential struct {
-	Provider     string   `json:"provider"`
-	Account      string   `json:"account"`
-	AccessToken  string   `json:"access_token,omitempty"`
-	RefreshToken string   `json:"refresh_token,omitempty"`
-	Scopes       []string `json:"scopes,omitempty"`
+	Provider     string    `json:"provider"`
+	Account      string    `json:"account"`
+	AccessToken  string    `json:"access_token,omitempty"`
+	RefreshToken string    `json:"refresh_token,omitempty"`
+	Expiry       time.Time `json:"expiry,omitempty"`
+	Scopes       []string  `json:"scopes,omitempty"`
 }
 
 func (s *Store) Get(provider, account string) (*vault.Credential, error) {
@@ -56,6 +58,7 @@ func (s *Store) Get(provider, account string) (*vault.Credential, error) {
 		Account:      sc.Account,
 		AccessToken:  sc.AccessToken,
 		RefreshToken: sc.RefreshToken,
+		Expiry:       sc.Expiry,
 		Scopes:       sc.Scopes,
 	}, nil
 }
@@ -66,6 +69,7 @@ func (s *Store) Set(cred *vault.Credential) error {
 		Account:      cred.Account,
 		AccessToken:  cred.AccessToken,
 		RefreshToken: cred.RefreshToken,
+		Expiry:       cred.Expiry,
 		Scopes:       cred.Scopes,
 	}
 	data, err := json.Marshal(sc)
