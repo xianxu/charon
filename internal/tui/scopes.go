@@ -127,9 +127,13 @@ func loadScopeRows(v vault.Store, account string, fetchDenied denialFetcher) ([]
 	}
 	if fetchDenied != nil {
 		denied := fetchDenied(account)
+		// Agents may declare scopes via short name ("gmail.readonly") or
+		// full URL; the proxy records denials in whatever form was
+		// declared. Canonicalize through the catalog so the denial maps
+		// to the same row regardless of declaration form.
 		denialSet := map[string]bool{}
 		for _, s := range denied {
-			denialSet[s] = true
+			denialSet[oauth.ResolveGoogleScope(s)] = true
 		}
 		for i := range rows {
 			if denialSet[rows[i].full] {
@@ -842,16 +846,16 @@ func (m scopesModel) viewNormal() string {
 		if r.target {
 			check = "[x]"
 		}
-		// Marker column: session +/- (changes already applied this session)
-		// take priority over the proxy's "requested" badge (informational).
+		// Marker column shows session-level diff: + for newly granted in
+		// this session, - for newly removed. The proxy "requested by
+		// proxy" hint is conveyed by row color (muted yellow via
+		// styleForRow) — no marker needed for it.
 		marker := " "
 		switch {
 		case r.realized && !r.initialRealized:
 			marker = "+"
 		case !r.realized && r.initialRealized:
 			marker = "-"
-		case r.requested:
-			marker = "!"
 		}
 		cursor := "  "
 		if m.focus == focusList && visIdx == m.cursor {

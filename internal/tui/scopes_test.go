@@ -136,6 +136,42 @@ func TestLoadRowsBadgesFromDenials(t *testing.T) {
 	}
 }
 
+func TestLoadRowsBadgesShortNameDenials(t *testing.T) {
+	// Agents declare scopes via short name; the proxy stores denials in
+	// whatever form was declared. We must still match those to the catalog
+	// row whose `full` is the resolved URL — otherwise the catalog row
+	// stays unbadged and the denial appears as a duplicate "custom" row.
+	v := memory.New()
+	fetcher := func(account string) []string {
+		return []string{"gmail.readonly"} // short form
+	}
+	rows, err := loadScopeRows(v, "a@gmail.com", fetcher)
+	if err != nil {
+		t.Fatalf("loadScopeRows: %v", err)
+	}
+
+	// The catalog row should be marked requested.
+	var catalogRow *scopeRow
+	customCount := 0
+	for i := range rows {
+		if rows[i].short == "gmail.readonly" && !rows[i].custom {
+			catalogRow = &rows[i]
+		}
+		if rows[i].custom {
+			customCount++
+		}
+	}
+	if catalogRow == nil {
+		t.Fatal("catalog row gmail.readonly not found")
+	}
+	if !catalogRow.requested {
+		t.Errorf("catalog row gmail.readonly should be requested=true after short-name denial")
+	}
+	if customCount != 0 {
+		t.Errorf("expected 0 custom rows after canonical match, got %d", customCount)
+	}
+}
+
 func TestLoadRowsTolerantOfNilFetcher(t *testing.T) {
 	rows, err := loadScopeRows(memory.New(), "a@gmail.com", nil)
 	if err != nil || len(rows) == 0 {
@@ -278,7 +314,8 @@ func TestScopesViewRendersExpectedContent(t *testing.T) {
 		"gmail.readonly",
 		"calendar.readonly",
 		"Read Gmail messages",
-		"!", // badge for calendar.readonly
+		// proxy-requested rows are conveyed via muted-yellow color now,
+		// no '!' character marker
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("View() missing %q\nout:\n%s", want, out)
