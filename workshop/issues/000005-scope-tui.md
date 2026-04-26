@@ -218,17 +218,21 @@ badge). `X-Charon-Scope` enforcement stays.
     `c` cancel)
   - Tests: target/realized diff logic, no-op exit, incremental dance
 
-- [ ] **M4: Reduction with warning gate**
-  - Detect `target ⊊ realized` or mixed (any reduction)
-  - Modal warning with continue/cancel
-  - On continue: revoke endpoint call → re-auth with target → atomic
-    credential replace on success
-  - On re-auth failure: leave old credential intact, surface error (i.e. only
-    revoke as part of a single committed flow; never revoke before the new
-    auth completes)
-  - `R` (revoke account entire): same primitive, target = ∅ + remove
-    credential entirely
-  - Tests: revoke + reauth happy path, reauth-cancel preserves old credential
+- [x] **M4: Reduction + revoke**
+  - Detect `target ⊊ realized` or mixed (any reduction); route through
+    `stateReduceConfirm` modal asking continue/cancel
+  - On continue: re-auth with `forceFresh=true` (no revoke needed). Google
+    issues a token scoped exactly to the target set via
+    `include_granted_scopes=false`. Credential is atomically replaced via
+    the existing applyResultMsg → vault.Set path. **Tradeoff**: the
+    underlying Google grant on Google's side may still list the wider
+    scope set (cosmetic; charon's stored token can't access it).
+  - `R` from list: opens `stateRevokeConfirm` for full account nuking.
+    Confirm → `Revoke(refreshToken)` + `vault.Delete` + exit.
+  - Tests: reduction routes to modal (not auto-apply), continue
+    dispatches with forceFresh=true, additive uses forceFresh=false,
+    revoke key opens modal, revoke confirm emits message, top-level
+    handles revoke (Revoke called, vault deleted, exit).
 
 - [ ] **M5: Cleanup of replaced commands + defaults**
   - Delete `scopes`, `grant`, `fix` cobra commands
@@ -239,6 +243,30 @@ badge). `X-Charon-Scope` enforcement stays.
   - Tests for command removal (help no longer lists them)
 
 ## Log
+
+### 2026-04-26 — M4 complete
+
+Decided against the "revoke + scary warning + lockout risk" path
+originally specced. Simpler approach: re-auth with `forceFresh=true`
+which sets `include_granted_scopes=false` so Google issues a token
+scoped exactly to the requested (smaller) set. Old refresh_token is
+discarded; charon can no longer exercise the dropped scopes. The
+underlying grant on Google's side technically retains the wider set
+(cosmetic). User confirmation modal explains "you'll see a fresh
+consent screen" — not a lockout warning.
+
+Separate `R` key for full revoke: calls Google's revoke endpoint and
+deletes the credential. That's the explicit "I'm done with this app"
+action, where lockout is the desired outcome.
+
+State machine: stateNormal → (Enter) → stateReduceConfirm (if
+reductive) or stateApplying (if additive). y/enter dispatches with
+forceFresh, n/esc/c returns to normal. R key gives a parallel flow
+through stateRevokeConfirm → revokeAccountMsg.
+
+Authenticator interface gained Revoke(refreshToken). GoogleProvider
+implements both. Scopes test added a stub recording forceFresh and
+revoke calls. 8 new tests; 50+ TUI tests total; full suite green.
 
 ### 2026-04-26 — M3 follow-up: OIDC scope rewriting + required scopes
 

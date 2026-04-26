@@ -32,8 +32,13 @@ type scopeRow struct {
 
 // Authenticator is the OAuth dispatch the scope view uses to apply target
 // state. Production wires *oauth.GoogleProvider; tests inject stubs.
+//
+// forceFresh on Auth: false for additive (incremental) flows, true for
+// reductive flows where the issued token must be scoped exactly to what
+// was requested (not unioned with previously-granted scopes).
 type Authenticator interface {
-	Auth(account string, scopes, existingScopes []string) (*vault.Credential, error)
+	Auth(account string, scopes, existingScopes []string, forceFresh bool) (*vault.Credential, error)
+	Revoke(refreshToken string) error
 }
 
 // denialFetcher returns scopes denied for the given account. Best-effort: an
@@ -178,6 +183,8 @@ const (
 	stateApplying
 	stateApplyError
 	stateQuitConfirm
+	stateReduceConfirm // confirming a reductive apply
+	stateRevokeConfirm // confirming "R: revoke account entirely"
 )
 
 type scopesModel struct {
@@ -370,19 +377,14 @@ type applyResultMsg struct {
 
 // applyCmd builds the tea.Cmd that runs OAuth for the current diff.
 //
-// M3 supports additive only: any reduction shorts to an error result.
-// M4 will replace this branch with the revoke+reauth flow.
+// Additive flow (target ⊋ realized): include_granted_scopes=true; new
+// token covers the union (Google's incremental authorization).
+//
+// Reductive flow (target has any removal): forceFresh=true so Google
+// returns a token scoped exactly to the requested set, not the union.
+// The user has already confirmed via the reduction-warning modal.
 func (m scopesModel) applyCmd() tea.Cmd {
-	added, removed := m.diff()
-	if len(removed) > 0 {
-		err := fmt.Errorf("scope reduction lands in M4 (would remove %d scope(s)). "+
-			"Untoggle removals to apply additions only", len(removed))
-		return func() tea.Msg { return applyResultMsg{err: err} }
-	}
-	if len(added) == 0 {
-		// Nothing to do. Should be unreachable from Enter handler.
-		return func() tea.Msg { return applyResultMsg{} }
-	}
+	_, removed := m.diff()
 	if m.auth == nil {
 		return func() tea.Msg {
 			return applyResultMsg{err: fmt.Errorf("no authenticator configured (use tui.WithAuthenticator)")}
@@ -392,8 +394,9 @@ func (m scopesModel) applyCmd() tea.Cmd {
 	existing := m.realizedScopes()
 	account := m.account
 	auth := m.auth
+	forceFresh := len(removed) > 0
 	return func() tea.Msg {
-		cred, err := auth.Auth(account, target, existing)
+		cred, err := auth.Auth(account, target, existing, forceFresh)
 		return applyResultMsg{cred: cred, err: err}
 	}
 }
@@ -428,6 +431,10 @@ func (m scopesModel) Update(msg tea.Msg) (scopesModel, tea.Cmd) {
 		return m.updateApplyError(msg)
 	case stateQuitConfirm:
 		return m.updateQuitConfirm(msg)
+	case stateReduceConfirm:
+		return m.updateReduceConfirm(msg)
+	case stateRevokeConfirm:
+		return m.updateRevokeConfirm(msg)
 	}
 
 	keyMsg, isKey := msg.(tea.KeyMsg)
@@ -498,17 +505,19 @@ func (m scopesModel) updateList(msg tea.KeyMsg) (scopesModel, tea.Cmd) {
 		if !m.pendingChanges() {
 			return m, func() tea.Msg { return scopesQuitMsg{} }
 		}
-		added, removed := m.diff()
+		_, removed := m.diff()
 		if len(removed) > 0 {
-			m.state = stateApplyError
-			m.applyErr = fmt.Errorf("scope reduction lands in M4 (would remove %d scope(s)). "+
-				"Untoggle removals to apply additions only", len(removed))
+			// Route through confirmation modal — reductive flow asks Google
+			// for a fresh token scoped exactly to the smaller set.
+			m.state = stateReduceConfirm
 			return m, nil
 		}
-		_ = added
 		m.state = stateApplying
 		m.applyErr = nil
 		return m, m.applyCmd()
+	case "R":
+		m.state = stateRevokeConfirm
+		return m, nil
 	case "a":
 		m.state = stateAddCustom
 		m.custom.Reset()
@@ -615,21 +624,70 @@ func (m scopesModel) updateQuitConfirm(msg tea.Msg) (scopesModel, tea.Cmd) {
 	}
 	switch keyMsg.String() {
 	case "a":
-		// Apply pending changes.
-		added, removed := m.diff()
+		// Apply pending changes. Route reductions through the confirmation
+		// modal first so the user sees the warning regardless of which path
+		// led them here.
+		_, removed := m.diff()
 		if len(removed) > 0 {
-			m.state = stateApplyError
-			m.applyErr = fmt.Errorf("scope reduction lands in M4 (would remove %d scope(s)). "+
-				"Untoggle removals to apply additions only", len(removed))
+			m.state = stateReduceConfirm
 			return m, nil
 		}
-		_ = added
 		m.state = stateApplying
 		return m, m.applyCmd()
 	case "d":
 		// Discard pending changes; exit.
 		return m, func() tea.Msg { return scopesQuitMsg{} }
 	case "c", "esc":
+		m.state = stateNormal
+		return m, nil
+	case "ctrl+c":
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+// updateReduceConfirm handles the reductive-apply warning modal.
+func (m scopesModel) updateReduceConfirm(msg tea.Msg) (scopesModel, tea.Cmd) {
+	keyMsg, isKey := msg.(tea.KeyMsg)
+	if !isKey {
+		return m, nil
+	}
+	switch keyMsg.String() {
+	case "y", "enter":
+		m.state = stateApplying
+		m.applyErr = nil
+		return m, m.applyCmd()
+	case "n", "esc", "c":
+		m.state = stateNormal
+		return m, nil
+	case "ctrl+c":
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+// revokeAccountMsg signals the top-level model to delete the credential
+// after Revoke succeeds. The vault write happens at the parent layer;
+// scopesModel just orchestrates.
+type revokeAccountMsg struct {
+	account string
+	err     error
+}
+
+// updateRevokeConfirm handles the "R: revoke entire account" modal. The
+// scopesModel only emits intent; the top-level model performs the vault
+// lookup, calls Revoke, deletes the credential, and signals exit.
+func (m scopesModel) updateRevokeConfirm(msg tea.Msg) (scopesModel, tea.Cmd) {
+	keyMsg, isKey := msg.(tea.KeyMsg)
+	if !isKey {
+		return m, nil
+	}
+	switch keyMsg.String() {
+	case "y", "enter":
+		m.state = stateApplying
+		account := m.account
+		return m, func() tea.Msg { return revokeAccountMsg{account: account} }
+	case "n", "esc", "c":
 		m.state = stateNormal
 		return m, nil
 	case "ctrl+c":
@@ -694,6 +752,10 @@ func (m scopesModel) View() string {
 		v = m.viewApplyError()
 	case stateQuitConfirm:
 		v = m.viewQuitConfirm()
+	case stateReduceConfirm:
+		v = m.viewReduceConfirm()
+	case stateRevokeConfirm:
+		v = m.viewRevokeConfirm()
 	default:
 		v = m.viewNormal()
 	}
@@ -798,7 +860,7 @@ func (m scopesModel) viewNormal() string {
 		b.WriteString(helpStyle.Render("type to filter   ↓/enter: list   esc: quit"))
 	} else {
 		// Keep this short enough to fit on one line in narrow terminals.
-		b.WriteString(helpStyle.Render("↑↓ nav   space toggle   enter apply   a add   / search   q quit"))
+		b.WriteString(helpStyle.Render("↑↓ nav   space toggle   enter apply   a add   R revoke   / search   q quit"))
 	}
 	// IMPORTANT: no trailing newline. A final \n pushes the cursor past the
 	// last terminal row, which the alt-screen treats as a scroll, sliding
@@ -857,6 +919,50 @@ func (m scopesModel) viewQuitConfirm() string {
 	}
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("[a] apply    [d] discard    [c] cancel"))
+	b.WriteString("\n")
+	return b.String()
+}
+
+func (m scopesModel) viewReduceConfirm() string {
+	added, removed := m.diff()
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Confirm scope reduction"))
+	b.WriteString("\n\n")
+	if len(removed) > 0 {
+		b.WriteString("  Removing:\n")
+		for _, s := range removed {
+			b.WriteString(rowDelStyle.Render("    - " + s))
+			b.WriteString("\n")
+		}
+	}
+	if len(added) > 0 {
+		b.WriteString("  Adding:\n")
+		for _, s := range added {
+			b.WriteString(rowAddStyle.Render("    + " + s))
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n")
+	b.WriteString("  Charon will re-authorize with only the remaining scopes.\n")
+	b.WriteString("  You'll see a fresh consent screen in your browser.\n")
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("[y/enter] continue    [n/esc] cancel"))
+	b.WriteString("\n")
+	return b.String()
+}
+
+func (m scopesModel) viewRevokeConfirm() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(fmt.Sprintf("Revoke account: %s", m.account)))
+	b.WriteString("\n\n")
+	b.WriteString(rowDelStyle.Render("  This will revoke ALL Google scopes for this account"))
+	b.WriteString("\n")
+	b.WriteString(rowDelStyle.Render("  and remove the credential from charon's keychain."))
+	b.WriteString("\n\n")
+	b.WriteString("  Agents using this account will lose access immediately.\n")
+	b.WriteString("  You'll need to run charon auth again to use this account.\n")
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("[y/enter] revoke    [n/esc] cancel"))
 	b.WriteString("\n")
 	return b.String()
 }

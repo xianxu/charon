@@ -366,7 +366,7 @@ Example:
 			} else {
 				fmt.Fprintf(out, "Authenticating with Google...\n")
 			}
-			cred, err := gp.Auth(account, nil, existingScopes)
+			cred, err := gp.Auth(account, nil, existingScopes, false)
 			if err != nil {
 				return err
 			}
@@ -474,7 +474,7 @@ Example:
 			}
 
 			fmt.Fprintf(out, "Granting scopes to %s: %v\n", account, scopes)
-			cred, err := gp.Auth(account, scopes, existingScopes)
+			cred, err := gp.Auth(account, scopes, existingScopes, false)
 			if err != nil {
 				return err
 			}
@@ -566,7 +566,7 @@ Example:
 					existingScopes = existing.Scopes
 				}
 
-				cred, err := gp.Auth(account, scopes, existingScopes)
+				cred, err := gp.Auth(account, scopes, existingScopes, false)
 				if err != nil {
 					fmt.Fprintf(out, "Error: %v\n", err)
 					continue
@@ -660,7 +660,7 @@ Example:
 					existingScopes = existing.Scopes
 				}
 
-				cred, err := gp.Auth(k.account, scopes, existingScopes)
+				cred, err := gp.Auth(k.account, scopes, existingScopes, false)
 				if err != nil {
 					fmt.Fprintf(out, "Error: %v\n", err)
 					continue

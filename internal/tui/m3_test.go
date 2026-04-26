@@ -2,7 +2,6 @@ package tui
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -16,16 +15,27 @@ type stubAuth struct {
 	gotAccount    string
 	gotScopes     []string
 	gotExisting   []string
+	gotForceFresh bool
+	revokeCalls   int
+	gotRevokeTok  string
+	revokeErr     error
 	returnCred    *vault.Credential
 	returnErr     error
 }
 
-func (s *stubAuth) Auth(account string, scopes, existingScopes []string) (*vault.Credential, error) {
+func (s *stubAuth) Auth(account string, scopes, existingScopes []string, forceFresh bool) (*vault.Credential, error) {
 	s.calls++
 	s.gotAccount = account
 	s.gotScopes = append([]string(nil), scopes...)
 	s.gotExisting = append([]string(nil), existingScopes...)
+	s.gotForceFresh = forceFresh
 	return s.returnCred, s.returnErr
+}
+
+func (s *stubAuth) Revoke(refreshToken string) error {
+	s.revokeCalls++
+	s.gotRevokeTok = refreshToken
+	return s.revokeErr
 }
 
 // helper: load rows and build a scopes model with the given auth.
@@ -183,7 +193,7 @@ func TestEnterAdditiveCallsAuth(t *testing.T) {
 	}
 }
 
-func TestEnterReductionRejectedInM3(t *testing.T) {
+func TestEnterReductionRoutesToConfirmModal(t *testing.T) {
 	v := vaultWithBase("a@gmail.com", "https://www.googleapis.com/auth/gmail.readonly")
 	auth := &stubAuth{}
 	m := newScopesForTest(t, v, "a@gmail.com", auth)
@@ -202,19 +212,17 @@ func TestEnterReductionRejectedInM3(t *testing.T) {
 	}
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
 
+	// Enter on a reductive change opens the confirmation modal — does not
+	// dispatch Auth yet.
 	m, cmd := m.Update(keyPress("enter"))
-	if m.state != stateApplyError {
-		t.Errorf("reduction: state = %v, want stateApplyError", m.state)
+	if m.state != stateReduceConfirm {
+		t.Errorf("reduction: state = %v, want stateReduceConfirm", m.state)
 	}
 	if cmd != nil {
-		// Synchronous error path — applyCmd should not be returned.
-		t.Errorf("expected no cmd on synchronous reduction reject, got %T", cmd())
+		t.Errorf("expected no cmd at modal open, got %T", cmd())
 	}
 	if auth.calls != 0 {
-		t.Errorf("auth should not be called on reduction reject, got %d calls", auth.calls)
-	}
-	if m.applyErr == nil || !strings.Contains(m.applyErr.Error(), "M4") {
-		t.Errorf("expected M4 error message, got %v", m.applyErr)
+		t.Errorf("auth should not be called yet, got %d calls", auth.calls)
 	}
 }
 

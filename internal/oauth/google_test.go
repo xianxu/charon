@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"encoding/base64"
+	"strings"
 	"testing"
 )
 
@@ -67,16 +68,30 @@ func TestBuildAuthURL_LoginHint(t *testing.T) {
 	gp := &GoogleProvider{clientID: "test-client-id", clientSecret: "test-secret"}
 
 	t.Run("without login hint", func(t *testing.T) {
-		u := gp.buildAuthURL("http://localhost:1234", []string{"openid"}, "")
+		u := gp.buildAuthURL("http://localhost:1234", []string{"openid"}, "", false)
 		if containsParam(u, "login_hint") {
 			t.Error("expected no login_hint parameter")
 		}
 	})
 
 	t.Run("with login hint", func(t *testing.T) {
-		u := gp.buildAuthURL("http://localhost:1234", []string{"openid"}, "user@gmail.com")
+		u := gp.buildAuthURL("http://localhost:1234", []string{"openid"}, "user@gmail.com", false)
 		if !containsParam(u, "login_hint") {
 			t.Error("expected login_hint parameter")
+		}
+	})
+
+	t.Run("forceFresh sets include_granted_scopes=false", func(t *testing.T) {
+		u := gp.buildAuthURL("http://localhost:1234", []string{"openid"}, "", true)
+		if !strings.Contains(u, "include_granted_scopes=false") {
+			t.Errorf("expected include_granted_scopes=false in URL: %s", u)
+		}
+	})
+
+	t.Run("forceFresh=false keeps incremental", func(t *testing.T) {
+		u := gp.buildAuthURL("http://localhost:1234", []string{"openid"}, "", false)
+		if !strings.Contains(u, "include_granted_scopes=true") {
+			t.Errorf("expected include_granted_scopes=true in URL: %s", u)
 		}
 	})
 }

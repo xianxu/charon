@@ -90,14 +90,29 @@ type tokenResponse struct {
 }
 
 // Auth runs the OAuth authorization flow: opens browser, waits for callback, exchanges code for tokens.
+//
 // If account is provided, it's used as a login_hint to pre-select the Google account.
 // The actual authenticated email is extracted from the ID token and set as the credential's Account.
-func (g *GoogleProvider) Auth(account string, scopes []string, existingScopes []string) (*vault.Credential, error) {
+//
+// forceFresh controls whether the issued token covers the union of all
+// previously-granted scopes (false, additive/incremental — Google returns the
+// union via include_granted_scopes=true) or only the requested set (true,
+// reductive — Google returns exactly what's asked, ignoring older grants).
+// Use forceFresh=true when narrowing scopes for an existing account.
+func (g *GoogleProvider) Auth(account string, scopes []string, existingScopes []string, forceFresh bool) (*vault.Credential, error) {
 	if len(scopes) == 0 {
 		scopes = DefaultGoogleScopes
 	}
-	// Always include openid+email for ID token email extraction.
-	allScopes := mergeScopes(mergeScopes(scopes, existingScopes), requiredGoogleScopes)
+	var allScopes []string
+	if forceFresh {
+		// Reductive: request only the desired scope set + structural required.
+		// Don't merge existingScopes (those are what we're trying to drop).
+		allScopes = mergeScopes(scopes, requiredGoogleScopes)
+	} else {
+		// Additive: merge desired + existing + required. Google's
+		// include_granted_scopes=true returns a token covering the union.
+		allScopes = mergeScopes(mergeScopes(scopes, existingScopes), requiredGoogleScopes)
+	}
 
 	// Start local callback server.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -108,7 +123,7 @@ func (g *GoogleProvider) Auth(account string, scopes []string, existingScopes []
 	redirectURI := fmt.Sprintf("http://localhost:%d", port)
 
 	// Build authorization URL with optional login hint.
-	authURL := g.buildAuthURL(redirectURI, allScopes, account)
+	authURL := g.buildAuthURL(redirectURI, allScopes, account, forceFresh)
 
 	// Open browser.
 	fmt.Fprintf(g.out(), "Opening browser for Google OAuth...\n")
@@ -184,20 +199,47 @@ func (g *GoogleProvider) Refresh(cred *vault.Credential) (*vault.Credential, err
 	return updated, nil
 }
 
-func (g *GoogleProvider) buildAuthURL(redirectURI string, scopes []string, loginHint string) string {
+func (g *GoogleProvider) buildAuthURL(redirectURI string, scopes []string, loginHint string, forceFresh bool) string {
 	params := url.Values{
-		"client_id":             {g.clientID},
-		"redirect_uri":         {redirectURI},
-		"response_type":        {"code"},
-		"scope":                {strings.Join(scopes, " ")},
-		"access_type":          {"offline"}, // request refresh token
-		"prompt":               {"consent"}, // force consent to get refresh token
-		"include_granted_scopes": {"true"},  // incremental authorization
+		"client_id":     {g.clientID},
+		"redirect_uri":  {redirectURI},
+		"response_type": {"code"},
+		"scope":         {strings.Join(scopes, " ")},
+		"access_type":   {"offline"}, // request refresh token
+		"prompt":        {"consent"}, // force consent to get refresh token
+	}
+	if forceFresh {
+		// Token will cover only the requested scope set, not the union of
+		// existing grants. Required for the reductive flow.
+		params.Set("include_granted_scopes", "false")
+	} else {
+		params.Set("include_granted_scopes", "true") // incremental authorization
 	}
 	if loginHint != "" {
 		params.Set("login_hint", loginHint)
 	}
 	return googleAuthURL + "?" + params.Encode()
+}
+
+// Revoke calls Google's revoke endpoint, invalidating the refresh token (and
+// the underlying authorization grant). After this, neither this token nor any
+// access tokens minted from it are usable. Use for "I'm done with this app
+// entirely" — not the routine scope-reduction flow.
+func (g *GoogleProvider) Revoke(refreshToken string) error {
+	if refreshToken == "" {
+		return fmt.Errorf("no refresh token to revoke")
+	}
+	resp, err := http.PostForm("https://oauth2.googleapis.com/revoke", url.Values{
+		"token": {refreshToken},
+	})
+	if err != nil {
+		return fmt.Errorf("revoke request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("revoke returned HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func (g *GoogleProvider) exchangeCode(code, redirectURI string) (*vault.Credential, error) {

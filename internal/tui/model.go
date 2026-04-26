@@ -109,6 +109,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.scopes, cmd = m.scopes.Update(msg)
 		return m, cmd
+
+	case revokeAccountMsg:
+		// Look up credential, call Revoke, delete from vault, then exit.
+		// Errors (vault miss, network failure) surface as applyResultMsg
+		// so the user sees them in the existing apply-error overlay.
+		cred, err := m.vault.Get("google", msg.account)
+		if err != nil {
+			return m, func() tea.Msg {
+				return applyResultMsg{err: err}
+			}
+		}
+		if m.auth != nil {
+			if err := m.auth.Revoke(cred.RefreshToken); err != nil {
+				return m, func() tea.Msg {
+					return applyResultMsg{err: err}
+				}
+			}
+		}
+		if err := m.vault.Delete("google", msg.account); err != nil {
+			return m, func() tea.Msg {
+				return applyResultMsg{err: err}
+			}
+		}
+		m.exitNote = "Revoked and removed " + msg.account
+		return m, tea.Quit
 	}
 
 	switch m.current {
