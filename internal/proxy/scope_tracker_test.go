@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xianxu/charon/internal/oauth"
 	"github.com/xianxu/charon/internal/vault"
 	"github.com/xianxu/charon/internal/vault/memory"
 )
@@ -154,6 +155,127 @@ func TestFindMissingScopes_Normalize(t *testing.T) {
 	}
 }
 
+// TestFindMissingScopes_SetSemantics covers cases where set-membership
+// matters more than naive equality: short-vs-full forms on either side,
+// duplicates in the request, and the OIDC userinfo.email rewrite that
+// Google performs.
+func TestFindMissingScopes_SetSemantics(t *testing.T) {
+	// Use the real google resolver so the test exercises the actual
+	// canonicalization path the proxy uses in production.
+	norm := oauth.ResolveGoogleScope
+
+	tests := []struct {
+		name      string
+		requested []string
+		granted   []string
+		want      []string // expected missing (in original requested form)
+	}{
+		{
+			name:      "short request matches full granted",
+			requested: []string{"gmail.readonly"},
+			granted:   []string{"https://www.googleapis.com/auth/gmail.readonly"},
+			want:      nil,
+		},
+		{
+			name:      "full request matches short granted",
+			requested: []string{"https://www.googleapis.com/auth/gmail.readonly"},
+			granted:   []string{"gmail.readonly"},
+			want:      nil,
+		},
+		{
+			name:      "OIDC email rewrite — short on agent side, full on credential side",
+			requested: []string{"email"},
+			granted:   []string{"openid", "https://www.googleapis.com/auth/userinfo.email"},
+			want:      nil,
+		},
+		{
+			name:      "openid stays openid (Google does not rewrite)",
+			requested: []string{"openid"},
+			granted:   []string{"openid"},
+			want:      nil,
+		},
+		{
+			name:      "mixed forms in same request — both should resolve",
+			requested: []string{"gmail.readonly", "https://www.googleapis.com/auth/calendar.readonly"},
+			granted:   []string{"https://www.googleapis.com/auth/gmail.readonly", "calendar.readonly"},
+			want:      nil,
+		},
+		{
+			name:      "missing reports original form, not canonical",
+			requested: []string{"gmail.send"},
+			granted:   []string{"https://www.googleapis.com/auth/gmail.readonly"},
+			want:      []string{"gmail.send"}, // 407 should show what the agent asked for
+		},
+		{
+			name:      "duplicate request entries — both reported as missing",
+			requested: []string{"gmail.send", "gmail.send"},
+			granted:   []string{},
+			want:      []string{"gmail.send", "gmail.send"},
+		},
+		{
+			name:      "unknown scope (not in catalog) passes through unchanged",
+			requested: []string{"https://example.com/random"},
+			granted:   []string{"https://example.com/random"},
+			want:      nil,
+		},
+		{
+			name:      "unknown scope missing from granted",
+			requested: []string{"https://example.com/random"},
+			granted:   []string{"openid"},
+			want:      []string{"https://example.com/random"},
+		},
+		{
+			name:      "partial overlap — only mismatched scope reported",
+			requested: []string{"gmail.readonly", "drive.readonly"},
+			granted:   []string{"https://www.googleapis.com/auth/gmail.readonly"},
+			want:      []string{"drive.readonly"},
+		},
+		{
+			name:      "empty granted set — every requested scope is missing",
+			requested: []string{"gmail.readonly", "calendar.readonly"},
+			granted:   nil,
+			want:      []string{"gmail.readonly", "calendar.readonly"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := findMissingScopes(tt.requested, tt.granted, norm)
+			if !equalScopeSlices(got, tt.want) {
+				t.Errorf("findMissingScopes(%v, %v) = %v, want %v",
+					tt.requested, tt.granted, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFindMissingScopes_NilNormalizeIsIdentity verifies that passing a
+// nil normalize function is equivalent to direct string equality — the
+// pre-#000005 behavior, kept available for non-Google providers until
+// #000006 lands proper provider abstraction.
+func TestFindMissingScopes_NilNormalizeIsIdentity(t *testing.T) {
+	got := findMissingScopes(
+		[]string{"gmail.readonly"},
+		[]string{"https://www.googleapis.com/auth/gmail.readonly"},
+		nil,
+	)
+	if len(got) != 1 || got[0] != "gmail.readonly" {
+		t.Errorf("nil normalize: got %v, want missing because no canonicalization", got)
+	}
+}
+
+func equalScopeSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestHTTPProxy_ScopeEnforcement(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, r.Header.Get("Authorization"))
@@ -251,6 +373,155 @@ func TestHTTPProxy_ScopeEnforcement(t *testing.T) {
 			t.Errorf("expected tracked scope 'drive.readonly', got %q", denials[0].Scope)
 		}
 	})
+}
+
+// TestHTTPProxy_GoogleScopeNormalization is the end-to-end regression test
+// for the bug agents kept hitting in #000005 manual testing: agent declares
+// X-Charon-Scope with short names (gmail.readonly) while the credential
+// holds the full URL form Google issues. The proxy must canonicalize on
+// both sides via the google scope catalog before comparing.
+func TestHTTPProxy_GoogleScopeNormalization(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "upstream-ok")
+	}))
+	defer upstream.Close()
+
+	upstreamURL, _ := url.Parse(upstream.URL)
+	hostname := upstreamURL.Hostname()
+	// Provider.Name = "google" so scopeNormalizer wires in
+	// oauth.ResolveGoogleScope.
+	HostToProvider[hostname] = &Provider{Name: "google", Auth: AuthBearer}
+	defer delete(HostToProvider, hostname)
+
+	store := memory.New()
+	_ = store.Set(&vault.Credential{
+		Provider:    "google",
+		Account:     "user@gmail.com",
+		AccessToken: "tok",
+		// Stored as full URLs — that's what Google returns in the OAuth
+		// token response's `scope` field.
+		Scopes: []string{
+			"openid",
+			"https://www.googleapis.com/auth/userinfo.email",
+			"https://www.googleapis.com/auth/gmail.readonly",
+		},
+	})
+
+	srv := &Server{
+		Vault:        store,
+		Audit:        NopAuditLog(),
+		CA:           testCA(t),
+		ScopeTracker: NewScopeTracker(100, 24*time.Hour),
+	}
+	proxyServer := httptest.NewServer(srv)
+	defer proxyServer.Close()
+	proxyURL, _ := url.Parse(proxyServer.URL)
+	client := &http.Client{
+		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+	}
+
+	cases := []struct {
+		name           string
+		scopeHeader    string
+		wantStatus     int
+		wantUpstream   bool // true = expect to reach upstream (200)
+		wantMissingFix string // empty if not 407
+	}{
+		{
+			name:         "short name resolves to granted full URL",
+			scopeHeader:  "gmail.readonly",
+			wantStatus:   200,
+			wantUpstream: true,
+		},
+		{
+			name:         "full URL matches granted full URL",
+			scopeHeader:  "https://www.googleapis.com/auth/gmail.readonly",
+			wantStatus:   200,
+			wantUpstream: true,
+		},
+		{
+			name:         "OIDC short name 'email' matches userinfo.email URL",
+			scopeHeader:  "email",
+			wantStatus:   200,
+			wantUpstream: true,
+		},
+		{
+			name:         "openid matches openid (no rewrite)",
+			scopeHeader:  "openid",
+			wantStatus:   200,
+			wantUpstream: true,
+		},
+		{
+			name:         "multiple scopes, all granted via short names",
+			scopeHeader:  "gmail.readonly,email,openid",
+			wantStatus:   200,
+			wantUpstream: true,
+		},
+		{
+			name:           "scope not granted reports original short name in 407",
+			scopeHeader:    "gmail.send",
+			wantStatus:     407,
+			wantUpstream:   false,
+			wantMissingFix: "gmail.send",
+		},
+		{
+			name:           "partial overlap — only missing scope reported",
+			scopeHeader:    "gmail.readonly,drive.readonly",
+			wantStatus:     407,
+			wantUpstream:   false,
+			wantMissingFix: "drive.readonly",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, _ := http.NewRequest("GET", "http://"+upstreamURL.Host+"/test", nil)
+			req.Header.Set("X-Charon-Account", "user@gmail.com")
+			req.Header.Set("X-Charon-Scope", tc.scopeHeader)
+
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != tc.wantStatus {
+				body, _ := io.ReadAll(resp.Body)
+				t.Errorf("status = %d, want %d. body=%s", resp.StatusCode, tc.wantStatus, body)
+				return
+			}
+
+			if tc.wantUpstream {
+				body, _ := io.ReadAll(resp.Body)
+				if string(body) != "upstream-ok" {
+					t.Errorf("expected upstream body, got %q", body)
+				}
+			}
+
+			if tc.wantMissingFix != "" {
+				var got struct {
+					Error   string   `json:"error"`
+					Missing []string `json:"missing"`
+					Fix     string   `json:"fix"`
+				}
+				if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+					t.Fatalf("decode 407 body: %v", err)
+				}
+				if got.Error != "scope_missing" {
+					t.Errorf("error = %q, want scope_missing", got.Error)
+				}
+				found := false
+				for _, m := range got.Missing {
+					if m == tc.wantMissingFix {
+						found = true
+					}
+				}
+				if !found {
+					t.Errorf("missing %v does not contain %q", got.Missing, tc.wantMissingFix)
+				}
+			}
+		})
+	}
 }
 
 func TestHTTPProxy_MultipleRequestedScopes(t *testing.T) {
