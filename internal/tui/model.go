@@ -1,9 +1,19 @@
 package tui
 
 import (
+	"fmt"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/xianxu/charon/internal/vault"
 )
+
+// newAccountAuthedMsg is the result of an OAuth flow kicked off by
+// "+ new account" in the picker. cred.Account is the email Google told us
+// the user authenticated as.
+type newAccountAuthedMsg struct {
+	cred *vault.Credential
+	err  error
+}
 
 type screen int
 
@@ -25,9 +35,8 @@ type model struct {
 	width, height int
 
 	// exit signals
-	pendingNewAccount bool
-	exitNote          string
-	err               error
+	exitNote string
+	err      error
 }
 
 type Option func(*model)
@@ -91,9 +100,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case newAccountMsg:
-		m.pendingNewAccount = true
-		m.exitNote = "+ new account flow lands later — pick an existing account for now"
-		return m, tea.Quit
+		// First-time auth: empty scopes (just openid+email via
+		// requiredGoogleScopes), no login_hint. The browser opens, user
+		// picks the Google account they want, completes consent. Auth
+		// returns a credential whose Account is the discovered email.
+		if m.auth == nil {
+			m.err = fmt.Errorf("no authenticator configured")
+			return m, tea.Quit
+		}
+		auth := m.auth
+		return m, func() tea.Msg {
+			cred, err := auth.Auth("", nil, nil, false)
+			return newAccountAuthedMsg{cred: cred, err: err}
+		}
+
+	case newAccountAuthedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, tea.Quit
+		}
+		if err := m.vault.Set(msg.cred); err != nil {
+			m.err = err
+			return m, tea.Quit
+		}
+		rows, err := loadScopeRows(m.vault, msg.cred.Account, m.fetchDenied)
+		if err != nil {
+			m.err = err
+			return m, tea.Quit
+		}
+		m.scopes = newScopesModel(msg.cred.Account, rows, m.auth)
+		m.current = screenScopes
+		return m, nil
 
 	case scopesQuitMsg:
 		return m, tea.Quit

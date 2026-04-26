@@ -317,18 +317,42 @@ func TestPickerToScopesTransition(t *testing.T) {
 	}
 }
 
-func TestNewAccountInM2ExitsWithNote(t *testing.T) {
+func TestNewAccountWithoutAuthErrors(t *testing.T) {
+	// + new account without an Authenticator can't proceed; should exit
+	// cleanly with an error.
 	m, _ := newModel(memory.New(), "")
 	updated, cmd := m.Update(newAccountMsg{})
-	m = updated.(model)
-	if !m.pendingNewAccount {
-		t.Error("expected pendingNewAccount=true")
-	}
-	if m.exitNote == "" {
-		t.Error("expected exitNote to be set")
+	mm := updated.(model)
+	if mm.err == nil {
+		t.Error("expected err to be set when no authenticator is wired")
 	}
 	if cmd == nil {
 		t.Error("expected tea.Quit command")
+	}
+}
+
+func TestNewAccountAuthedTransitionsToScopes(t *testing.T) {
+	v := memory.New()
+	authed := &vault.Credential{
+		Provider: "google",
+		Account:  "newuser@gmail.com",
+		Scopes:   []string{"openid", "https://www.googleapis.com/auth/userinfo.email"},
+	}
+	m, _ := newModel(v, "")
+	updated, _ := m.Update(newAccountAuthedMsg{cred: authed})
+	mm := updated.(model)
+	if mm.current != screenScopes {
+		t.Errorf("after newAccountAuthedMsg: current=%v, want screenScopes", mm.current)
+	}
+	if mm.scopes.account != "newuser@gmail.com" {
+		t.Errorf("scopes.account = %q, want newuser@gmail.com", mm.scopes.account)
+	}
+	stored, err := v.Get("google", "newuser@gmail.com")
+	if err != nil {
+		t.Fatalf("vault.Get after newAccountAuthedMsg: %v", err)
+	}
+	if len(stored.Scopes) != 2 {
+		t.Errorf("vault stored scopes count = %d, want 2", len(stored.Scopes))
 	}
 }
 

@@ -234,15 +234,38 @@ badge). `X-Charon-Scope` enforcement stays.
     revoke key opens modal, revoke confirm emits message, top-level
     handles revoke (Revoke called, vault deleted, exit).
 
-- [ ] **M5: Cleanup of replaced commands + defaults**
-  - Delete `scopes`, `grant`, `fix` cobra commands
-  - `DefaultGoogleScopes = []` (kept var so external callers compile, but
-    empty)
-  - Update `atlas/charon.md`
-  - Update help text on `charon auth google`
-  - Tests for command removal (help no longer lists them)
+- [x] **M5: Cleanup of replaced commands + defaults**
+  - `charon auth` directly launches the TUI (replaces the parent
+    container with subcommands)
+  - Deleted: `auth google`, `auth google scopes`, `auth google grant`,
+    `auth google fix`, `auth fix`, `auth remove`, hidden `tui`
+  - Headless equivalents that survive: `charon vault delete`,
+    `charon accounts`
+  - `DefaultGoogleScopes = []` (var kept, empty)
+  - `+ new account` flow wired: picker selection → OAuth with empty
+    scopes (just openid+email) → discover email from ID token → vault
+    persist → transition to scope view
+  - Atlas updated with TUI section and revised CLI listing
+  - Tests for new-account flow, no-authenticator error
+  - Multi-provider grouping deferred to #000006
 
 ## Log
+
+### 2026-04-26 — M5 complete
+
+- `charon auth` is now the TUI launcher; the legacy
+  `auth google scopes/grant/fix` and `auth fix`/`auth remove` family is
+  deleted. Hidden `tui` command also gone.
+- Headless removal still possible via `charon vault delete`.
+- `+ new account` flow wired: picker → newAccountMsg → OAuth(empty
+  scopes, no login_hint) → newAccountAuthedMsg → vault.Set + scope view
+  transition. The discovered email becomes the credential's account key.
+- `DefaultGoogleScopes` emptied. First-time auth via TUI requests only
+  required openid+email; user opts into data scopes via the TUI.
+- Atlas updated with TUI section, revised CLI listing, M5 in Status.
+- Multi-provider grouping in picker (Google/Dropbox/etc. sections) was
+  in scope at first but spun out to #000006 — adding a second provider
+  touches more than just the picker, so designed holistically.
 
 ### 2026-04-26 — M4 complete
 

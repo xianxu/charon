@@ -30,9 +30,11 @@ const (
 )
 
 // DefaultGoogleScopes are requested if none specified.
-var DefaultGoogleScopes = []string{
-	"https://www.googleapis.com/auth/gmail.readonly",
-}
+//
+// Empty by default — the TUI is the canonical UX for choosing scopes.
+// Headless callers (legacy code paths) get only the required openid+email
+// for ID-token email extraction; data scopes must be opted into explicitly.
+var DefaultGoogleScopes = []string{}
 
 // requiredGoogleScopes are always included to enable email extraction from ID token.
 //

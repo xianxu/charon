@@ -124,13 +124,49 @@ Single binary, everything in keychain:
 - `charon serve -v`: debug logging (TLS handshakes, per-request details, connection close reasons)
 - Audit log: JSON lines to stderr (method, host, path, status, latency, provider, account)
 
-## Environment knobs (TUI)
-The scope-management TUI (`charon tui`, see #000005) auto-detects terminal
-height. A few escape hatches for unusual setups:
-- `CHARON_TUI_HEIGHT=N` — manually set the height in rows. Used as-is (no
-  -1 margin). Falls back to `term.GetSize - 1` when unset.
-- `CHARON_TUI_NO_ALT=1` — disable alt-screen mode. Useful when the terminal
-  app interacts badly with bubbletea's render diff.
+## Scope-Management TUI (`charon auth`)
+
+The interactive TUI is the canonical UX for OAuth scope management
+(see #000005). Replaces the legacy `auth google scopes/grant/fix`
+command family.
+
+```
+charon auth                                            # opens picker
+```
+
+Picker → pick existing account or "+ new account" → scope view:
+- Search bar at top with substring filter (case-insensitive on short
+  name + description)
+- Catalog rows + custom keychain scopes + proxy-requested scopes
+- Color matrix: muted grey (off), muted yellow (off + requested by
+  proxy), normal (granted), green (toggled on, pending), red (toggled
+  off, pending)
+- Persistent session markers: `+` for scopes added in this session,
+  `-` for scopes removed in this session
+- Required scopes (openid, email) display as `[x] foo (req)`, can't
+  be toggled off
+
+Key bindings (see help line at the bottom of the TUI):
+- search focus: type to filter, ↓/enter → list, ^r revoke account, esc quit
+- list focus: ↑↓ nav, space toggle, enter apply, a add custom URL,
+  ^r revoke account, / search, q quit
+
+Apply paths:
+- target == realized: no-op exit
+- target ⊋ realized (additive): incremental OAuth (`include_granted_scopes=true`)
+- target has any reduction: confirmation modal → fresh OAuth
+  (`include_granted_scopes=false`) so the new token covers exactly the
+  requested set, not the union of past grants
+- ^r (revoke account): confirmation modal → calls Google's revoke
+  endpoint, deletes the credential from the keychain, exits
+
+### TUI environment knobs
+
+- `CHARON_TUI_HEIGHT=N` — manual height override (raw value, no -1
+  margin). Useful when the multiplexer doesn't keep PTY size in sync
+  with the visible pane.
+- `CHARON_TUI_NO_ALT=1` — disable alt-screen mode. For diagnosing
+  terminals where alt-screen interacts badly with bubbletea's render diff.
 - `CHARON_TUI_DEBUG=1` — log every render and key event to
   `/tmp/charon-tui-debug.log`. Off by default (zero overhead).
 
@@ -138,15 +174,11 @@ height. A few escape hatches for unusual setups:
 ```
 charon serve [-v] [--audit-log path]                  # start proxy
 charon run -- <cmd>                                    # run child with proxy env
-charon auth google [email]                             # OAuth flow (email auto-detected or login_hint)
-charon auth google scopes [email]                      # scope catalog / per-account granted scopes
-charon auth google grant <email> <scope> [scope...]    # grant additional scopes
-charon auth google fix [email]                         # fix missing scopes from proxy denials
-charon auth fix                                        # fix across all providers
-charon auth remove <provider> <email>                  # remove credential
+charon auth                                            # scope-management TUI
 charon accounts                                        # list credentials with scopes
 charon status                                          # check proxy
 charon vault set/delete                                # manual token management
+charon service install/uninstall/start/stop/status     # OS service management
 ```
 
 ## Status
@@ -154,4 +186,6 @@ charon vault set/delete                                # manual token management
 - M2 (OAuth + auto-refresh + keep-alive): done
 - M3 (wildcard routing + auth remove + zero-config + integration test): done
 - M4 (scope management + auth flow improvements): done (#000004)
-- Future: Linux secret service (#000002), code signing + Keychain ACL (#000003), suppress list for scope denials, PKCE
+- M5 (scope-management TUI replaces legacy auth subcommands): done (#000005)
+- Future: multi-provider (#000006), Linux secret service (#000002),
+  code signing + Keychain ACL (#000003), PKCE
