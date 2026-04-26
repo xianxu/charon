@@ -103,10 +103,11 @@ strategies:
 ### Programmatic: query charon's catalog
 
 ```bash
-charon scopes google
+charon scopes              # JSON array of supported providers, e.g. ["google"]
+charon scopes google       # full scope catalog for that provider
 ```
 
-Outputs JSON listing every scope charon knows about for the named
+The catalog dump lists every scope charon knows about for the named
 provider, with `short` (e.g. `gmail.readonly`), `full` (the URL Google
 uses), `description`, and `required` (always-granted). Use this at
 code-write time or runtime to map "I want to read Gmail" to a concrete
