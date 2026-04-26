@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"net/http"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/xianxu/charon/internal/vault"
@@ -32,6 +33,7 @@ type model struct {
 	vault       vault.Store
 	auth        Authenticator
 	fetchDenied denialFetcher
+	proxyAddr   string // for cache-clear notify after vault writes; "" disables
 
 	width, height int
 
@@ -50,6 +52,29 @@ func WithDenialFetcher(f denialFetcher) Option {
 // the scope view can apply changes; without it, apply is a no-op.
 func WithAuthenticator(a Authenticator) Option {
 	return func(m *model) { m.auth = a }
+}
+
+// WithProxyAddr lets the model notify the running charon proxy to flush
+// its credential cache after vault writes (apply, revoke). Without this,
+// the proxy continues serving stale tokens whose scope set predates the
+// most recent OAuth dance, and agents see 407s for scopes the user just
+// granted. Empty addr is fine — caller may not be running the proxy.
+func WithProxyAddr(addr string) Option {
+	return func(m *model) { m.proxyAddr = addr }
+}
+
+// notifyProxyCacheClear pings the proxy at proxyAddr to flush its
+// in-memory token + account cache. Best-effort; failure means the proxy
+// isn't running locally, which is fine.
+func (m model) notifyProxyCacheClear() {
+	if m.proxyAddr == "" {
+		return
+	}
+	url := fmt.Sprintf("http://%s/cache/clear", m.proxyAddr)
+	resp, err := http.Post(url, "", nil)
+	if err == nil {
+		resp.Body.Close()
+	}
 }
 
 func newModel(v vault.Store, initialAccount string, opts ...Option) (model, error) {
@@ -159,6 +184,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					msg.cred.Account, m.scopes.account)
 			} else if err := m.vault.Set(msg.cred); err != nil {
 				msg.err = err
+			} else {
+				// Flush the proxy's token cache so the next request uses
+				// the freshly-stored credential (with the just-granted
+				// scopes). Otherwise the proxy keeps serving the cached
+				// pre-grant token and agents see 407 for scopes the user
+				// already granted.
+				m.notifyProxyCacheClear()
 			}
 		}
 		var cmd tea.Cmd
@@ -187,6 +219,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return applyResultMsg{err: err}
 			}
 		}
+		m.notifyProxyCacheClear() // proxy must drop the now-revoked token
 		m.exitNote = "Revoked and removed " + msg.account
 		return m, tea.Quit
 	}

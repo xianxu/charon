@@ -17,6 +17,7 @@ func Run(v vault.Store, account, addr string, auth Authenticator) error {
 	var opts []Option
 	if addr != "" {
 		opts = append(opts, WithDenialFetcher(httpDenialFetcher(addr)))
+		opts = append(opts, WithProxyAddr(addr))
 	}
 	if auth != nil {
 		opts = append(opts, WithAuthenticator(auth))
