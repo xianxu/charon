@@ -386,50 +386,37 @@ func accountsCmd() *cobra.Command {
 	}
 }
 
-// supportedProviders is the canonical list of OAuth providers charon
-// supports. Update when a new provider is wired up.
-var supportedProviders = []string{"google"}
+// providerCatalogs maps each supported OAuth provider to its scope
+// catalog. Update when a new provider is wired up.
+var providerCatalogs = map[string][]oauth.ScopeInfo{
+	"google": oauth.GoogleScopeCatalog,
+}
 
 func scopesCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "scopes [provider]",
-		Short: "Print supported providers, or the OAuth scope catalog for one (JSON)",
-		Long: `Without arguments, lists supported OAuth providers as a JSON array.
-With a provider name, outputs that provider's scope catalog as JSON
-(short names, full URLs, descriptions, required-flag).
+		Use:   "scopes",
+		Short: "Print scope catalogs for all supported providers (JSON)",
+		Long: `Outputs a JSON object keyed by provider name, with each provider's
+full scope catalog (short names, full URLs, descriptions,
+required-flag).
 
-Intended for agent introspection: discover providers, then look up
-scope short names without round-tripping through the proxy. This is
-just the catalog (what's possible) — not what's granted to any
-specific account. Agents declare intent via X-Charon-Scope and let
-charon's 407 response signal what's missing for the user to grant.
+Intended for agent introspection. The output is just the catalog
+(what's possible) — not what any specific account has granted.
+Agents declare intent via X-Charon-Scope and let charon's 407 response
+signal what's missing for the user to grant.
 
 Examples:
-  charon scopes                    # ["google"]
-  charon scopes google             # full Google catalog
-  charon scopes google | jq '.[] | select(.short == "gmail.readonly")'`,
-		Args: cobra.MaximumNArgs(1),
+  charon scopes                              # full snapshot, all providers
+  charon scopes | jq 'keys'                  # list providers
+  charon scopes | jq '.google[] | select(.short | startswith("gmail"))'`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 0 {
-				out, err := json.MarshalIndent(supportedProviders, "", "  ")
-				if err != nil {
-					return err
-				}
-				fmt.Fprintln(cmd.OutOrStdout(), string(out))
-				return nil
+			out, err := json.MarshalIndent(providerCatalogs, "", "  ")
+			if err != nil {
+				return err
 			}
-			provider := args[0]
-			switch provider {
-			case "google":
-				out, err := json.MarshalIndent(oauth.GoogleScopeCatalog, "", "  ")
-				if err != nil {
-					return err
-				}
-				fmt.Fprintln(cmd.OutOrStdout(), string(out))
-				return nil
-			default:
-				return fmt.Errorf("unknown provider %q (supported: %v)", provider, supportedProviders)
-			}
+			fmt.Fprintln(cmd.OutOrStdout(), string(out))
+			return nil
 		},
 	}
 }
