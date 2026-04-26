@@ -188,5 +188,6 @@ charon service install/uninstall/start/stop/status     # OS service management
 - M4 (scope management + auth flow improvements): done (#000004)
 - M5 (scope-management TUI replaces legacy auth subcommands): done (#000005)
 - Future: multi-provider (#000006), scope catalog with categories +
-  filter syntax (#000007), Linux secret service (#000002), code
-  signing + Keychain ACL (#000003), PKCE
+  filter syntax (#000007), synthesize denials from upstream 403s
+  (#000008), Linux secret service (#000002), code signing + Keychain
+  ACL (#000003), PKCE
