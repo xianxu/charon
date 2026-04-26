@@ -149,7 +149,7 @@ func TestRowMatchesFilter(t *testing.T) {
 
 func TestScopesFocusToggle(t *testing.T) {
 	rows, _ := loadScopeRows(memory.New(), "a@gmail.com", nil)
-	m := newScopesModel("a@gmail.com", rows)
+	m := newScopesModel("a@gmail.com", rows, nil)
 
 	// Initial focus is search.
 	if m.focus != focusSearch {
@@ -188,7 +188,7 @@ func TestScopesFocusToggle(t *testing.T) {
 
 func TestScopesEscFromSearchSignalsQuit(t *testing.T) {
 	rows, _ := loadScopeRows(memory.New(), "a@gmail.com", nil)
-	m := newScopesModel("a@gmail.com", rows)
+	m := newScopesModel("a@gmail.com", rows, nil)
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd == nil {
@@ -201,7 +201,7 @@ func TestScopesEscFromSearchSignalsQuit(t *testing.T) {
 
 func TestScopesQFromListSignalsQuit(t *testing.T) {
 	rows, _ := loadScopeRows(memory.New(), "a@gmail.com", nil)
-	m := newScopesModel("a@gmail.com", rows)
+	m := newScopesModel("a@gmail.com", rows, nil)
 
 	// Move to list focus first.
 	m, _ = m.Update(keyPress("down"))
@@ -219,7 +219,7 @@ func TestScopesQFromListSignalsQuit(t *testing.T) {
 
 func TestScopesFilterReducesVisibleRows(t *testing.T) {
 	rows, _ := loadScopeRows(memory.New(), "a@gmail.com", nil)
-	m := newScopesModel("a@gmail.com", rows)
+	m := newScopesModel("a@gmail.com", rows, nil)
 	totalCatalogRows := len(m.filtered)
 
 	// Type "gmail" — should reduce to gmail.* rows.
@@ -248,7 +248,7 @@ func TestScopesViewRendersExpectedContent(t *testing.T) {
 		return []string{"https://www.googleapis.com/auth/calendar.readonly"}
 	}
 	rows, _ := loadScopeRows(v, "a@gmail.com", fetcher)
-	m := newScopesModel("a@gmail.com", rows)
+	m := newScopesModel("a@gmail.com", rows, nil)
 	out := m.View()
 
 	for _, want := range []string{
@@ -272,7 +272,7 @@ func TestScopesNoPendingChangesInM2(t *testing.T) {
 		Scopes: []string{"https://www.googleapis.com/auth/gmail.readonly"},
 	})
 	rows, _ := loadScopeRows(v, "a@gmail.com", nil)
-	m := newScopesModel("a@gmail.com", rows)
+	m := newScopesModel("a@gmail.com", rows, nil)
 	if m.pendingChanges() {
 		t.Error("M2 view-only: pendingChanges() must be false on load")
 	}

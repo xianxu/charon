@@ -12,33 +12,34 @@ const (
 	screenScopes
 )
 
-// model is the top-level bubbletea model. Sub-models (picker, scopes...) live
-// inside and are routed to by `current`.
+// model is the top-level bubbletea model.
 type model struct {
 	current screen
 	picker  pickerModel
 	scopes  scopesModel
 
 	vault       vault.Store
+	auth        Authenticator
 	fetchDenied denialFetcher
 
-	// terminal size
 	width, height int
 
 	// exit signals
-	pendingNewAccount bool   // user chose "+ new account" — full flow lands in M3+
-	exitNote          string // optional message printed on exit
+	pendingNewAccount bool
+	exitNote          string
 	err               error
 }
 
-// Option configures the TUI on construction.
 type Option func(*model)
 
-// WithDenialFetcher overrides the function used to query the proxy for
-// requested-scope badges. Tests inject a stub; production uses the HTTP
-// fetcher.
 func WithDenialFetcher(f denialFetcher) Option {
 	return func(m *model) { m.fetchDenied = f }
+}
+
+// WithAuthenticator wires the OAuth dispatch used for apply. Required before
+// the scope view can apply changes; without it, apply is a no-op.
+func WithAuthenticator(a Authenticator) Option {
+	return func(m *model) { m.auth = a }
 }
 
 func newModel(v vault.Store, initialAccount string, opts ...Option) (model, error) {
@@ -55,12 +56,11 @@ func newModel(v vault.Store, initialAccount string, opts ...Option) (model, erro
 		opt(&m)
 	}
 	if initialAccount != "" {
-		// Skip the picker: load scopes for the named account directly.
 		rows, err := loadScopeRows(v, initialAccount, m.fetchDenied)
 		if err != nil {
 			return model{}, err
 		}
-		m.scopes = newScopesModel(initialAccount, rows)
+		m.scopes = newScopesModel(initialAccount, rows, m.auth)
 		m.current = screenScopes
 	}
 	return m, nil
@@ -80,21 +80,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = err
 			return m, tea.Quit
 		}
-		m.scopes = newScopesModel(msg.email, rows)
+		m.scopes = newScopesModel(msg.email, rows, m.auth)
 		m.current = screenScopes
 		return m, nil
 
 	case newAccountMsg:
-		// M2: full new-account flow (OAuth → discover email → scope view) is
-		// scheduled for M3. For now, surface a note and exit cleanly.
 		m.pendingNewAccount = true
-		m.exitNote = "+ new account flow lands in M3 — using existing account for now"
+		m.exitNote = "+ new account flow lands later — pick an existing account for now"
 		return m, tea.Quit
 
 	case scopesQuitMsg:
-		// M2: no pending changes possible, just quit. M3 will inject a save/
-		// discard/cancel modal here when target≠realized.
 		return m, tea.Quit
+
+	case applyResultMsg:
+		// Side effect: persist the new credential before forwarding to scopes.
+		// Forwarded message lets scopes update its row state.
+		if msg.err == nil && msg.cred != nil {
+			if err := m.vault.Set(msg.cred); err != nil {
+				msg.err = err
+			}
+		}
+		var cmd tea.Cmd
+		m.scopes, cmd = m.scopes.Update(msg)
+		return m, cmd
 	}
 
 	switch m.current {

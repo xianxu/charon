@@ -205,13 +205,17 @@ badge). `X-Charon-Scope` enforcement stays.
   - Esc routes per focus (list→search, search→quit signal)
   - Tests: rendering, badge correctness, filter behavior, focus transitions
 
-- [ ] **M3: Toggle + apply (additive only)**
+- [x] **M3: Toggle + apply (additive only)**
   - Space toggles target state
-  - Pending-change indicator (e.g. `*`)
+  - Pending-change indicator (header shows `[N pending: +A -R]`; rows
+    light up green/red via the M2 color matrix)
   - Enter:
     - target == realized → exit no-op
     - target ⊋ realized → run incremental OAuth via existing `Auth()` path
+    - any reduction → reject with M4 message (full reduction in M4)
   - Custom scope URL via `a`
+  - Quit confirm modal when pending changes (`a` apply / `d` discard /
+    `c` cancel)
   - Tests: target/realized diff logic, no-op exit, incremental dance
 
 - [ ] **M4: Reduction with warning gate**
@@ -235,6 +239,38 @@ badge). `X-Charon-Scope` enforcement stays.
   - Tests for command removal (help no longer lists them)
 
 ## Log
+
+### 2026-04-26 — M3 complete
+
+- `Authenticator` interface lifted; production wires `*oauth.GoogleProvider`,
+  tests inject a `stubAuth` recorder. `scopesModel` holds the auth and
+  builds a `tea.Cmd` for OAuth dispatch on Enter.
+- State machine: `stateNormal | stateAddCustom | stateApplying |
+  stateApplyError | stateQuitConfirm`. State takes priority over focus —
+  search/list focus only matters in `stateNormal`.
+- Space toggles `target` on the cursor row. Header shows pending-change
+  count when target ≠ realized.
+- Enter dispatches:
+  - no diff → quit signal
+  - additive only → `applyCmd()` returns a `tea.Cmd` that runs OAuth in a
+    goroutine and emits `applyResultMsg{cred, err}`
+  - any reduction → synchronously rejects with stateApplyError + M4
+    message (no auth call)
+- Top-level model intercepts `applyResultMsg` for vault.Set side effect,
+  then forwards to scopesModel. `handleApplyResult` updates rows in place
+  (realized = new, target = realized) and appends any brand-new scopes
+  Google returned that we didn't ask for.
+- `a` enters add-custom mode: `bubbles/textinput` for the URL, Enter
+  validates+appends row (target=true, custom=true), Esc cancels,
+  duplicates rejected with stateApplyError.
+- Quit confirm modal: Esc-from-search or q-from-list with pending changes
+  goes to `stateQuitConfirm`. `a` applies (same code path), `d` discards
+  and quits, `c` returns to normal. Without pending changes, quit is
+  immediate (no prompt).
+- 12 new tests (toggle, no-op enter, additive apply happy path,
+  reduction-rejected, error dismiss, custom append/cancel/dup, all four
+  quit-confirm paths, model forwarding + vault persist). 33 TUI tests
+  total; full suite green.
 
 ### 2026-04-26 — M2 complete
 

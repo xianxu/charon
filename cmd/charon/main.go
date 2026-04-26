@@ -856,7 +856,11 @@ func tuiCmd() *cobra.Command {
 			if len(args) > 0 {
 				account = args[0]
 			}
-			return tui.Run(newVault(), account, listenAddr)
+			gp, err := oauth.NewGoogleProvider()
+			if err != nil {
+				return fmt.Errorf("init google provider: %w", err)
+			}
+			return tui.Run(newVault(), account, listenAddr, gp)
 		},
 	}
 }

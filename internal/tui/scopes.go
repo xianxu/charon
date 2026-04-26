@@ -16,9 +16,6 @@ import (
 )
 
 // scopeRow is one displayable row in the scope view.
-//
-// In M2 (view-only), `target` always equals `realized` — toggling lands in M3.
-// `requested` is set if the proxy has a recent denial entry for this scope.
 type scopeRow struct {
 	short       string
 	full        string
@@ -26,12 +23,17 @@ type scopeRow struct {
 	realized    bool
 	target      bool
 	requested   bool
-	custom      bool // not in static catalog (came from keychain)
+	custom      bool // not in static catalog (came from keychain or proxy)
 }
 
-// denialFetcher returns scopes that have been denied for the given account.
-// Implementations should be best-effort: an unreachable proxy should return
-// (nil, nil), not an error, so the TUI degrades gracefully.
+// Authenticator is the OAuth dispatch the scope view uses to apply target
+// state. Production wires *oauth.GoogleProvider; tests inject stubs.
+type Authenticator interface {
+	Auth(account string, scopes, existingScopes []string) (*vault.Credential, error)
+}
+
+// denialFetcher returns scopes denied for the given account. Best-effort: an
+// unreachable proxy must return (nil, nil), not an error.
 type denialFetcher func(account string) []string
 
 // httpDenialFetcher queries proxy at addr for /scopes/denied.
@@ -62,8 +64,6 @@ func httpDenialFetcher(addr string) denialFetcher {
 	}
 }
 
-// loadScopeRows builds the row set for an account by combining the static
-// catalog, any keychain-only scopes, and the proxy's denial badges.
 func loadScopeRows(v vault.Store, account string, fetchDenied denialFetcher) ([]scopeRow, error) {
 	cred, err := v.Get("google", account)
 	granted := map[string]bool{}
@@ -86,12 +86,12 @@ func loadScopeRows(v vault.Store, account string, fetchDenied denialFetcher) ([]
 		})
 		seen[info.Scope] = true
 	}
-	// Append any granted scopes that aren't in the catalog as "custom" rows.
 	if cred != nil {
 		extras := make([]string, 0)
 		for _, s := range cred.Scopes {
 			if !seen[s] {
 				extras = append(extras, s)
+				seen[s] = true
 			}
 		}
 		sort.Strings(extras)
@@ -106,8 +106,6 @@ func loadScopeRows(v vault.Store, account string, fetchDenied denialFetcher) ([]
 			})
 		}
 	}
-	// Mark requested rows from the proxy denial list. Append any denied scopes
-	// that aren't otherwise in the catalog so the user can see them too.
 	if fetchDenied != nil {
 		denied := fetchDenied(account)
 		denialSet := map[string]bool{}
@@ -120,9 +118,6 @@ func loadScopeRows(v vault.Store, account string, fetchDenied denialFetcher) ([]
 				delete(denialSet, rows[i].full)
 			}
 		}
-		// Anything left in denialSet is a brand-new scope the proxy saw that's
-		// not in the catalog and not in the keychain — surface it as a custom
-		// row so the user can act on it.
 		extras := make([]string, 0, len(denialSet))
 		for s := range denialSet {
 			extras = append(extras, s)
@@ -141,8 +136,6 @@ func loadScopeRows(v vault.Store, account string, fetchDenied denialFetcher) ([]
 	return rows, nil
 }
 
-// customShortName picks a readable display name for a scope URL not in the
-// catalog: the trailing path segment, or the URL itself if there's no path.
 func customShortName(s string) string {
 	if i := strings.LastIndex(s, "/"); i >= 0 && i < len(s)-1 {
 		return s[i+1:]
@@ -150,8 +143,6 @@ func customShortName(s string) string {
 	return s
 }
 
-// matches returns true if filter (case-insensitive substring) matches either
-// the short name or the description.
 func (r scopeRow) matches(filter string) bool {
 	if filter == "" {
 		return true
@@ -161,7 +152,6 @@ func (r scopeRow) matches(filter string) bool {
 		strings.Contains(strings.ToLower(r.description), f)
 }
 
-// scopesFocus is which sub-control inside scopesModel has focus.
 type scopesFocus int
 
 const (
@@ -169,28 +159,51 @@ const (
 	focusList
 )
 
+type scopesState int
+
+const (
+	stateNormal scopesState = iota
+	stateAddCustom
+	stateApplying
+	stateApplyError
+	stateQuitConfirm
+)
+
 type scopesModel struct {
-	account  string
-	rows     []scopeRow
-	cursor   int // index into filtered (visible) rows
-	filtered []int
-	search   textinput.Model
-	focus    scopesFocus
-	width    int
+	account     string
+	rows        []scopeRow
+	cursor      int
+	filtered    []int
+	search      textinput.Model
+	custom      textinput.Model
+	focus       scopesFocus
+	state       scopesState
+	applyErr    error
+	applyStatus string // transient message shown after success
+	auth        Authenticator
 }
 
-func newScopesModel(account string, rows []scopeRow) scopesModel {
-	ti := textinput.New()
-	ti.Placeholder = "filter (substring)"
-	ti.Prompt = "/ "
-	ti.CharLimit = 64
-	ti.Width = 40
-	ti.Focus()
+func newScopesModel(account string, rows []scopeRow, auth Authenticator) scopesModel {
+	search := textinput.New()
+	search.Placeholder = "filter (substring)"
+	search.Prompt = "/ "
+	search.CharLimit = 64
+	search.Width = 40
+	search.Focus()
+
+	custom := textinput.New()
+	custom.Placeholder = "https://www.googleapis.com/auth/..."
+	custom.Prompt = "  url> "
+	custom.CharLimit = 256
+	custom.Width = 60
+
 	m := scopesModel{
 		account: account,
 		rows:    rows,
-		search:  ti,
+		search:  search,
+		custom:  custom,
 		focus:   focusSearch,
+		auth:    auth,
 	}
 	m.recomputeFiltered()
 	return m
@@ -212,9 +225,6 @@ func (m *scopesModel) recomputeFiltered() {
 	}
 }
 
-// pendingChanges reports whether target differs from realized for any row.
-// In M2 this is always false (no toggles), but the helper is defined now so
-// the quit gate logic in M3 has a single source of truth.
 func (m scopesModel) pendingChanges() bool {
 	for _, r := range m.rows {
 		if r.target != r.realized {
@@ -224,85 +234,370 @@ func (m scopesModel) pendingChanges() bool {
 	return false
 }
 
+// diff returns scopes added and removed by current target state.
+func (m scopesModel) diff() (added, removed []string) {
+	for _, r := range m.rows {
+		switch {
+		case r.target && !r.realized:
+			added = append(added, r.full)
+		case !r.target && r.realized:
+			removed = append(removed, r.full)
+		}
+	}
+	return added, removed
+}
+
+// targetScopes returns the full set the user wants after apply.
+func (m scopesModel) targetScopes() []string {
+	out := make([]string, 0)
+	for _, r := range m.rows {
+		if r.target {
+			out = append(out, r.full)
+		}
+	}
+	return out
+}
+
+// realizedScopes returns the full set currently granted.
+func (m scopesModel) realizedScopes() []string {
+	out := make([]string, 0)
+	for _, r := range m.rows {
+		if r.realized {
+			out = append(out, r.full)
+		}
+	}
+	return out
+}
+
+// applyResultMsg carries the outcome of an OAuth attempt back to the model.
+// nil cred + nil err = no-op (e.g. cancelled before dispatch).
+type applyResultMsg struct {
+	cred *vault.Credential
+	err  error
+}
+
+// applyCmd builds the tea.Cmd that runs OAuth for the current diff.
+//
+// M3 supports additive only: any reduction shorts to an error result.
+// M4 will replace this branch with the revoke+reauth flow.
+func (m scopesModel) applyCmd() tea.Cmd {
+	added, removed := m.diff()
+	if len(removed) > 0 {
+		err := fmt.Errorf("scope reduction lands in M4 (would remove %d scope(s)). "+
+			"Untoggle removals to apply additions only", len(removed))
+		return func() tea.Msg { return applyResultMsg{err: err} }
+	}
+	if len(added) == 0 {
+		// Nothing to do. Should be unreachable from Enter handler.
+		return func() tea.Msg { return applyResultMsg{} }
+	}
+	target := m.targetScopes()
+	existing := m.realizedScopes()
+	account := m.account
+	auth := m.auth
+	return func() tea.Msg {
+		cred, err := auth.Auth(account, target, existing)
+		return applyResultMsg{cred: cred, err: err}
+	}
+}
+
 func (m scopesModel) Update(msg tea.Msg) (scopesModel, tea.Cmd) {
+	// Apply results are delivered regardless of current state.
+	if r, ok := msg.(applyResultMsg); ok {
+		return m.handleApplyResult(r), nil
+	}
+
+	switch m.state {
+	case stateAddCustom:
+		return m.updateAddCustom(msg)
+	case stateApplying:
+		return m.updateApplying(msg)
+	case stateApplyError:
+		return m.updateApplyError(msg)
+	case stateQuitConfirm:
+		return m.updateQuitConfirm(msg)
+	}
+
 	keyMsg, isKey := msg.(tea.KeyMsg)
 	if !isKey {
 		return m, nil
 	}
-	switch m.focus {
-	case focusSearch:
-		switch keyMsg.String() {
-		case "down", "enter":
-			if len(m.filtered) > 0 {
-				m.focus = focusList
-				m.search.Blur()
-			}
-			return m, nil
-		case "esc":
-			// M2: no pending changes possible, just signal quit.
-			return m, func() tea.Msg { return scopesQuitMsg{} }
-		case "ctrl+c":
-			return m, tea.Quit
-		}
-		var cmd tea.Cmd
-		m.search, cmd = m.search.Update(msg)
-		m.recomputeFiltered()
-		return m, cmd
-	case focusList:
-		switch keyMsg.String() {
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-			} else {
-				m.focus = focusSearch
-				m.search.Focus()
-			}
-		case "down", "j":
-			if m.cursor < len(m.filtered)-1 {
-				m.cursor++
-			}
-		case "/":
-			m.focus = focusSearch
-			m.search.Focus()
-		case "esc":
-			m.focus = focusSearch
-			m.search.Focus()
-		case "q":
-			return m, func() tea.Msg { return scopesQuitMsg{} }
-		case "ctrl+c":
-			return m, tea.Quit
+	if m.focus == focusSearch {
+		return m.updateSearch(keyMsg)
+	}
+	return m.updateList(keyMsg)
+}
+
+func (m scopesModel) updateSearch(msg tea.KeyMsg) (scopesModel, tea.Cmd) {
+	switch msg.String() {
+	case "down", "enter":
+		if len(m.filtered) > 0 {
+			m.focus = focusList
+			m.search.Blur()
 		}
 		return m, nil
+	case "esc":
+		if m.pendingChanges() {
+			m.state = stateQuitConfirm
+			return m, nil
+		}
+		return m, func() tea.Msg { return scopesQuitMsg{} }
+	case "ctrl+c":
+		return m, tea.Quit
+	}
+	var cmd tea.Cmd
+	m.search, cmd = m.search.Update(msg)
+	m.recomputeFiltered()
+	return m, cmd
+}
+
+func (m scopesModel) updateList(msg tea.KeyMsg) (scopesModel, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		} else {
+			m.focus = focusSearch
+			m.search.Focus()
+		}
+	case "down", "j":
+		if m.cursor < len(m.filtered)-1 {
+			m.cursor++
+		}
+	case "/":
+		m.focus = focusSearch
+		m.search.Focus()
+	case " ":
+		if len(m.filtered) > 0 {
+			i := m.filtered[m.cursor]
+			m.rows[i].target = !m.rows[i].target
+			m.applyStatus = ""
+		}
+	case "enter":
+		if !m.pendingChanges() {
+			return m, func() tea.Msg { return scopesQuitMsg{} }
+		}
+		added, removed := m.diff()
+		if len(removed) > 0 {
+			m.state = stateApplyError
+			m.applyErr = fmt.Errorf("scope reduction lands in M4 (would remove %d scope(s)). "+
+				"Untoggle removals to apply additions only", len(removed))
+			return m, nil
+		}
+		_ = added
+		m.state = stateApplying
+		m.applyErr = nil
+		return m, m.applyCmd()
+	case "a":
+		m.state = stateAddCustom
+		m.custom.Reset()
+		m.custom.Focus()
+		return m, nil
+	case "esc":
+		if m.pendingChanges() {
+			m.state = stateQuitConfirm
+			return m, nil
+		}
+		m.focus = focusSearch
+		m.search.Focus()
+		return m, nil
+	case "q":
+		if m.pendingChanges() {
+			m.state = stateQuitConfirm
+			return m, nil
+		}
+		return m, func() tea.Msg { return scopesQuitMsg{} }
+	case "ctrl+c":
+		return m, tea.Quit
 	}
 	return m, nil
 }
 
-// scopesQuitMsg signals the top-level model that the scope view wants to
-// exit. The top-level decides whether to quit the program or show a prompt.
+func (m scopesModel) updateAddCustom(msg tea.Msg) (scopesModel, tea.Cmd) {
+	keyMsg, isKey := msg.(tea.KeyMsg)
+	if !isKey {
+		return m, nil
+	}
+	switch keyMsg.String() {
+	case "enter":
+		raw := strings.TrimSpace(m.custom.Value())
+		if raw == "" {
+			// Empty input: just exit add-custom mode.
+			m.state = stateNormal
+			m.custom.Blur()
+			return m, nil
+		}
+		// Refuse if it duplicates an existing row.
+		for _, r := range m.rows {
+			if r.full == raw {
+				m.applyErr = fmt.Errorf("scope %q is already in the list", raw)
+				m.state = stateApplyError
+				m.custom.Blur()
+				return m, nil
+			}
+		}
+		m.rows = append(m.rows, scopeRow{
+			short:       customShortName(raw),
+			full:        raw,
+			description: "(custom scope)",
+			target:      true,
+			custom:      true,
+		})
+		m.recomputeFiltered()
+		// Move cursor to the new row in the filtered view if it's visible.
+		for i, idx := range m.filtered {
+			if idx == len(m.rows)-1 {
+				m.cursor = i
+				break
+			}
+		}
+		m.state = stateNormal
+		m.focus = focusList
+		m.custom.Blur()
+		m.search.Blur()
+		return m, nil
+	case "esc":
+		m.state = stateNormal
+		m.custom.Blur()
+		// Restore prior focus on list so user can continue navigating.
+		m.focus = focusList
+		return m, nil
+	case "ctrl+c":
+		return m, tea.Quit
+	}
+	var cmd tea.Cmd
+	m.custom, cmd = m.custom.Update(msg)
+	return m, cmd
+}
+
+func (m scopesModel) updateApplying(msg tea.Msg) (scopesModel, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "ctrl+c" {
+		return m, tea.Quit
+	}
+	// applyResultMsg is handled in Update directly.
+	return m, nil
+}
+
+func (m scopesModel) updateApplyError(msg tea.Msg) (scopesModel, tea.Cmd) {
+	if _, ok := msg.(tea.KeyMsg); ok {
+		// Any key dismisses the error overlay.
+		m.state = stateNormal
+		m.applyErr = nil
+	}
+	return m, nil
+}
+
+func (m scopesModel) updateQuitConfirm(msg tea.Msg) (scopesModel, tea.Cmd) {
+	keyMsg, isKey := msg.(tea.KeyMsg)
+	if !isKey {
+		return m, nil
+	}
+	switch keyMsg.String() {
+	case "a":
+		// Apply pending changes.
+		added, removed := m.diff()
+		if len(removed) > 0 {
+			m.state = stateApplyError
+			m.applyErr = fmt.Errorf("scope reduction lands in M4 (would remove %d scope(s)). "+
+				"Untoggle removals to apply additions only", len(removed))
+			return m, nil
+		}
+		_ = added
+		m.state = stateApplying
+		return m, m.applyCmd()
+	case "d":
+		// Discard pending changes; exit.
+		return m, func() tea.Msg { return scopesQuitMsg{} }
+	case "c", "esc":
+		m.state = stateNormal
+		return m, nil
+	case "ctrl+c":
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m scopesModel) handleApplyResult(r applyResultMsg) scopesModel {
+	if r.err != nil {
+		m.state = stateApplyError
+		m.applyErr = r.err
+		return m
+	}
+	if r.cred != nil {
+		// Update rows in place: realized = whatever Google says we have now,
+		// target = realized (no pending changes after apply).
+		granted := map[string]bool{}
+		for _, s := range r.cred.Scopes {
+			granted[s] = true
+		}
+		// Mark rows that match the new credential.
+		for i := range m.rows {
+			m.rows[i].realized = granted[m.rows[i].full]
+			m.rows[i].target = m.rows[i].realized
+			delete(granted, m.rows[i].full)
+		}
+		// Any granted scope still in `granted` is brand-new — append it.
+		extras := make([]string, 0, len(granted))
+		for s := range granted {
+			extras = append(extras, s)
+		}
+		sort.Strings(extras)
+		for _, s := range extras {
+			m.rows = append(m.rows, scopeRow{
+				short:       customShortName(s),
+				full:        s,
+				description: "(custom scope)",
+				realized:    true,
+				target:      true,
+				custom:      true,
+			})
+		}
+		m.recomputeFiltered()
+		m.applyStatus = "Applied successfully."
+	}
+	m.state = stateNormal
+	return m
+}
+
+// scopesQuitMsg signals the top-level model to exit the scope view.
 type scopesQuitMsg struct{}
 
 func (m scopesModel) View() string {
+	switch m.state {
+	case stateAddCustom:
+		return m.viewAddCustom()
+	case stateApplying:
+		return m.viewApplying()
+	case stateApplyError:
+		return m.viewApplyError()
+	case stateQuitConfirm:
+		return m.viewQuitConfirm()
+	}
+	return m.viewNormal()
+}
+
+func (m scopesModel) viewNormal() string {
 	var b strings.Builder
 
-	// Header
 	granted := 0
 	for _, r := range m.rows {
 		if r.realized {
 			granted++
 		}
 	}
-	header := fmt.Sprintf("google / %s — %d of %d granted",
-		m.account, granted, len(m.rows))
+	header := fmt.Sprintf("google / %s — %d of %d granted", m.account, granted, len(m.rows))
+	if m.pendingChanges() {
+		added, removed := m.diff()
+		header += fmt.Sprintf("   [%d pending: +%d -%d]", len(added)+len(removed), len(added), len(removed))
+	}
 	b.WriteString(titleStyle.Render(header))
 	b.WriteString("\n")
 	b.WriteString(strings.Repeat("─", 60))
 	b.WriteString("\n")
 
-	// Search bar
 	b.WriteString(m.search.View())
 	b.WriteString("\n\n")
 
-	// Rows
 	if len(m.filtered) == 0 {
 		b.WriteString(mutedStyle.Render("  (no scopes match filter)"))
 		b.WriteString("\n")
@@ -328,13 +623,70 @@ func (m scopesModel) View() string {
 		b.WriteString("\n")
 	}
 
-	// Help
 	b.WriteString("\n")
+	if m.applyStatus != "" {
+		b.WriteString(helpStyle.Render(m.applyStatus))
+		b.WriteString("\n")
+	}
 	if m.focus == focusSearch {
 		b.WriteString(helpStyle.Render("type to filter    ↓/enter: list    esc: quit"))
 	} else {
-		b.WriteString(helpStyle.Render("↑/↓: navigate    /: search    q/esc: search/quit    ctrl+c: quit"))
+		b.WriteString(helpStyle.Render("↑/↓: nav    space: toggle    enter: apply    a: add custom    /: search    q: quit"))
 	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+func (m scopesModel) viewAddCustom() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Add custom scope URL"))
+	b.WriteString("\n\n")
+	b.WriteString(m.custom.View())
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("enter: add    esc: cancel"))
+	b.WriteString("\n")
+	return b.String()
+}
+
+func (m scopesModel) viewApplying() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Authenticating..."))
+	b.WriteString("\n\n")
+	b.WriteString("  A browser window should have opened for Google OAuth.\n")
+	b.WriteString("  Complete the consent flow there. (ctrl+c to abort)\n")
+	return b.String()
+}
+
+func (m scopesModel) viewApplyError() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Apply failed"))
+	b.WriteString("\n\n")
+	if m.applyErr != nil {
+		b.WriteString("  ")
+		b.WriteString(m.applyErr.Error())
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("press any key to dismiss"))
+	b.WriteString("\n")
+	return b.String()
+}
+
+func (m scopesModel) viewQuitConfirm() string {
+	added, removed := m.diff()
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(fmt.Sprintf("You have %d pending change(s)", len(added)+len(removed))))
+	b.WriteString("\n\n")
+	for _, s := range added {
+		b.WriteString(rowAddStyle.Render("  + " + s))
+		b.WriteString("\n")
+	}
+	for _, s := range removed {
+		b.WriteString(rowDelStyle.Render("  - " + s))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("[a] apply    [d] discard    [c] cancel"))
 	b.WriteString("\n")
 	return b.String()
 }

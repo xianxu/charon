@@ -1,8 +1,4 @@
 // Package tui implements the bubbletea-based scope management UI.
-//
-// Entry point: Run(v, account, addr). When account is empty, the account
-// picker is shown first. When non-empty, the scope view loads for that
-// account directly.
 package tui
 
 import (
@@ -14,13 +10,15 @@ import (
 
 // Run launches the TUI, blocking until the user exits.
 //
-// `addr` is the proxy listen address used to fetch requested-scope badges
-// from /scopes/denied. Empty addr disables badges (acceptable for offline
-// usage).
-func Run(v vault.Store, account, addr string) error {
+// Required: vault. Optional: account (skips picker), addr (badges), auth
+// (apply support — without it, Enter on pending changes will fail).
+func Run(v vault.Store, account, addr string, auth Authenticator) error {
 	var opts []Option
 	if addr != "" {
 		opts = append(opts, WithDenialFetcher(httpDenialFetcher(addr)))
+	}
+	if auth != nil {
+		opts = append(opts, WithAuthenticator(auth))
 	}
 	m, err := newModel(v, account, opts...)
 	if err != nil {
