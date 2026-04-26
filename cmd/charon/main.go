@@ -44,6 +44,7 @@ func main() {
 	root.AddCommand(serviceCmd())
 	root.AddCommand(vaultCmd())
 	root.AddCommand(scopesCmd())
+	root.AddCommand(permissionsCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -383,6 +384,102 @@ func accountsCmd() *cobra.Command {
 			}
 			return nil
 		},
+	}
+}
+
+func permissionsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "permissions [provider] [account]",
+		Short: "Print granted scopes per provider and account (JSON)",
+		Long: `Outputs granted scopes from the keychain as JSON. Variants:
+
+  charon permissions
+    All providers, all accounts. Shape:
+      {"google":{"a@gmail.com":[...],"b@gmail.com":[...]}, ...}
+
+  charon permissions <provider>
+    One provider, all accounts. Shape:
+      {"a@gmail.com":[...],"b@gmail.com":[...]}
+
+  charon permissions <provider> <account>
+    Exact account. Shape:
+      ["openid","https://...userinfo.email","https://...gmail.readonly"]
+
+Each scope string is in the form charon stores it (typically the full
+URL the provider issued tokens against).
+
+Loading per-credential data triggers one keychain access per account,
+which may prompt for permission on the first access and is slower
+than 'charon accounts'. Use 'charon accounts' if you only need the
+account list without scopes.`,
+		Args: cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			payload, err := permissionsPayload(newVault(), args)
+			if err != nil {
+				return err
+			}
+			b, err := json.MarshalIndent(payload, "", "  ")
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), string(b))
+			return nil
+		},
+	}
+}
+
+// permissionsPayload builds the JSON-shaped value for `charon permissions`,
+// scoped to the given args. Pure function — vault is the only IO.
+//
+//	args=[]                  → map[provider]map[account][]scopes
+//	args=[provider]          → map[account][]scopes
+//	args=[provider account]  → []scopes
+func permissionsPayload(v vault.Store, args []string) (any, error) {
+	summaries, err := v.List()
+	if err != nil {
+		return nil, err
+	}
+
+	byProvider := map[string]map[string][]string{}
+	for _, c := range summaries {
+		if len(args) >= 1 && c.Provider != args[0] {
+			continue
+		}
+		if len(args) >= 2 && c.Account != args[1] {
+			continue
+		}
+		cred, err := v.Get(c.Provider, c.Account)
+		if err != nil {
+			// Skip individual failures; partial output is more useful than
+			// none. Common cause: keychain entry exists but read denied.
+			continue
+		}
+		if _, ok := byProvider[c.Provider]; !ok {
+			byProvider[c.Provider] = map[string][]string{}
+		}
+		scopes := cred.Scopes
+		if scopes == nil {
+			scopes = []string{}
+		}
+		byProvider[c.Provider][c.Account] = scopes
+	}
+
+	switch len(args) {
+	case 0:
+		return byProvider, nil
+	case 1:
+		accounts := byProvider[args[0]]
+		if accounts == nil {
+			accounts = map[string][]string{}
+		}
+		return accounts, nil
+	default: // 2
+		if accounts, ok := byProvider[args[0]]; ok {
+			if scopes, ok := accounts[args[1]]; ok {
+				return scopes, nil
+			}
+		}
+		return nil, fmt.Errorf("no credential for %s/%s", args[0], args[1])
 	}
 }
 
