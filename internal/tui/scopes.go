@@ -822,7 +822,7 @@ func (m scopesModel) viewNormal() string {
 	// granted, those rows are tinted muted yellow. Surface that in the
 	// header in the same color so users learn what the tint means.
 	if requested > 0 {
-		b.WriteString(titleStyle.Render(" / "))
+		b.WriteString(titleStyle.Render(" - "))
 		b.WriteString(rowReqStyle.Render(fmt.Sprintf("%d requested", requested)))
 	}
 	b.WriteString("\n")
