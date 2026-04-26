@@ -24,7 +24,7 @@ func Run(v vault.Store, account, addr string, auth Authenticator) error {
 	if err != nil {
 		return err
 	}
-	prog := tea.NewProgram(m)
+	prog := tea.NewProgram(m, tea.WithAltScreen())
 	finalModel, err := prog.Run()
 	if err != nil {
 		return fmt.Errorf("tui: %w", err)
