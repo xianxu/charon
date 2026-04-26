@@ -731,19 +731,24 @@ func (m scopesModel) viewNormal() string {
 	b.WriteString(m.search.View())
 	b.WriteString("\n\n")
 
-	if len(m.filtered) == 0 {
-		b.WriteString(mutedStyle.Render("  (no scopes match filter)"))
-		b.WriteString("\n")
-	}
 	visible := m.visibleRowCount()
 	end := m.windowStart + visible
 	if end > len(m.filtered) {
 		end = len(m.filtered)
 	}
+	// Always emit exactly one "↑" indicator line (empty when no rows above)
+	// so every frame has the same line count and bubbletea's render diff
+	// doesn't leave stale lines visible.
 	if m.windowStart > 0 {
 		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ↑ %d more above", m.windowStart)))
+	}
+	b.WriteString("\n")
+
+	if len(m.filtered) == 0 {
+		b.WriteString(mutedStyle.Render("  (no scopes match filter)"))
 		b.WriteString("\n")
 	}
+	rendered := 0
 	for visIdx := m.windowStart; visIdx < end; visIdx++ {
 		rowIdx := m.filtered[visIdx]
 		r := m.rows[rowIdx]
@@ -768,11 +773,21 @@ func (m scopesModel) viewNormal() string {
 		b.WriteString(cursor)
 		b.WriteString(styled)
 		b.WriteString("\n")
+		rendered++
 	}
+	// Pad row area to a constant `visible` lines so the frame size doesn't
+	// vary as the user navigates or filters. (No filter case is the
+	// exception: the "no matches" message above replaces this padding.)
+	if len(m.filtered) > 0 {
+		for ; rendered < visible; rendered++ {
+			b.WriteString("\n")
+		}
+	}
+	// Always emit exactly one "↓" indicator line (empty when no rows below).
 	if end < len(m.filtered) {
 		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ↓ %d more below", len(m.filtered)-end)))
-		b.WriteString("\n")
 	}
+	b.WriteString("\n")
 
 	b.WriteString("\n")
 	if m.applyStatus != "" {
