@@ -461,6 +461,9 @@ func (m scopesModel) updateSearch(msg tea.KeyMsg) (scopesModel, tea.Cmd) {
 			return m, nil
 		}
 		return m, func() tea.Msg { return scopesQuitMsg{} }
+	case "ctrl+r":
+		m.state = stateRevokeConfirm
+		return m, nil
 	case "ctrl+c":
 		return m, tea.Quit
 	}
@@ -515,7 +518,7 @@ func (m scopesModel) updateList(msg tea.KeyMsg) (scopesModel, tea.Cmd) {
 		m.state = stateApplying
 		m.applyErr = nil
 		return m, m.applyCmd()
-	case "R":
+	case "ctrl+r":
 		m.state = stateRevokeConfirm
 		return m, nil
 	case "a":
@@ -857,10 +860,10 @@ func (m scopesModel) viewNormal() string {
 		b.WriteString("\n")
 	}
 	if m.focus == focusSearch {
-		b.WriteString(helpStyle.Render("type to filter   ↓/enter: list   esc: quit"))
+		b.WriteString(helpStyle.Render("type to filter   ↓/enter: list   ^r: revoke   esc: quit"))
 	} else {
 		// Keep this short enough to fit on one line in narrow terminals.
-		b.WriteString(helpStyle.Render("↑↓ nav   space toggle   enter apply   a add   R revoke   / search   q quit"))
+		b.WriteString(helpStyle.Render("↑↓ nav   space toggle   enter apply   a add   ^r revoke   / search   q quit"))
 	}
 	// IMPORTANT: no trailing newline. A final \n pushes the cursor past the
 	// last terminal row, which the alt-screen treats as a scroll, sliding

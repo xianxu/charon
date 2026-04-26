@@ -131,18 +131,33 @@ func TestAdditiveApplyUsesForceFreshFalse(t *testing.T) {
 	}
 }
 
-func TestRevokeKeyOpensConfirmModal(t *testing.T) {
+func TestRevokeChordOpensConfirmModalFromList(t *testing.T) {
 	v := vaultWithBase("a@gmail.com")
 	auth := &stubAuth{}
 	m := newScopesForTest(t, v, "a@gmail.com", auth)
 	m, _ = moveToFirstListRow(t, m)
 
-	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
 	if m.state != stateRevokeConfirm {
-		t.Errorf("after R: state=%v want stateRevokeConfirm", m.state)
+		t.Errorf("after ctrl+r in list: state=%v want stateRevokeConfirm", m.state)
 	}
 	if cmd != nil {
-		t.Errorf("R alone should not dispatch a command, got %T", cmd())
+		t.Errorf("ctrl+r alone should not dispatch a command, got %T", cmd())
+	}
+}
+
+func TestRevokeChordOpensConfirmModalFromSearch(t *testing.T) {
+	v := vaultWithBase("a@gmail.com")
+	auth := &stubAuth{}
+	m := newScopesForTest(t, v, "a@gmail.com", auth)
+	// Default focus is search.
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	if m.state != stateRevokeConfirm {
+		t.Errorf("after ctrl+r in search: state=%v want stateRevokeConfirm", m.state)
+	}
+	if cmd != nil {
+		t.Errorf("ctrl+r alone should not dispatch a command, got %T", cmd())
 	}
 }
 
