@@ -199,9 +199,10 @@ type scopesModel struct {
 
 // reservedLines is the fixed chrome around the row list:
 // header (1) + separator (1) + search (1) + ↑more (1, always emitted) +
-// ↓more (1, always emitted) + blank-before-help (1) + help (1) +
-// trailing newline-as-line (1) = 8.
-const reservedLines = 8
+// ↓more (1, always emitted) + blank-before-help (1) + help (1) = 7.
+// No trailing newline — that would scroll the alt-screen on writers that
+// strictly observe rows.
+const reservedLines = 7
 
 func newScopesModel(account string, rows []scopeRow, auth Authenticator) scopesModel {
 	search := textinput.New()
@@ -797,7 +798,10 @@ func (m scopesModel) viewNormal() string {
 	} else {
 		b.WriteString(helpStyle.Render("↑/↓: nav    space: toggle    enter: apply    a: add custom    /: search    q: quit"))
 	}
-	b.WriteString("\n")
+	// IMPORTANT: no trailing newline. A final \n pushes the cursor past the
+	// last terminal row, which the alt-screen treats as a scroll, sliding
+	// the top line (header) off-screen. Bubbletea handles the rendered
+	// string as a sequence of lines without needing the trailing newline.
 	return b.String()
 }
 
