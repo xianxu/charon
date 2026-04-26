@@ -193,10 +193,13 @@ type scopesModel struct {
 	auth        Authenticator
 }
 
-// reservedLines is the fixed chrome around the scrollable row list:
-// header (1) + separator (1) + search (1) + blank (1) + blank-before-help (1)
-// + help (1) + trailing blank (1) = 7. Used to compute visible row count.
-const reservedLines = 7
+// reservedLines is the worst-case fixed chrome around the row list:
+// header (1) + separator (1) + search (1) + blank (1) + ↑more (1) + ↓more (1)
+// + blank-before-help (1) + help (1) + trailing newline-as-line (1) = 9.
+// Picked for the worst case (both above/below indicators showing) so total
+// rendered lines stays ≤ height. When fewer indicators show, we under-fill
+// by 1-2 lines, which is fine.
+const reservedLines = 9
 
 func newScopesModel(account string, rows []scopeRow, auth Authenticator) scopesModel {
 	search := textinput.New()

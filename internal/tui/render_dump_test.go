@@ -52,3 +52,17 @@ func TestDumpScopesViewSmallTerminal(t *testing.T) {
 		t.Errorf("rendered %d lines, want ≤ 25 for height=22", len(lines))
 	}
 }
+
+func TestDumpScopesViewTinyTerminal(t *testing.T) {
+	v := vaultWithBase("a@gmail.com")
+	rows, _ := loadScopeRows(v, "a@gmail.com", nil)
+	m := newScopesModel("a@gmail.com", rows, nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 16})
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	t.Logf("rendered %d lines (height=16)", len(lines))
+	for i, line := range lines {
+		t.Logf("%3d: %q", i+1, line)
+	}
+}
