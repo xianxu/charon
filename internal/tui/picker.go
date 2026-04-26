@@ -10,9 +10,8 @@ import (
 )
 
 type pickerItem struct {
-	email      string
-	scopeCount int
-	isNew      bool
+	email string
+	isNew bool
 }
 
 type pickerModel struct {
@@ -30,10 +29,7 @@ func newPickerModel(v vault.Store) (pickerModel, error) {
 		if c.Provider != "google" {
 			continue
 		}
-		items = append(items, pickerItem{
-			email:      c.Account,
-			scopeCount: len(c.Scopes),
-		})
+		items = append(items, pickerItem{email: c.Account})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].email < items[j].email })
 	items = append(items, pickerItem{isNew: true})
@@ -88,11 +84,7 @@ func (m pickerModel) View() string {
 		if item.isNew {
 			line = "+ new account"
 		} else {
-			scopes := "scope"
-			if item.scopeCount != 1 {
-				scopes = "scopes"
-			}
-			line = fmt.Sprintf("%s  (%d %s)", item.email, item.scopeCount, scopes)
+			line = item.email
 		}
 		if i == m.cursor {
 			line = selectedStyle.Render(line)

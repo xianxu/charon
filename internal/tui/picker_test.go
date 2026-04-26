@@ -127,7 +127,7 @@ func TestPickerViewRendersAllItems(t *testing.T) {
 	m, _ := newPickerModel(v)
 	out := m.View()
 
-	for _, want := range []string{"Google accounts", "a@gmail.com", "b@gmail.com", "+ new account", "2 scopes", "1 scope"} {
+	for _, want := range []string{"Google accounts", "a@gmail.com", "b@gmail.com", "+ new account"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("View() missing %q, got:\n%s", want, out)
 		}

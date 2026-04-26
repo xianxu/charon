@@ -123,13 +123,15 @@ func (s *Store) List() ([]*vault.Credential, error) {
 			parts := strings.SplitN(currentAccount, ":", 2)
 			// Skip internal namespaces (e.g. "_ca:cert" — CA storage, not a credential).
 			if len(parts) == 2 && !strings.HasPrefix(parts[0], "_") {
-				// dump-keychain only gives us the keys, not the password
-				// payload. Load each credential's full data so callers see
-				// scopes, refresh token, etc.
-				if cred, err := s.Get(parts[0], parts[1]); err == nil {
-					cred.AccessToken = "" // contract: List doesn't expose access tokens
-					creds = append(creds, cred)
-				}
+				// Lightweight: just provider+account from the dump. Loading
+				// full credentials would require a security find call per
+				// entry, which can trigger keychain dialogs and is much
+				// slower. Callers that need the full credential should use
+				// Get(provider, account) explicitly.
+				creds = append(creds, &vault.Credential{
+					Provider: parts[0],
+					Account:  parts[1],
+				})
 			}
 			currentService = ""
 			currentAccount = ""

@@ -251,6 +251,34 @@ badge). `X-Charon-Scope` enforcement stays.
 
 ## Log
 
+### 2026-04-26 — Code review (M1→M5) + fixes
+
+Dispatched superpowers:requesting-code-review subagent at M5 close,
+range 2d776d0..260bee6 (the entire #000005 work). Reviewer flagged 5
+Important issues (no Critical, several Minor follow-ups). Addressed:
+
+1. **Frame-size invariant broken in modals + no-match filter**: every
+   `View()` call now passes through `padToHeight()` to ensure exactly
+   `m.height` lines regardless of state. Added `TestFrameSizeInvariant`
+   matrix test covering all 9 state/focus combos.
+2. **`+ new account` UX hole**: introduced `screenAuthing` state. While
+   OAuth is in flight, picker stops accepting input (no double-OAuth
+   from stray Enter), shows "Authenticating with Google..." indicator.
+   Only ctrl+c reaches the model in this state.
+3. **Account drift**: when `applyResultMsg.cred.Account` differs from
+   `m.scopes.account`, surface as apply error instead of silently
+   writing a new vault entry under a different key.
+4. **`keychain.List` perf regression**: my earlier "fix" called Get
+   per-entry to load full credentials, triggering one keychain dialog
+   each. Reverted to lightweight provider+account only; dropped scope
+   count from picker (it's the picker, not a status display).
+5. **Cursor jump on filter**: now resets to 0 (fzf-style) on every
+   `recomputeFiltered` instead of pinning to len-1. Cleaner narrow.
+
+Minor findings (modal overflow handling, applyStatus clearance,
+log.Printf in openBrowser, /tmp path security) noted as follow-ups in
+the review thread, not blocking M5 close.
+
 ### 2026-04-26 — M5 complete
 
 - `charon auth` is now the TUI launcher; the legacy

@@ -276,12 +276,11 @@ func (m *scopesModel) recomputeFiltered() {
 			m.filtered = append(m.filtered, i)
 		}
 	}
-	if m.cursor >= len(m.filtered) {
-		m.cursor = 0
-		if len(m.filtered) > 0 {
-			m.cursor = len(m.filtered) - 1
-		}
-	}
+	// Cursor + window reset on filter change. fzf-style: typing narrows the
+	// list, cursor lands on the first match. Avoids the "cursor jumps to
+	// end" surprise that pinning to len-1 created.
+	m.cursor = 0
+	m.windowStart = 0
 	m.adjustWindow()
 }
 
@@ -749,6 +748,22 @@ func (m scopesModel) handleApplyResult(r applyResultMsg) scopesModel {
 // scopesQuitMsg signals the top-level model to exit the scope view.
 type scopesQuitMsg struct{}
 
+// padToHeight ensures the rendered view occupies exactly `height` lines so
+// bubbletea's diff renderer overwrites every position on every frame and
+// can't leak stale rows from a previous shorter view (e.g. modal → normal,
+// no-match → match). When height is 0 (initial frame before WindowSizeMsg),
+// returns the view unchanged.
+func padToHeight(view string, height int) string {
+	if height <= 0 {
+		return view
+	}
+	current := strings.Count(view, "\n") + 1
+	if current >= height {
+		return view
+	}
+	return view + strings.Repeat("\n", height-current)
+}
+
 func (m scopesModel) View() string {
 	var v string
 	switch m.state {
@@ -767,6 +782,7 @@ func (m scopesModel) View() string {
 	default:
 		v = m.viewNormal()
 	}
+	v = padToHeight(v, m.height)
 	lineCount := 1
 	for _, r := range v {
 		if r == '\n' {

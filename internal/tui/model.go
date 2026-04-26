@@ -20,6 +20,7 @@ type screen int
 const (
 	screenPicker screen = iota
 	screenScopes
+	screenAuthing // OAuth in flight from the picker; ignore picker keys
 )
 
 // model is the top-level bubbletea model.
@@ -104,11 +105,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// requiredGoogleScopes), no login_hint. The browser opens, user
 		// picks the Google account they want, completes consent. Auth
 		// returns a credential whose Account is the discovered email.
+		if m.current == screenAuthing {
+			// A second newAccountMsg can fire if the user mashes Enter
+			// before the first OAuth completes — picker's Update is still
+			// running. Drop the duplicate.
+			return m, nil
+		}
 		if m.auth == nil {
 			m.err = fmt.Errorf("no authenticator configured")
 			return m, tea.Quit
 		}
 		auth := m.auth
+		m.current = screenAuthing
 		return m, func() tea.Msg {
 			cred, err := auth.Auth("", nil, nil, false)
 			return newAccountAuthedMsg{cred: cred, err: err}
@@ -138,8 +146,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case applyResultMsg:
 		// Side effect: persist the new credential before forwarding to scopes.
 		// Forwarded message lets scopes update its row state.
+		//
+		// Guard against account drift: if the user authenticated as a
+		// different Google account than what the scope view is editing,
+		// surface as an error rather than silently writing a new vault
+		// entry under a different key (which would leave the original
+		// untouched and confusingly leak rows from the wrong account into
+		// the displayed view).
 		if msg.err == nil && msg.cred != nil {
-			if err := m.vault.Set(msg.cred); err != nil {
+			if m.current == screenScopes && m.scopes.account != "" && msg.cred.Account != m.scopes.account {
+				msg.err = fmt.Errorf("authenticated as %s, expected %s — original credential left untouched",
+					msg.cred.Account, m.scopes.account)
+			} else if err := m.vault.Set(msg.cred); err != nil {
 				msg.err = err
 			}
 		}
@@ -178,6 +196,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.picker, cmd = m.picker.Update(msg)
 		return m, cmd
+	case screenAuthing:
+		// Block all picker/scopes input while OAuth is in flight; only
+		// ctrl+c reaches us here so the user can still abort the program.
+		if k, ok := msg.(tea.KeyMsg); ok && k.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+		return m, nil
 	case screenScopes:
 		var cmd tea.Cmd
 		m.scopes, cmd = m.scopes.Update(msg)
@@ -190,6 +215,10 @@ func (m model) View() string {
 	switch m.current {
 	case screenPicker:
 		return m.picker.View()
+	case screenAuthing:
+		return "\nAuthenticating with Google...\n\n" +
+			"  A browser window should have opened for OAuth.\n" +
+			"  Complete the consent flow there. (ctrl+c to abort)\n"
 	case screenScopes:
 		return m.scopes.View()
 	}
