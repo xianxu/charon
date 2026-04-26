@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -238,6 +239,16 @@ func newScopesModel(account string, rows []scopeRow, auth Authenticator) scopesM
 			break
 		} else {
 			debugf("newScopesModel: term.GetSize(fd=%d) failed: %v", fd, err)
+		}
+	}
+	// Manual override: terminals (iTerm tabs, tmux panes) sometimes report
+	// the parent window height rather than the actual visible area. If the
+	// detected height doesn't match what the user sees, they can set
+	// CHARON_TUI_HEIGHT=<rows> to override.
+	if env := os.Getenv("CHARON_TUI_HEIGHT"); env != "" {
+		if n, err := strconv.Atoi(env); err == nil && n > 0 {
+			debugf("newScopesModel: CHARON_TUI_HEIGHT override %d -> %d", m.height, n)
+			m.height = n
 		}
 	}
 	debugf("newScopesModel done: height=%d, total rows=%d", m.height, len(rows))

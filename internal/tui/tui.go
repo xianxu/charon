@@ -3,6 +3,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/xianxu/charon/internal/vault"
@@ -24,7 +25,13 @@ func Run(v vault.Store, account, addr string, auth Authenticator) error {
 	if err != nil {
 		return err
 	}
-	prog := tea.NewProgram(m, tea.WithAltScreen())
+	// alt-screen by default; CHARON_TUI_NO_ALT=1 disables for diagnosing
+	// terminals where alt-screen interacts badly with size reporting.
+	teaOpts := []tea.ProgramOption{}
+	if os.Getenv("CHARON_TUI_NO_ALT") == "" {
+		teaOpts = append(teaOpts, tea.WithAltScreen())
+	}
+	prog := tea.NewProgram(m, teaOpts...)
 	finalModel, err := prog.Run()
 	if err != nil {
 		return fmt.Errorf("tui: %w", err)
