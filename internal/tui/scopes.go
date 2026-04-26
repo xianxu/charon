@@ -803,9 +803,13 @@ func (m scopesModel) viewNormal() string {
 	var b strings.Builder
 
 	granted := 0
+	requested := 0
 	for _, r := range m.rows {
 		if r.realized {
 			granted++
+		}
+		if r.requested && !r.realized {
+			requested++
 		}
 	}
 	header := fmt.Sprintf("google / %s — %d of %d granted", m.account, granted, len(m.rows))
@@ -814,6 +818,13 @@ func (m scopesModel) viewNormal() string {
 		header += fmt.Sprintf("   [%d pending: +%d -%d]", len(added)+len(removed), len(added), len(removed))
 	}
 	b.WriteString(titleStyle.Render(header))
+	// Color legend: when an agent has asked for a scope the user hasn't
+	// granted, those rows are tinted muted yellow. Surface that in the
+	// header in the same color so users learn what the tint means.
+	if requested > 0 {
+		b.WriteString(titleStyle.Render(" / "))
+		b.WriteString(rowReqStyle.Render(fmt.Sprintf("%d requested", requested)))
+	}
 	b.WriteString("\n")
 	b.WriteString(strings.Repeat("─", 60))
 	b.WriteString("\n")
