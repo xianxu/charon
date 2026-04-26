@@ -22,8 +22,8 @@ func TestSmallTerminalLayout(t *testing.T) {
 	view := m.View()
 	lines := strings.Split(view, "\n")
 
-	// Auto-detection subtracts 1 for safety, so height=22 -> we render 21 lines.
-	if got, want := len(lines), 21; got != want {
+	// Raw height: at h=22, we render exactly 22 lines (no trailing newline).
+	if got, want := len(lines), 22; got != want {
 		t.Errorf("rendered %d lines for height=22, want %d", got, want)
 	}
 	first5 := strings.Join(lines[:5], "\n")
@@ -50,15 +50,15 @@ func TestResizeAdjustsLayout(t *testing.T) {
 		t.Errorf("after Height=30: rendered %d, want %d", got, want)
 	}
 
-	// Shrink below the catalog — content should shrink with it (h-1 = 15).
+	// Shrink below the catalog — content should shrink with it (raw 16).
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 16})
-	if got, want := len(strings.Split(m.View(), "\n")), 15; got != want {
+	if got, want := len(strings.Split(m.View(), "\n")), 16; got != want {
 		t.Errorf("after shrink to Height=16: rendered %d, want %d", got, want)
 	}
 
-	// Grow back — content should grow (h-1 = 24).
+	// Grow back — content should grow (raw 25).
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 25})
-	if got, want := len(strings.Split(m.View(), "\n")), 24; got != want {
+	if got, want := len(strings.Split(m.View(), "\n")), 25; got != want {
 		t.Errorf("after grow to Height=25: rendered %d, want %d", got, want)
 	}
 

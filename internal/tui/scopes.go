@@ -234,14 +234,8 @@ func newScopesModel(account string, rows []scopeRow, auth Authenticator) scopesM
 	// renders all rows — matching the previous test behavior.
 	for _, fd := range []uintptr{os.Stdin.Fd(), os.Stdout.Fd(), os.Stderr.Fd()} {
 		if w, h, err := term.GetSize(int(fd)); err == nil && h > 0 {
-			// Subtract 1 from detected height. Empirically, even with no
-			// trailing newline, rendering exactly `tput lines` rows still
-			// scrolled the top off in practice — likely a row reserved for
-			// the terminal's input/cursor or a prompt artifact. The -1
-			// margin is safer; manual override (CHARON_TUI_HEIGHT) is
-			// applied raw.
-			m.height = h - 1
-			debugf("newScopesModel: term.GetSize(fd=%d) -> w=%d h=%d (using h-1=%d)", fd, w, h, m.height)
+			m.height = h
+			debugf("newScopesModel: term.GetSize(fd=%d) -> w=%d h=%d", fd, w, h)
 			break
 		} else {
 			debugf("newScopesModel: term.GetSize(fd=%d) failed: %v", fd, err)
@@ -420,7 +414,7 @@ func (m scopesModel) Update(msg tea.Msg) (scopesModel, tea.Cmd) {
 		if m.heightOverride > 0 {
 			m.height = m.heightOverride
 		} else if ws.Height > 0 {
-			m.height = ws.Height - 1
+			m.height = ws.Height
 		}
 		m.adjustWindow()
 		return m, nil
@@ -802,9 +796,10 @@ func (m scopesModel) viewNormal() string {
 		b.WriteString("\n")
 	}
 	if m.focus == focusSearch {
-		b.WriteString(helpStyle.Render("type to filter    ↓/enter: list    esc: quit"))
+		b.WriteString(helpStyle.Render("type to filter   ↓/enter: list   esc: quit"))
 	} else {
-		b.WriteString(helpStyle.Render("↑/↓: nav    space: toggle    enter: apply    a: add custom    /: search    q: quit"))
+		// Keep this short enough to fit on one line in narrow terminals.
+		b.WriteString(helpStyle.Render("↑↓ nav   space toggle   enter apply   a add   / search   q quit"))
 	}
 	// IMPORTANT: no trailing newline. A final \n pushes the cursor past the
 	// last terminal row, which the alt-screen treats as a scroll, sliding
