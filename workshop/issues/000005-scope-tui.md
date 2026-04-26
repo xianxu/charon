@@ -187,7 +187,7 @@ badge). `X-Charon-Scope` enforcement stays.
 
 ## Plan
 
-- [ ] **M1: TUI scaffolding + account picker**
+- [x] **M1: TUI scaffolding + account picker**
   - Pick TUI library (likely `bubbletea` — well-supported, idiomatic Go)
   - Account picker that lists accounts from vault + `+ new account`
   - Selection wires into the OAuth flow when no `login_hint` is needed
@@ -231,3 +231,16 @@ badge). `X-Charon-Scope` enforcement stays.
   - Tests for command removal (help no longer lists them)
 
 ## Log
+
+### 2026-04-26 — M1 complete
+
+- Added `internal/tui/` package with bubbletea + lipgloss deps (binary grew
+  ~9M → ~14M, within plan estimate)
+- `pickerModel` lists google accounts (sorted) + `+ new account` always last
+- Top-level `model` routes to picker; selection emits `accountSelectedMsg` /
+  `newAccountMsg` and quits the program (M2 wires these into the scope view)
+- Hidden `charon tui [account]` command launches the TUI; existing `auth
+  google` flow untouched until M5 cleanup
+- Wrote pure unit tests against the model's `Update`/`View` directly (no
+  `teatest` yet — overkill for the picker; will revisit at M3 if needed)
+- All tests green (`go test ./...`)

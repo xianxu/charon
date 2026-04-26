@@ -16,6 +16,7 @@ import (
 	"github.com/xianxu/charon/internal/oauth"
 	"github.com/xianxu/charon/internal/proxy"
 	"github.com/xianxu/charon/internal/service"
+	"github.com/xianxu/charon/internal/tui"
 	"github.com/xianxu/charon/internal/vault"
 	"github.com/xianxu/charon/internal/vault/keychain"
 )
@@ -42,6 +43,7 @@ func main() {
 	root.AddCommand(statusCmd())
 	root.AddCommand(serviceCmd())
 	root.AddCommand(vaultCmd())
+	root.AddCommand(tuiCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -841,4 +843,20 @@ func vaultDeleteCmd() *cobra.Command {
 	cmd.Flags().StringVar(&provider, "provider", "", "credential provider")
 	cmd.Flags().StringVar(&account, "account", "", "account identifier")
 	return cmd
+}
+
+func tuiCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:    "tui [account-email]",
+		Short:  "Launch the scope-management TUI (work in progress, see #000005)",
+		Hidden: true,
+		Args:   cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var account string
+			if len(args) > 0 {
+				account = args[0]
+			}
+			return tui.Run(newVault(), account)
+		},
+	}
 }
