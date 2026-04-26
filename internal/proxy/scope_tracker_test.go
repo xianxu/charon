@@ -123,10 +123,34 @@ func TestFindMissingScopes(t *testing.T) {
 		{[]string{}, []string{"a"}, nil},
 	}
 	for _, tt := range tests {
-		got := findMissingScopes(tt.requested, tt.granted)
+		got := findMissingScopes(tt.requested, tt.granted, nil)
 		if len(got) != len(tt.want) {
 			t.Errorf("findMissingScopes(%v, %v) = %v, want %v", tt.requested, tt.granted, got, tt.want)
 		}
+	}
+}
+
+func TestFindMissingScopes_Normalize(t *testing.T) {
+	// Agent declares short name; credential has the full URL Google issues.
+	// Without a normalizer, findMissingScopes treats them as different
+	// strings and reports the scope as missing — which is the bug agents
+	// kept hitting in #000005 manual testing.
+	requested := []string{"gmail.readonly"}
+	granted := []string{"https://www.googleapis.com/auth/gmail.readonly"}
+
+	identity := func(s string) string { return s }
+	if got := findMissingScopes(requested, granted, identity); len(got) == 0 {
+		t.Errorf("identity normalize: expected mismatch, got none")
+	}
+
+	canon := func(s string) string {
+		if s == "gmail.readonly" {
+			return "https://www.googleapis.com/auth/gmail.readonly"
+		}
+		return s
+	}
+	if got := findMissingScopes(requested, granted, canon); len(got) != 0 {
+		t.Errorf("canon normalize: got %v missing, want none", got)
 	}
 }
 

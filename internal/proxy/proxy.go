@@ -12,9 +12,22 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xianxu/charon/internal/oauth"
 	"github.com/xianxu/charon/internal/vault"
 	"golang.org/x/sync/singleflight"
 )
+
+// scopeNormalizer returns the per-provider canonicalization function used
+// for scope comparison. Without it, an agent declaring "gmail.readonly"
+// (short name) would never match a credential granted with the full URL
+// form Google issues, producing spurious 407s.
+func scopeNormalizer(providerName string) func(string) string {
+	switch providerName {
+	case "google":
+		return oauth.ResolveGoogleScope
+	}
+	return nil
+}
 
 const charonAccountHeader = "X-Charon-Account"
 
@@ -233,7 +246,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 			for i := range requested {
 				requested[i] = strings.TrimSpace(requested[i])
 			}
-			missing := findMissingScopes(requested, grantedScopes)
+			missing := findMissingScopes(requested, grantedScopes, scopeNormalizer(provider.Name))
 			if len(missing) > 0 {
 				if s.ScopeTracker != nil {
 					s.ScopeTracker.Track(provider.Name, resolvedAccount, missing)
@@ -364,7 +377,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			for i := range requested {
 				requested[i] = strings.TrimSpace(requested[i])
 			}
-			missing := findMissingScopes(requested, grantedScopes)
+			missing := findMissingScopes(requested, grantedScopes, scopeNormalizer(provider.Name))
 			if len(missing) > 0 {
 				if s.ScopeTracker != nil {
 					s.ScopeTracker.Track(provider.Name, resolvedAccount, missing)

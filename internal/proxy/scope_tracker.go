@@ -114,15 +114,28 @@ func (st *ScopeTracker) evictOldestLocked() {
 	}
 }
 
-// findMissingScopes returns scopes in requested that are not in granted.
-func findMissingScopes(requested, granted []string) []string {
+// findMissingScopes returns scopes in requested that are not in granted,
+// after both sides are normalized via `normalize` (typically
+// oauth.ResolveGoogleScope, which maps short names like "gmail.readonly"
+// to the full URL Google actually issues tokens against). Without
+// normalization, an agent declaring a short name would never match a
+// credential granted with the full-URL form, returning spurious 407s
+// for scopes the user has actually granted.
+//
+// Returned strings are in their original (un-normalized) form from
+// `requested`, so the 407 response shows the agent what it asked for.
+// nil normalize means direct string equality.
+func findMissingScopes(requested, granted []string, normalize func(string) string) []string {
+	if normalize == nil {
+		normalize = func(s string) string { return s }
+	}
 	grantedSet := make(map[string]bool, len(granted))
 	for _, s := range granted {
-		grantedSet[s] = true
+		grantedSet[normalize(s)] = true
 	}
 	var missing []string
 	for _, s := range requested {
-		if !grantedSet[s] {
+		if !grantedSet[normalize(s)] {
 			missing = append(missing, s)
 		}
 	}
