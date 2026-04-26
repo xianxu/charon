@@ -20,14 +20,15 @@ import (
 
 // scopeRow is one displayable row in the scope view.
 type scopeRow struct {
-	short       string
-	full        string
-	description string
-	realized    bool
-	target      bool
-	requested   bool
-	custom      bool // not in static catalog (came from keychain or proxy)
-	required    bool // structurally required — target is forced true, not togglable
+	short           string
+	full            string
+	description     string
+	realized        bool
+	initialRealized bool // realized state when the TUI loaded; used for the session +/- marker
+	target          bool
+	requested       bool
+	custom          bool // not in static catalog (came from keychain or proxy)
+	required        bool // structurally required — target is forced true, not togglable
 }
 
 // Authenticator is the OAuth dispatch the scope view uses to apply target
@@ -93,12 +94,13 @@ func loadScopeRows(v vault.Store, account string, fetchDenied denialFetcher) ([]
 			target = true
 		}
 		rows = append(rows, scopeRow{
-			short:       info.Short,
-			full:        info.Scope,
-			description: info.Description,
-			realized:    realized,
-			target:      target,
-			required:    info.Required,
+			short:           info.Short,
+			full:            info.Scope,
+			description:     info.Description,
+			realized:        realized,
+			initialRealized: realized,
+			target:          target,
+			required:        info.Required,
 		})
 		seen[info.Scope] = true
 	}
@@ -113,12 +115,13 @@ func loadScopeRows(v vault.Store, account string, fetchDenied denialFetcher) ([]
 		sort.Strings(extras)
 		for _, s := range extras {
 			rows = append(rows, scopeRow{
-				short:       customShortName(s),
-				full:        s,
-				description: "(custom scope)",
-				realized:    true,
-				target:      true,
-				custom:      true,
+				short:           customShortName(s),
+				full:            s,
+				description:     "(custom scope)",
+				realized:        true,
+				initialRealized: true,
+				target:           true,
+				custom:           true,
 			})
 		}
 	}
@@ -727,12 +730,13 @@ func (m scopesModel) handleApplyResult(r applyResultMsg) scopesModel {
 		sort.Strings(extras)
 		for _, s := range extras {
 			m.rows = append(m.rows, scopeRow{
-				short:       customShortName(s),
-				full:        s,
-				description: "(custom scope)",
-				realized:    true,
-				target:      true,
-				custom:      true,
+				short:           customShortName(s),
+				full:            s,
+				description:     "(custom scope)",
+				realized:        true,
+				initialRealized: false, // new this session
+				target:          true,
+				custom:          true,
 			})
 		}
 		m.recomputeFiltered()
@@ -822,9 +826,16 @@ func (m scopesModel) viewNormal() string {
 		if r.target {
 			check = "[x]"
 		}
-		badge := " "
-		if r.requested {
-			badge = "!"
+		// Marker column: session +/- (changes already applied this session)
+		// take priority over the proxy's "requested" badge (informational).
+		marker := " "
+		switch {
+		case r.realized && !r.initialRealized:
+			marker = "+"
+		case !r.realized && r.initialRealized:
+			marker = "-"
+		case r.requested:
+			marker = "!"
 		}
 		cursor := "  "
 		if m.focus == focusList && visIdx == m.cursor {
@@ -834,7 +845,7 @@ func (m scopesModel) viewNormal() string {
 		if r.required {
 			shortDisplay = r.short + " (req)"
 		}
-		line := fmt.Sprintf("%s %s %-32s %s", check, badge, shortDisplay, r.description)
+		line := fmt.Sprintf("%s %s %-32s %s", check, marker, shortDisplay, r.description)
 		styled := styleForRow(r, m.focus == focusList && visIdx == m.cursor).Render(line)
 		b.WriteString(cursor)
 		b.WriteString(styled)

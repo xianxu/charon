@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -195,6 +196,68 @@ func TestRevokeConfirmCancelReturnsNormal(t *testing.T) {
 	mm, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if mm.state != stateNormal {
 		t.Errorf("after esc: state=%v want stateNormal", mm.state)
+	}
+}
+
+func TestSessionMarkersPersistAfterApply(t *testing.T) {
+	// Start with openid+email+gmail.readonly granted; user grants gmail.send
+	// and revokes gmail.readonly; we expect after apply that send shows +
+	// and readonly shows -, with initialRealized snapshot intact.
+	v := vaultWithBase("a@gmail.com", "https://www.googleapis.com/auth/gmail.readonly")
+	auth := &stubAuth{
+		returnCred: &vault.Credential{
+			Provider: "google", Account: "a@gmail.com",
+			Scopes: []string{
+				"openid",
+				"https://www.googleapis.com/auth/userinfo.email",
+				"https://www.googleapis.com/auth/gmail.send",
+			},
+		},
+	}
+	m := newScopesForTest(t, v, "a@gmail.com", auth)
+
+	// Verify initialRealized was captured.
+	for _, r := range m.rows {
+		if r.short == "gmail.readonly" && !r.initialRealized {
+			t.Errorf("gmail.readonly should have initialRealized=true at load")
+		}
+		if r.short == "gmail.send" && r.initialRealized {
+			t.Errorf("gmail.send should have initialRealized=false at load")
+		}
+	}
+
+	// Simulate apply result delivering the new credential.
+	result := applyResultMsg{cred: auth.returnCred}
+	m = m.handleApplyResult(result)
+
+	// gmail.send: was off, now realized → marker should be "+"
+	// gmail.readonly: was realized, now off → marker should be "-"
+	for _, r := range m.rows {
+		if r.short == "gmail.send" {
+			if r.initialRealized {
+				t.Errorf("gmail.send: initialRealized was clobbered by apply (want false)")
+			}
+			if !r.realized {
+				t.Errorf("gmail.send: should be realized after apply")
+			}
+		}
+		if r.short == "gmail.readonly" {
+			if !r.initialRealized {
+				t.Errorf("gmail.readonly: initialRealized was clobbered by apply (want true)")
+			}
+			if r.realized {
+				t.Errorf("gmail.readonly: should not be realized after apply")
+			}
+		}
+	}
+
+	// Render and check the marker column shows + and -.
+	view := m.View()
+	if !strings.Contains(view, "+ gmail.send") {
+		t.Errorf("expected '+ gmail.send' marker in rendered view")
+	}
+	if !strings.Contains(view, "- gmail.readonly") {
+		t.Errorf("expected '- gmail.readonly' marker in rendered view")
 	}
 }
 
