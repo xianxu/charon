@@ -67,6 +67,8 @@ func (m pickerModel) Update(msg tea.Msg) (pickerModel, tea.Cmd) {
 			return m, func() tea.Msg { return newAccountMsg{} }
 		}
 		return m, func() tea.Msg { return accountSelectedMsg{email: item.email} }
+	case "q", "esc", "ctrl+c":
+		return m, tea.Quit
 	}
 	return m, nil
 }
@@ -102,7 +104,7 @@ func (m pickerModel) View() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("↑/↓: navigate    enter: select    q: quit"))
+	b.WriteString(helpStyle.Render("↑/↓: navigate    enter: select    q/esc: quit"))
 	b.WriteString("\n")
 	return b.String()
 }
