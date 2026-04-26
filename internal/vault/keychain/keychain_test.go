@@ -8,6 +8,7 @@
 package keychain
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/xianxu/charon/internal/vault"
@@ -123,7 +124,10 @@ func TestKeychainList(t *testing.T) {
 	for _, c := range creds {
 		if c.Provider == testProvider && c.Account == testAccount {
 			found = true
-			break
+		}
+		// Internal namespaces (e.g. CA storage under "_ca:cert") must not appear as credentials.
+		if strings.HasPrefix(c.Provider, "_") {
+			t.Errorf("List returned internal entry: %s/%s", c.Provider, c.Account)
 		}
 	}
 	if !found {

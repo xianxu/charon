@@ -121,7 +121,8 @@ func (s *Store) List() ([]*vault.Credential, error) {
 		// When we have both and service matches, extract credential info.
 		if currentService == serviceName && currentAccount != "" {
 			parts := strings.SplitN(currentAccount, ":", 2)
-			if len(parts) == 2 {
+			// Skip internal namespaces (e.g. "_ca:cert" — CA storage, not a credential).
+			if len(parts) == 2 && !strings.HasPrefix(parts[0], "_") {
 				creds = append(creds, &vault.Credential{
 					Provider: parts[0],
 					Account:  parts[1],
