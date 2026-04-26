@@ -124,6 +124,16 @@ Single binary, everything in keychain:
 - `charon serve -v`: debug logging (TLS handshakes, per-request details, connection close reasons)
 - Audit log: JSON lines to stderr (method, host, path, status, latency, provider, account)
 
+## Environment knobs (TUI)
+The scope-management TUI (`charon tui`, see #000005) auto-detects terminal
+height. A few escape hatches for unusual setups:
+- `CHARON_TUI_HEIGHT=N` — manually set the height in rows. Used as-is (no
+  -1 margin). Falls back to `term.GetSize - 1` when unset.
+- `CHARON_TUI_NO_ALT=1` — disable alt-screen mode. Useful when the terminal
+  app interacts badly with bubbletea's render diff.
+- `CHARON_TUI_DEBUG=1` — log every render and key event to
+  `/tmp/charon-tui-debug.log`. Off by default (zero overhead).
+
 ## CLI
 ```
 charon serve [-v] [--audit-log path]                  # start proxy
