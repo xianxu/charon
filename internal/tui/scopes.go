@@ -206,10 +206,11 @@ type scopesModel struct {
 
 // reservedLines is the fixed chrome around the row list:
 // header (1) + separator (1) + search (1) + ↑more (1, always emitted) +
-// ↓more (1, always emitted) + blank-before-help (1) + help (1) = 7.
+// ↓more (1, always emitted) + blank-before-help (1) + status (1, always
+// emitted, blank when empty) + help (1) = 8.
 // No trailing newline — that would scroll the alt-screen on writers that
 // strictly observe rows.
-const reservedLines = 7
+const reservedLines = 8
 
 func newScopesModel(account string, rows []scopeRow, auth Authenticator) scopesModel {
 	search := textinput.New()
@@ -855,10 +856,12 @@ func (m scopesModel) viewNormal() string {
 	b.WriteString("\n")
 
 	b.WriteString("\n")
+	// Always emit the status slot (blank when empty) so frame size stays
+	// constant regardless of whether a transient message is showing.
 	if m.applyStatus != "" {
 		b.WriteString(helpStyle.Render(m.applyStatus))
-		b.WriteString("\n")
 	}
+	b.WriteString("\n")
 	if m.focus == focusSearch {
 		b.WriteString(helpStyle.Render("type to filter   ↓/enter: list   ^r: revoke   esc: quit"))
 	} else {

@@ -23,6 +23,7 @@ func TestSmallTerminalLayout(t *testing.T) {
 	lines := strings.Split(view, "\n")
 
 	// Raw height: at h=22, we render exactly 22 lines (no trailing newline).
+	// reservedLines=8, so visible row block = 14, total = 22.
 	if got, want := len(lines), 22; got != want {
 		t.Errorf("rendered %d lines for height=22, want %d", got, want)
 	}
