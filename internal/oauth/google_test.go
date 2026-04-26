@@ -106,8 +106,8 @@ func TestRequiredScopesIncluded(t *testing.T) {
 	if !seen["openid"] {
 		t.Error("requiredGoogleScopes missing 'openid'")
 	}
-	if !seen["email"] {
-		t.Error("requiredGoogleScopes missing 'email'")
+	if !seen["https://www.googleapis.com/auth/userinfo.email"] {
+		t.Error("requiredGoogleScopes missing userinfo.email")
 	}
 }
 

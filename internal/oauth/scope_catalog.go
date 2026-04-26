@@ -2,33 +2,39 @@ package oauth
 
 // ScopeInfo describes a known OAuth scope.
 type ScopeInfo struct {
-	Scope       string // full scope URL
+	Scope       string // full scope URL (or OIDC short name like "openid")
 	Short       string // short name for display
 	Description string
+	Required    bool // structurally required by charon (always granted)
 }
 
 // GoogleScopeCatalog lists known Google OAuth scopes.
+//
+// Note on `email`: Google rewrites the OIDC short scope `email` to its full
+// URL form `https://www.googleapis.com/auth/userinfo.email` in token
+// responses. We use the full URL here so that round-tripping (request →
+// response → keychain → row lookup) matches.
 var GoogleScopeCatalog = []ScopeInfo{
-	{"openid", "openid", "OpenID Connect authentication"},
-	{"email", "email", "View email address"},
-	{"https://www.googleapis.com/auth/gmail.readonly", "gmail.readonly", "Read Gmail messages"},
-	{"https://www.googleapis.com/auth/gmail.send", "gmail.send", "Send Gmail messages"},
-	{"https://www.googleapis.com/auth/gmail.modify", "gmail.modify", "Read, send, and manage Gmail"},
-	{"https://www.googleapis.com/auth/calendar.readonly", "calendar.readonly", "Read Google Calendar events"},
-	{"https://www.googleapis.com/auth/calendar", "calendar", "Read and write Google Calendar"},
-	{"https://www.googleapis.com/auth/drive.readonly", "drive.readonly", "Read Google Drive files"},
-	{"https://www.googleapis.com/auth/drive", "drive", "Read and write Google Drive files"},
-	{"https://www.googleapis.com/auth/drive.file", "drive.file", "Access files created by this app"},
-	{"https://www.googleapis.com/auth/spreadsheets.readonly", "spreadsheets.readonly", "Read Google Sheets"},
-	{"https://www.googleapis.com/auth/spreadsheets", "spreadsheets", "Read and write Google Sheets"},
-	{"https://www.googleapis.com/auth/documents.readonly", "docs.readonly", "Read Google Docs"},
-	{"https://www.googleapis.com/auth/documents", "docs", "Read and write Google Docs"},
-	{"https://www.googleapis.com/auth/presentations.readonly", "slides.readonly", "Read Google Slides"},
-	{"https://www.googleapis.com/auth/presentations", "slides", "Read and write Google Slides"},
-	{"https://www.googleapis.com/auth/tasks.readonly", "tasks.readonly", "Read Google Tasks"},
-	{"https://www.googleapis.com/auth/tasks", "tasks", "Read and write Google Tasks"},
-	{"https://www.googleapis.com/auth/contacts.readonly", "contacts.readonly", "Read Google Contacts"},
-	{"https://www.googleapis.com/auth/youtube.readonly", "youtube.readonly", "Read YouTube account"},
+	{Scope: "openid", Short: "openid", Description: "OpenID Connect authentication (required)", Required: true},
+	{Scope: "https://www.googleapis.com/auth/userinfo.email", Short: "email", Description: "View email address (required)", Required: true},
+	{Scope: "https://www.googleapis.com/auth/gmail.readonly", Short: "gmail.readonly", Description: "Read Gmail messages"},
+	{Scope: "https://www.googleapis.com/auth/gmail.send", Short: "gmail.send", Description: "Send Gmail messages"},
+	{Scope: "https://www.googleapis.com/auth/gmail.modify", Short: "gmail.modify", Description: "Read, send, and manage Gmail"},
+	{Scope: "https://www.googleapis.com/auth/calendar.readonly", Short: "calendar.readonly", Description: "Read Google Calendar events"},
+	{Scope: "https://www.googleapis.com/auth/calendar", Short: "calendar", Description: "Read and write Google Calendar"},
+	{Scope: "https://www.googleapis.com/auth/drive.readonly", Short: "drive.readonly", Description: "Read Google Drive files"},
+	{Scope: "https://www.googleapis.com/auth/drive", Short: "drive", Description: "Read and write Google Drive files"},
+	{Scope: "https://www.googleapis.com/auth/drive.file", Short: "drive.file", Description: "Access files created by this app"},
+	{Scope: "https://www.googleapis.com/auth/spreadsheets.readonly", Short: "spreadsheets.readonly", Description: "Read Google Sheets"},
+	{Scope: "https://www.googleapis.com/auth/spreadsheets", Short: "spreadsheets", Description: "Read and write Google Sheets"},
+	{Scope: "https://www.googleapis.com/auth/documents.readonly", Short: "docs.readonly", Description: "Read Google Docs"},
+	{Scope: "https://www.googleapis.com/auth/documents", Short: "docs", Description: "Read and write Google Docs"},
+	{Scope: "https://www.googleapis.com/auth/presentations.readonly", Short: "slides.readonly", Description: "Read Google Slides"},
+	{Scope: "https://www.googleapis.com/auth/presentations", Short: "slides", Description: "Read and write Google Slides"},
+	{Scope: "https://www.googleapis.com/auth/tasks.readonly", Short: "tasks.readonly", Description: "Read Google Tasks"},
+	{Scope: "https://www.googleapis.com/auth/tasks", Short: "tasks", Description: "Read and write Google Tasks"},
+	{Scope: "https://www.googleapis.com/auth/contacts.readonly", Short: "contacts.readonly", Description: "Read Google Contacts"},
+	{Scope: "https://www.googleapis.com/auth/youtube.readonly", Short: "youtube.readonly", Description: "Read YouTube account"},
 }
 
 // googleScopeIndex maps full scope URLs and short names to ScopeInfo.

@@ -240,6 +240,37 @@ badge). `X-Charon-Scope` enforcement stays.
 
 ## Log
 
+### 2026-04-26 — M3 follow-up: OIDC scope rewriting + required scopes
+
+User testing surfaced two real issues with how `email` was handled:
+1. Google rewrites the OIDC short scope `email` to its full URL form
+   `https://www.googleapis.com/auth/userinfo.email` in token responses.
+   The catalog had `email` as the Scope field, so after auth the rewritten
+   URL didn't round-trip — gmail.readonly grants would render correctly,
+   but the email row stayed unchecked and a phantom `userinfo.email`
+   custom row appeared.
+2. `requiredGoogleScopes` was always force-merged at the oauth layer, but
+   the TUI knew nothing about it. Toggling openid/email off in the TUI
+   was a lie: apply would re-include them via `mergeScopes` regardless.
+
+Fixes:
+- Catalog `email` entry uses the full `userinfo.email` URL (short name
+  stays). `requiredGoogleScopes` updated to match — request and response
+  now use the same string.
+- `ScopeInfo` gains a `Required bool` field; openid + email marked.
+- `scopeRow.required` propagates from the catalog. Required rows force
+  `target = true` on load; space-key is a no-op with status message
+  ("openid is required for charon to identify the account").
+- Render: required rows display with `(req)` suffix.
+- Apply path: `m.auth == nil` no longer panics — returns a clean error.
+
+Cleaner UX consequence: on a fresh keychain, openid/email show as +2
+pending — honest representation that the next apply will grant them.
+After first auth, no diff. Tests updated to use a `vaultWithBase` helper
+for the common "no pending" baseline.
+
+35 TUI tests; full suite green.
+
 ### 2026-04-26 — M3 complete
 
 - `Authenticator` interface lifted; production wires `*oauth.GoogleProvider`,

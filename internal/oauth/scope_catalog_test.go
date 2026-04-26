@@ -11,7 +11,7 @@ func TestResolveGoogleScope(t *testing.T) {
 		{"calendar.readonly", "https://www.googleapis.com/auth/calendar.readonly"},
 		{"drive.readonly", "https://www.googleapis.com/auth/drive.readonly"},
 		{"openid", "openid"},
-		{"email", "email"},
+		{"email", "https://www.googleapis.com/auth/userinfo.email"},
 		// Unknown scope passed through.
 		{"https://custom.scope/foo", "https://custom.scope/foo"},
 		{"unknown.scope", "unknown.scope"},

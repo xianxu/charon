@@ -52,10 +52,28 @@ func moveToFirstListRow(t *testing.T, m scopesModel) (scopesModel, int) {
 	return m, m.filtered[m.cursor]
 }
 
+// moveToFirstTogglableRow drops focus to the list and advances the cursor
+// past any required (non-togglable) rows. Returns the row index that the
+// cursor now points at.
+func moveToFirstTogglableRow(t *testing.T, m scopesModel) (scopesModel, int) {
+	t.Helper()
+	m, _ = m.Update(keyPress("down"))
+	if m.focus != focusList {
+		t.Fatalf("focus not list after down")
+	}
+	for m.cursor < len(m.filtered) && m.rows[m.filtered[m.cursor]].required {
+		m, _ = m.Update(keyPress("down"))
+	}
+	if m.cursor >= len(m.filtered) {
+		t.Fatalf("no togglable rows in list")
+	}
+	return m, m.filtered[m.cursor]
+}
+
 func TestSpaceTogglesTarget(t *testing.T) {
-	v := memory.New()
+	v := vaultWithBase("a@gmail.com")
 	m := newScopesForTest(t, v, "a@gmail.com", nil)
-	m, idx := moveToFirstListRow(t, m)
+	m, idx := moveToFirstTogglableRow(t, m)
 
 	prior := m.rows[idx].target
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
@@ -76,10 +94,13 @@ func TestSpaceTogglesTarget(t *testing.T) {
 }
 
 func TestEnterNoChangeQuits(t *testing.T) {
-	v := memory.New()
+	v := vaultWithBase("a@gmail.com")
 	m := newScopesForTest(t, v, "a@gmail.com", nil)
 	m, _ = moveToFirstListRow(t, m)
 
+	if m.pendingChanges() {
+		t.Fatalf("setup: vault with required scopes should produce no pending changes")
+	}
 	_, cmd := m.Update(keyPress("enter"))
 	if cmd == nil {
 		t.Fatal("enter with no pending changes: expected quit cmd")
@@ -90,11 +111,15 @@ func TestEnterNoChangeQuits(t *testing.T) {
 }
 
 func TestEnterAdditiveCallsAuth(t *testing.T) {
-	v := memory.New()
+	v := vaultWithBase("a@gmail.com")
 	auth := &stubAuth{
 		returnCred: &vault.Credential{
 			Provider: "google", Account: "a@gmail.com",
-			Scopes: []string{"https://www.googleapis.com/auth/gmail.readonly"},
+			Scopes: []string{
+				"openid",
+				"https://www.googleapis.com/auth/userinfo.email",
+				"https://www.googleapis.com/auth/gmail.readonly",
+			},
 		},
 	}
 	m := newScopesForTest(t, v, "a@gmail.com", auth)
@@ -159,11 +184,7 @@ func TestEnterAdditiveCallsAuth(t *testing.T) {
 }
 
 func TestEnterReductionRejectedInM3(t *testing.T) {
-	v := memory.New()
-	v.Set(&vault.Credential{
-		Provider: "google", Account: "a@gmail.com",
-		Scopes: []string{"https://www.googleapis.com/auth/gmail.readonly"},
-	})
+	v := vaultWithBase("a@gmail.com", "https://www.googleapis.com/auth/gmail.readonly")
 	auth := &stubAuth{}
 	m := newScopesForTest(t, v, "a@gmail.com", auth)
 	m, _ = moveToFirstListRow(t, m)
@@ -374,6 +395,41 @@ func TestModelForwardsApplyResultAndPersists(t *testing.T) {
 	}
 	if mm.scopes.state != stateNormal {
 		t.Errorf("scope state after apply forward = %v, want stateNormal", mm.scopes.state)
+	}
+}
+
+func TestRequiredRowsForceTargetTrue(t *testing.T) {
+	rows, err := loadScopeRows(memory.New(), "a@gmail.com", nil)
+	if err != nil {
+		t.Fatalf("loadScopeRows: %v", err)
+	}
+	for _, r := range rows {
+		if r.required && !r.target {
+			t.Errorf("required row %q should have target=true on fresh load", r.short)
+		}
+	}
+}
+
+func TestSpaceOnRequiredRowIsNoOp(t *testing.T) {
+	v := vaultWithBase("a@gmail.com")
+	m := newScopesForTest(t, v, "a@gmail.com", nil)
+	m, _ = m.Update(keyPress("down"))
+	// Cursor should be on the first required row (openid).
+	idx := m.filtered[m.cursor]
+	if !m.rows[idx].required {
+		t.Fatalf("setup: first row not required, got %+v", m.rows[idx])
+	}
+
+	priorTarget := m.rows[idx].target
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	if m.rows[idx].target != priorTarget {
+		t.Errorf("space on required row toggled target")
+	}
+	if m.applyStatus == "" {
+		t.Errorf("expected status message when toggling required row")
+	}
+	if m.pendingChanges() {
+		t.Errorf("required row no-op should not introduce pending changes")
 	}
 }
 

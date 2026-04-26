@@ -24,6 +24,7 @@ type scopeRow struct {
 	target      bool
 	requested   bool
 	custom      bool // not in static catalog (came from keychain or proxy)
+	required    bool // structurally required — target is forced true, not togglable
 }
 
 // Authenticator is the OAuth dispatch the scope view uses to apply target
@@ -77,12 +78,19 @@ func loadScopeRows(v vault.Store, account string, fetchDenied denialFetcher) ([]
 	seen := map[string]bool{}
 	for _, info := range oauth.GoogleScopeCatalog {
 		realized := granted[info.Scope]
+		// Required scopes are force-targeted on, since charon will always
+		// include them in the next Auth request regardless of user toggles.
+		target := realized
+		if info.Required {
+			target = true
+		}
 		rows = append(rows, scopeRow{
 			short:       info.Short,
 			full:        info.Scope,
 			description: info.Description,
 			realized:    realized,
-			target:      realized,
+			target:      target,
+			required:    info.Required,
 		})
 		seen[info.Scope] = true
 	}
@@ -291,6 +299,11 @@ func (m scopesModel) applyCmd() tea.Cmd {
 		// Nothing to do. Should be unreachable from Enter handler.
 		return func() tea.Msg { return applyResultMsg{} }
 	}
+	if m.auth == nil {
+		return func() tea.Msg {
+			return applyResultMsg{err: fmt.Errorf("no authenticator configured (use tui.WithAuthenticator)")}
+		}
+	}
 	target := m.targetScopes()
 	existing := m.realizedScopes()
 	account := m.account
@@ -370,8 +383,12 @@ func (m scopesModel) updateList(msg tea.KeyMsg) (scopesModel, tea.Cmd) {
 	case " ":
 		if len(m.filtered) > 0 {
 			i := m.filtered[m.cursor]
-			m.rows[i].target = !m.rows[i].target
-			m.applyStatus = ""
+			if m.rows[i].required {
+				m.applyStatus = fmt.Sprintf("%s is required for charon to identify the account.", m.rows[i].short)
+			} else {
+				m.rows[i].target = !m.rows[i].target
+				m.applyStatus = ""
+			}
 		}
 	case "enter":
 		if !m.pendingChanges() {
@@ -616,7 +633,11 @@ func (m scopesModel) viewNormal() string {
 		if m.focus == focusList && visIdx == m.cursor {
 			cursor = "> "
 		}
-		line := fmt.Sprintf("%s %s %-25s %s", check, badge, r.short, r.description)
+		shortDisplay := r.short
+		if r.required {
+			shortDisplay = r.short + " (req)"
+		}
+		line := fmt.Sprintf("%s %s %-32s %s", check, badge, shortDisplay, r.description)
 		styled := styleForRow(r, m.focus == focusList && visIdx == m.cursor).Render(line)
 		b.WriteString(cursor)
 		b.WriteString(styled)

@@ -33,9 +33,15 @@ var DefaultGoogleScopes = []string{
 }
 
 // requiredGoogleScopes are always included to enable email extraction from ID token.
+//
+// Note: we use the full userinfo.email URL form rather than the OIDC short
+// name "email" because Google rewrites the short form to this URL on the
+// way back, and we want request and response to use the same string so
+// that round-tripping (request → token endpoint → keychain → catalog
+// lookup) matches.
 var requiredGoogleScopes = []string{
 	"openid",
-	"email",
+	"https://www.googleapis.com/auth/userinfo.email",
 }
 
 // GoogleProvider implements the OAuth flow for Google accounts.

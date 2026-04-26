@@ -9,6 +9,19 @@ import (
 	"github.com/xianxu/charon/internal/vault/memory"
 )
 
+// vaultWithBase returns a memory vault with required (openid + userinfo.email)
+// scopes already granted for the account, plus any extra scopes. Use this in
+// tests that want "no pending changes on load" as the baseline.
+func vaultWithBase(account string, extra ...string) *memory.Store {
+	v := memory.New()
+	scopes := append([]string{
+		"openid",
+		"https://www.googleapis.com/auth/userinfo.email",
+	}, extra...)
+	v.Set(&vault.Credential{Provider: "google", Account: account, Scopes: scopes})
+	return v
+}
+
 func TestLoadRowsCatalogOnly(t *testing.T) {
 	rows, err := loadScopeRows(memory.New(), "nobody@gmail.com", nil)
 	if err != nil {
@@ -18,8 +31,15 @@ func TestLoadRowsCatalogOnly(t *testing.T) {
 		t.Fatalf("expected catalog rows, got %d", len(rows))
 	}
 	for _, r := range rows {
-		if r.realized || r.target || r.requested || r.custom {
-			t.Errorf("unauthenticated load: row %q has flags set: %+v", r.short, r)
+		if r.realized || r.requested || r.custom {
+			t.Errorf("unauthenticated load: row %q has unexpected flags set: %+v", r.short, r)
+		}
+		// Required rows force target=true; non-required start as target=false.
+		if r.required && !r.target {
+			t.Errorf("required row %q should have target=true", r.short)
+		}
+		if !r.required && r.target {
+			t.Errorf("non-required row %q should have target=false on fresh load", r.short)
 		}
 	}
 }
@@ -43,8 +63,9 @@ func TestLoadRowsMarksRealizedAndTarget(t *testing.T) {
 		if r.realized {
 			got[r.short] = true
 		}
-		if r.realized != r.target {
-			t.Errorf("row %q: realized=%v target=%v (M2: should match)", r.short, r.realized, r.target)
+		// Required rows can have target!=realized (forced); skip them here.
+		if !r.required && r.realized != r.target {
+			t.Errorf("row %q: realized=%v target=%v (should match)", r.short, r.realized, r.target)
 		}
 	}
 	for _, want := range []string{"gmail.readonly", "calendar.readonly"} {
@@ -148,7 +169,7 @@ func TestRowMatchesFilter(t *testing.T) {
 }
 
 func TestScopesFocusToggle(t *testing.T) {
-	rows, _ := loadScopeRows(memory.New(), "a@gmail.com", nil)
+	rows, _ := loadScopeRows(vaultWithBase("a@gmail.com"), "a@gmail.com", nil)
 	m := newScopesModel("a@gmail.com", rows, nil)
 
 	// Initial focus is search.
@@ -187,7 +208,7 @@ func TestScopesFocusToggle(t *testing.T) {
 }
 
 func TestScopesEscFromSearchSignalsQuit(t *testing.T) {
-	rows, _ := loadScopeRows(memory.New(), "a@gmail.com", nil)
+	rows, _ := loadScopeRows(vaultWithBase("a@gmail.com"), "a@gmail.com", nil)
 	m := newScopesModel("a@gmail.com", rows, nil)
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -200,7 +221,7 @@ func TestScopesEscFromSearchSignalsQuit(t *testing.T) {
 }
 
 func TestScopesQFromListSignalsQuit(t *testing.T) {
-	rows, _ := loadScopeRows(memory.New(), "a@gmail.com", nil)
+	rows, _ := loadScopeRows(vaultWithBase("a@gmail.com"), "a@gmail.com", nil)
 	m := newScopesModel("a@gmail.com", rows, nil)
 
 	// Move to list focus first.
@@ -266,11 +287,7 @@ func TestScopesViewRendersExpectedContent(t *testing.T) {
 }
 
 func TestScopesNoPendingChangesInM2(t *testing.T) {
-	v := memory.New()
-	v.Set(&vault.Credential{
-		Provider: "google", Account: "a@gmail.com",
-		Scopes: []string{"https://www.googleapis.com/auth/gmail.readonly"},
-	})
+	v := vaultWithBase("a@gmail.com", "https://www.googleapis.com/auth/gmail.readonly")
 	rows, _ := loadScopeRows(v, "a@gmail.com", nil)
 	m := newScopesModel("a@gmail.com", rows, nil)
 	if m.pendingChanges() {
