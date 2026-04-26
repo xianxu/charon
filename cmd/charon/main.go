@@ -856,7 +856,7 @@ func tuiCmd() *cobra.Command {
 			if len(args) > 0 {
 				account = args[0]
 			}
-			return tui.Run(newVault(), account)
+			return tui.Run(newVault(), account, listenAddr)
 		},
 	}
 }

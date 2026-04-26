@@ -193,13 +193,17 @@ badge). `X-Charon-Scope` enforcement stays.
   - Selection wires into the OAuth flow when no `login_hint` is needed
   - Tests: picker renders, navigation, selection routes correctly
 
-- [ ] **M2: Scope TUI — view-only**
-  - Render scope list per account (catalog + any keychain extras)
+- [x] **M2: Scope TUI — view-only**
+  - Render scope list per account (catalog + any keychain extras + any
+    proxy-denied scopes not in catalog)
   - Realized state from keychain → `[x]` / `[ ]` rendering
-  - Muted color for off rows
-  - Badge from `/scopes/denied` (live query, 24h TTL respected by ring buffer)
-  - `q`/`esc` quit
-  - Tests: rendering, badge correctness when proxy unreachable, color states
+  - Color matrix: muted grey (off, no badge), muted yellow (off, requested),
+    normal (granted), green (off→on, M3+), red (on→off, M3+)
+  - Always-on search input at top with focus model: search↔list via Down /
+    Enter / Up at top / `/` / Esc
+  - Substring filter on short+description, case-insensitive
+  - Esc routes per focus (list→search, search→quit signal)
+  - Tests: rendering, badge correctness, filter behavior, focus transitions
 
 - [ ] **M3: Toggle + apply (additive only)**
   - Space toggles target state
@@ -231,6 +235,29 @@ badge). `X-Charon-Scope` enforcement stays.
   - Tests for command removal (help no longer lists them)
 
 ## Log
+
+### 2026-04-26 — M2 complete
+
+- `scopesModel` renders catalog + keychain extras + denied-scope rows in
+  one unified list. Loader handles all three sources and dedupes by full
+  scope URL.
+- Color matrix wired in `styleForRow`: muted grey, muted yellow (badge),
+  normal granted; green/red diff styles defined but unused until M3.
+- Always-on search at top via `bubbles/textinput`. Focus toggles between
+  search and list with the keys we agreed: Down/Enter→list, Up at top of
+  list→search, `/` from list→search, Esc list→search, Esc search→quit
+  signal, q in list→quit signal, Ctrl+C anywhere→hard quit.
+- `denialFetcher` is an injectable interface; production wires
+  `httpDenialFetcher(addr)` against `/scopes/denied`, with 1s timeout and
+  silent fall-through on any error so an unreachable proxy degrades to "no
+  badges" rather than failure.
+- Picker → scopes transition: `accountSelectedMsg` triggers row load and
+  screen switch. `+ new account` in M2 surfaces a placeholder note and
+  exits (full new-account flow lands in M3).
+- 21 tests pass (15 new), full suite green. Binary still ~14M.
+- **Manual verification deferred**: bubbletea TUIs need a TTY which the
+  test sandbox doesn't have. User should run `charon tui <email>` to eyeball
+  rendering, search, focus toggle, and color states.
 
 ### 2026-04-26 — M1 complete
 

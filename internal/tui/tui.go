@@ -1,9 +1,8 @@
 // Package tui implements the bubbletea-based scope management UI.
 //
-// Entry point: Run(v, account). Account picker is shown when account is empty.
-// Selecting an account transitions to the scope view (M2+). Selecting "+ new
-// account" kicks off OAuth with no login_hint and routes to scope view on
-// success.
+// Entry point: Run(v, account, addr). When account is empty, the account
+// picker is shown first. When non-empty, the scope view loads for that
+// account directly.
 package tui
 
 import (
@@ -15,13 +14,15 @@ import (
 
 // Run launches the TUI, blocking until the user exits.
 //
-// If account is empty, the account picker is shown first. Otherwise, the TUI
-// jumps directly to the scope view for that account.
-//
-// M1: only the account picker is implemented. The selected account or
-// new-account intent is printed and the function returns.
-func Run(v vault.Store, account string) error {
-	m, err := newModel(v, account)
+// `addr` is the proxy listen address used to fetch requested-scope badges
+// from /scopes/denied. Empty addr disables badges (acceptable for offline
+// usage).
+func Run(v vault.Store, account, addr string) error {
+	var opts []Option
+	if addr != "" {
+		opts = append(opts, WithDenialFetcher(httpDenialFetcher(addr)))
+	}
+	m, err := newModel(v, account, opts...)
 	if err != nil {
 		return err
 	}
@@ -34,11 +35,8 @@ func Run(v vault.Store, account string) error {
 	if final.err != nil {
 		return final.err
 	}
-	switch {
-	case final.newAccount:
-		fmt.Println("Selected: + new account (OAuth wiring lands in M2)")
-	case final.selected != "":
-		fmt.Printf("Selected: %s (scope view lands in M2)\n", final.selected)
+	if final.exitNote != "" {
+		fmt.Println(final.exitNote)
 	}
 	return nil
 }
