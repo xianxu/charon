@@ -232,11 +232,15 @@ func newScopesModel(account string, rows []scopeRow, auth Authenticator) scopesM
 	// (e.g. stdin not a TTY in tests) leave height=0 and recomputeFiltered
 	// renders all rows — matching the previous test behavior.
 	for _, fd := range []uintptr{os.Stdin.Fd(), os.Stdout.Fd(), os.Stderr.Fd()} {
-		if _, h, err := term.GetSize(int(fd)); err == nil && h > 0 {
+		if w, h, err := term.GetSize(int(fd)); err == nil && h > 0 {
 			m.height = h
+			debugf("newScopesModel: term.GetSize(fd=%d) -> w=%d h=%d", fd, w, h)
 			break
+		} else {
+			debugf("newScopesModel: term.GetSize(fd=%d) failed: %v", fd, err)
 		}
 	}
+	debugf("newScopesModel done: height=%d, total rows=%d", m.height, len(rows))
 	m.recomputeFiltered()
 	return m
 }
@@ -389,6 +393,7 @@ func (m scopesModel) Update(msg tea.Msg) (scopesModel, tea.Cmd) {
 	}
 	// Window size updates affect rendering regardless of state.
 	if ws, ok := msg.(tea.WindowSizeMsg); ok {
+		debugf("WindowSizeMsg: w=%d h=%d (was h=%d)", ws.Width, ws.Height, m.height)
 		m.height = ws.Height
 		m.adjustWindow()
 		return m, nil
@@ -444,14 +449,17 @@ func (m scopesModel) updateList(msg tea.KeyMsg) (scopesModel, tea.Cmd) {
 		if m.cursor > 0 {
 			m.cursor--
 			m.adjustWindow()
+			debugf("up: cursor=%d windowStart=%d", m.cursor, m.windowStart)
 		} else {
 			m.focus = focusSearch
 			m.search.Focus()
+			debugf("up at top: focus=search")
 		}
 	case "down", "j":
 		if m.cursor < len(m.filtered)-1 {
 			m.cursor++
 			m.adjustWindow()
+			debugf("down: cursor=%d windowStart=%d", m.cursor, m.windowStart)
 		}
 	case "/":
 		m.focus = focusSearch
@@ -656,17 +664,29 @@ func (m scopesModel) handleApplyResult(r applyResultMsg) scopesModel {
 type scopesQuitMsg struct{}
 
 func (m scopesModel) View() string {
+	var v string
 	switch m.state {
 	case stateAddCustom:
-		return m.viewAddCustom()
+		v = m.viewAddCustom()
 	case stateApplying:
-		return m.viewApplying()
+		v = m.viewApplying()
 	case stateApplyError:
-		return m.viewApplyError()
+		v = m.viewApplyError()
 	case stateQuitConfirm:
-		return m.viewQuitConfirm()
+		v = m.viewQuitConfirm()
+	default:
+		v = m.viewNormal()
 	}
-	return m.viewNormal()
+	lineCount := 1
+	for _, r := range v {
+		if r == '\n' {
+			lineCount++
+		}
+	}
+	debugf("View: state=%d focus=%d height=%d cursor=%d windowStart=%d visible=%d filtered=%d/total=%d -> rendered_lines=%d",
+		m.state, m.focus, m.height, m.cursor, m.windowStart,
+		m.visibleRowCount(), len(m.filtered), len(m.rows), lineCount)
+	return v
 }
 
 func (m scopesModel) viewNormal() string {
