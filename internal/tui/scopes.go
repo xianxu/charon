@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/xianxu/charon/internal/oauth"
 	"github.com/xianxu/charon/internal/vault"
+	"golang.org/x/term"
 )
 
 // scopeRow is one displayable row in the scope view.
@@ -222,6 +224,18 @@ func newScopesModel(account string, rows []scopeRow, auth Authenticator) scopesM
 		custom:  custom,
 		focus:   focusSearch,
 		auth:    auth,
+	}
+	// Seed height from the OS so the first frame renders the correct number
+	// of rows. bubbletea's WindowSizeMsg may not arrive before the first
+	// View() call; without this, we'd over-render and the terminal scrolls
+	// the top (header + search bar) off-screen on small panes. Failures
+	// (e.g. stdin not a TTY in tests) leave height=0 and recomputeFiltered
+	// renders all rows — matching the previous test behavior.
+	for _, fd := range []uintptr{os.Stdin.Fd(), os.Stdout.Fd(), os.Stderr.Fd()} {
+		if _, h, err := term.GetSize(int(fd)); err == nil && h > 0 {
+			m.height = h
+			break
+		}
 	}
 	m.recomputeFiltered()
 	return m
