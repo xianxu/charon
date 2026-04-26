@@ -197,13 +197,11 @@ type scopesModel struct {
 	auth           Authenticator
 }
 
-// reservedLines is the worst-case fixed chrome around the row list:
-// header (1) + separator (1) + search (1) + blank (1) + ↑more (1) + ↓more (1)
-// + blank-before-help (1) + help (1) + trailing newline-as-line (1) = 9.
-// Picked for the worst case (both above/below indicators showing) so total
-// rendered lines stays ≤ height. When fewer indicators show, we under-fill
-// by 1-2 lines, which is fine.
-const reservedLines = 9
+// reservedLines is the fixed chrome around the row list:
+// header (1) + separator (1) + search (1) + ↑more (1, always emitted) +
+// ↓more (1, always emitted) + blank-before-help (1) + help (1) +
+// trailing newline-as-line (1) = 8.
+const reservedLines = 8
 
 func newScopesModel(account string, rows []scopeRow, auth Authenticator) scopesModel {
 	search := textinput.New()
@@ -729,7 +727,7 @@ func (m scopesModel) viewNormal() string {
 	b.WriteString("\n")
 
 	b.WriteString(m.search.View())
-	b.WriteString("\n\n")
+	b.WriteString("\n")
 
 	visible := m.visibleRowCount()
 	end := m.windowStart + visible
