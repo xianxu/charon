@@ -234,8 +234,14 @@ func newScopesModel(account string, rows []scopeRow, auth Authenticator) scopesM
 	// renders all rows — matching the previous test behavior.
 	for _, fd := range []uintptr{os.Stdin.Fd(), os.Stdout.Fd(), os.Stderr.Fd()} {
 		if w, h, err := term.GetSize(int(fd)); err == nil && h > 0 {
-			m.height = h
-			debugf("newScopesModel: term.GetSize(fd=%d) -> w=%d h=%d", fd, w, h)
+			// Subtract 1 from detected height. Empirically, even with no
+			// trailing newline, rendering exactly `tput lines` rows still
+			// scrolled the top off in practice — likely a row reserved for
+			// the terminal's input/cursor or a prompt artifact. The -1
+			// margin is safer; manual override (CHARON_TUI_HEIGHT) is
+			// applied raw.
+			m.height = h - 1
+			debugf("newScopesModel: term.GetSize(fd=%d) -> w=%d h=%d (using h-1=%d)", fd, w, h, m.height)
 			break
 		} else {
 			debugf("newScopesModel: term.GetSize(fd=%d) failed: %v", fd, err)
@@ -406,13 +412,15 @@ func (m scopesModel) Update(msg tea.Msg) (scopesModel, tea.Cmd) {
 	}
 	// Window size updates affect rendering regardless of state. The env
 	// override (heightOverride) sticks, ignoring the OS-reported height.
+	// Auto-detected heights get the same -1 safety margin as the initial
+	// term.GetSize seeding.
 	if ws, ok := msg.(tea.WindowSizeMsg); ok {
 		debugf("WindowSizeMsg: w=%d h=%d (was h=%d, override=%d)",
 			ws.Width, ws.Height, m.height, m.heightOverride)
 		if m.heightOverride > 0 {
 			m.height = m.heightOverride
-		} else {
-			m.height = ws.Height
+		} else if ws.Height > 0 {
+			m.height = ws.Height - 1
 		}
 		m.adjustWindow()
 		return m, nil
