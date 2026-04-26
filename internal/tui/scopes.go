@@ -226,12 +226,11 @@ func newScopesModel(account string, rows []scopeRow, auth Authenticator) scopesM
 		focus:   focusSearch,
 		auth:    auth,
 	}
-	// Seed height from the OS so the first frame renders the correct number
-	// of rows. bubbletea's WindowSizeMsg may not arrive before the first
-	// View() call; without this, we'd over-render and the terminal scrolls
-	// the top (header + search bar) off-screen on small panes. Failures
-	// (e.g. stdin not a TTY in tests) leave height=0 and recomputeFiltered
-	// renders all rows — matching the previous test behavior.
+	// Seed height from ioctl. bubbletea's initial WindowSizeMsg arrives
+	// shortly and updates this; the seed just covers the very first
+	// View() call before that message lands. If the terminal multiplexer
+	// (cmux) doesn't update PTY size on pane resize, use
+	// CHARON_TUI_HEIGHT to override.
 	for _, fd := range []uintptr{os.Stdin.Fd(), os.Stdout.Fd(), os.Stderr.Fd()} {
 		if w, h, err := term.GetSize(int(fd)); err == nil && h > 0 {
 			m.height = h
