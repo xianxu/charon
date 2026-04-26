@@ -181,19 +181,20 @@ const (
 )
 
 type scopesModel struct {
-	account     string
-	rows        []scopeRow
-	cursor      int
-	filtered    []int
-	windowStart int // first visible row index in m.filtered
-	height      int // terminal height; 0 means render all rows
-	search      textinput.Model
-	custom      textinput.Model
-	focus       scopesFocus
-	state       scopesState
-	applyErr    error
-	applyStatus string // transient message shown after success
-	auth        Authenticator
+	account        string
+	rows           []scopeRow
+	cursor         int
+	filtered       []int
+	windowStart    int // first visible row index in m.filtered
+	height         int // effective terminal height; 0 means render all rows
+	heightOverride int // CHARON_TUI_HEIGHT; if > 0, used in place of WindowSizeMsg
+	search         textinput.Model
+	custom         textinput.Model
+	focus          scopesFocus
+	state          scopesState
+	applyErr       error
+	applyStatus    string // transient message shown after success
+	auth           Authenticator
 }
 
 // reservedLines is the worst-case fixed chrome around the row list:
@@ -244,10 +245,12 @@ func newScopesModel(account string, rows []scopeRow, auth Authenticator) scopesM
 	// Manual override: terminals (iTerm tabs, tmux panes) sometimes report
 	// the parent window height rather than the actual visible area. If the
 	// detected height doesn't match what the user sees, they can set
-	// CHARON_TUI_HEIGHT=<rows> to override.
+	// CHARON_TUI_HEIGHT=<rows> to override. The override is sticky — it
+	// also wins over later WindowSizeMsg events.
 	if env := os.Getenv("CHARON_TUI_HEIGHT"); env != "" {
 		if n, err := strconv.Atoi(env); err == nil && n > 0 {
 			debugf("newScopesModel: CHARON_TUI_HEIGHT override %d -> %d", m.height, n)
+			m.heightOverride = n
 			m.height = n
 		}
 	}
@@ -402,10 +405,16 @@ func (m scopesModel) Update(msg tea.Msg) (scopesModel, tea.Cmd) {
 	if r, ok := msg.(applyResultMsg); ok {
 		return m.handleApplyResult(r), nil
 	}
-	// Window size updates affect rendering regardless of state.
+	// Window size updates affect rendering regardless of state. The env
+	// override (heightOverride) sticks, ignoring the OS-reported height.
 	if ws, ok := msg.(tea.WindowSizeMsg); ok {
-		debugf("WindowSizeMsg: w=%d h=%d (was h=%d)", ws.Width, ws.Height, m.height)
-		m.height = ws.Height
+		debugf("WindowSizeMsg: w=%d h=%d (was h=%d, override=%d)",
+			ws.Width, ws.Height, m.height, m.heightOverride)
+		if m.heightOverride > 0 {
+			m.height = m.heightOverride
+		} else {
+			m.height = ws.Height
+		}
 		m.adjustWindow()
 		return m, nil
 	}
