@@ -76,6 +76,14 @@ The MITM proxy operates at HTTP/1.1 on both sides (client↔proxy and proxy↔up
 ## Multi-account
 Agent sends `X-Charon-Account: user@gmail.com` header to select account when multiple exist for same provider. Charon strips it before forwarding.
 
+## Agent-side protocol
+
+Canonical spec for tools that call APIs through charon:
+[`docs/agent-protocol.md`](../docs/agent-protocol.md). Covers headers
+(`X-Charon-Account`, `X-Charon-Scope`), 407 handling and the `fix`
+command, scope discovery strategies for Google, and per-provider
+sections.
+
 ## Scope Management
 - **Scope enforcement**: Callers can declare required scopes via `X-Charon-Scope: gmail.readonly,calendar.readonly` header. Proxy checks against granted scopes and returns 407 with structured JSON error on mismatch.
 - **Scope tracking**: Proxy tracks scope denials (bounded ring buffer, 100 entries, 24h expiry). Exposed via `/scopes/denied` endpoint.
