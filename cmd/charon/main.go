@@ -43,6 +43,7 @@ func main() {
 	root.AddCommand(statusCmd())
 	root.AddCommand(serviceCmd())
 	root.AddCommand(vaultCmd())
+	root.AddCommand(scopesCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -381,6 +382,38 @@ func accountsCmd() *cobra.Command {
 				}
 			}
 			return nil
+		},
+	}
+}
+
+func scopesCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "scopes <provider>",
+		Short: "Print the OAuth scope catalog for a provider (JSON)",
+		Long: `Outputs the catalog of OAuth scopes charon knows about for the given
+provider, as JSON. Intended for agents that need to look up short names,
+full URLs, descriptions, and which scopes are structurally required.
+
+This is just the catalog (what's possible) — not what's granted to any
+specific account. Agents should declare intent via X-Charon-Scope and
+let charon's 407 response signal what's missing for the user to grant.
+
+Example:
+  charon scopes google | jq '.[] | select(.short == "gmail.readonly")'`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			provider := args[0]
+			switch provider {
+			case "google":
+				out, err := json.MarshalIndent(oauth.GoogleScopeCatalog, "", "  ")
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), string(out))
+				return nil
+			default:
+				return fmt.Errorf("unknown provider %q (supported: google)", provider)
+			}
 		},
 	}
 }

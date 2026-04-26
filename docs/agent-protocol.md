@@ -100,6 +100,29 @@ if resp.status_code == 407:
 Knowing *what* to put in `X-Charon-Scope` is the harder problem. A few
 strategies:
 
+### Programmatic: query charon's catalog
+
+```bash
+charon scopes google
+```
+
+Outputs JSON listing every scope charon knows about for the named
+provider, with `short` (e.g. `gmail.readonly`), `full` (the URL Google
+uses), `description`, and `required` (always-granted). Use this at
+code-write time or runtime to map "I want to read Gmail" to a concrete
+scope short name.
+
+```bash
+$ charon scopes google | jq '.[] | select(.short | startswith("gmail"))'
+{"full":"https://www.googleapis.com/auth/gmail.readonly","short":"gmail.readonly","description":"Read Gmail messages","required":false}
+{"full":"https://www.googleapis.com/auth/gmail.send","short":"gmail.send","description":"Send Gmail messages","required":false}
+{"full":"https://www.googleapis.com/auth/gmail.modify","short":"gmail.modify","description":"Read, send, and manage Gmail","required":false}
+```
+
+This is the **canonical machine-readable source** — the table later in
+this document is a snapshot for human convenience but `charon scopes`
+won't go stale when the catalog grows.
+
 ### Best: read the API's scope reference
 
 Every OAuth-protected API documents the scopes its endpoints require.

@@ -2,10 +2,10 @@ package oauth
 
 // ScopeInfo describes a known OAuth scope.
 type ScopeInfo struct {
-	Scope       string // full scope URL (or OIDC short name like "openid")
-	Short       string // short name for display
-	Description string
-	Required    bool // structurally required by charon (always granted)
+	Scope       string `json:"full"`        // full scope URL (or OIDC short name like "openid")
+	Short       string `json:"short"`       // short name for display
+	Description string `json:"description"`
+	Required    bool   `json:"required"` // structurally required by charon (always granted)
 }
 
 // GoogleScopeCatalog lists known Google OAuth scopes.
