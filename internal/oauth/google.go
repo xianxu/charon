@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -48,6 +50,10 @@ var requiredGoogleScopes = []string{
 type GoogleProvider struct {
 	clientID     string
 	clientSecret string
+	// Output receives status messages emitted during Auth (e.g. "Opening
+	// browser..."). Defaults to os.Stderr. Set to io.Discard from a TUI
+	// to keep these from corrupting the rendered screen.
+	Output io.Writer
 }
 
 func NewGoogleProvider() (*GoogleProvider, error) {
@@ -59,7 +65,16 @@ func NewGoogleProvider() (*GoogleProvider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode client_secret: %w", err)
 	}
-	return &GoogleProvider{clientID: cid, clientSecret: cs}, nil
+	return &GoogleProvider{clientID: cid, clientSecret: cs, Output: os.Stderr}, nil
+}
+
+// out returns the writer for status messages, falling back to io.Discard if
+// Output isn't set (defensive against zero-value GoogleProvider).
+func (g *GoogleProvider) out() io.Writer {
+	if g.Output == nil {
+		return io.Discard
+	}
+	return g.Output
 }
 
 // tokenResponse is the JSON response from Google's token endpoint.
@@ -96,8 +111,8 @@ func (g *GoogleProvider) Auth(account string, scopes []string, existingScopes []
 	authURL := g.buildAuthURL(redirectURI, allScopes, account)
 
 	// Open browser.
-	fmt.Printf("Opening browser for Google OAuth...\n")
-	fmt.Printf("If browser doesn't open, visit:\n%s\n\n", authURL)
+	fmt.Fprintf(g.out(), "Opening browser for Google OAuth...\n")
+	fmt.Fprintf(g.out(), "If browser doesn't open, visit:\n%s\n\n", authURL)
 	openBrowser(authURL)
 
 	// Wait for callback with authorization code.
@@ -114,7 +129,7 @@ func (g *GoogleProvider) Auth(account string, scopes []string, existingScopes []
 
 	// Warn if authenticated account doesn't match the requested one.
 	if account != "" && cred.Account != account {
-		fmt.Printf("Note: requested %s but authenticated as %s\n", account, cred.Account)
+		fmt.Fprintf(g.out(), "Note: requested %s but authenticated as %s\n", account, cred.Account)
 	}
 
 	return cred, nil

@@ -860,6 +860,7 @@ func tuiCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("init google provider: %w", err)
 			}
+			gp.Output = io.Discard // suppress oauth status prints inside TUI
 			return tui.Run(newVault(), account, listenAddr, gp)
 		},
 	}
