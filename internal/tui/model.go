@@ -72,6 +72,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		// Forward to active screen so scopesModel can resize its row window.
+		if m.current == screenScopes {
+			var cmd tea.Cmd
+			m.scopes, cmd = m.scopes.Update(msg)
+			return m, cmd
+		}
 		return m, nil
 
 	case accountSelectedMsg:

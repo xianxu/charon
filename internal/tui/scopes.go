@@ -182,6 +182,8 @@ type scopesModel struct {
 	rows        []scopeRow
 	cursor      int
 	filtered    []int
+	windowStart int // first visible row index in m.filtered
+	height      int // terminal height; 0 means render all rows
 	search      textinput.Model
 	custom      textinput.Model
 	focus       scopesFocus
@@ -190,6 +192,11 @@ type scopesModel struct {
 	applyStatus string // transient message shown after success
 	auth        Authenticator
 }
+
+// reservedLines is the fixed chrome around the scrollable row list:
+// header (1) + separator (1) + search (1) + blank (1) + blank-before-help (1)
+// + help (1) + trailing blank (1) = 7. Used to compute visible row count.
+const reservedLines = 7
 
 func newScopesModel(account string, rows []scopeRow, auth Authenticator) scopesModel {
 	search := textinput.New()
@@ -229,6 +236,50 @@ func (m *scopesModel) recomputeFiltered() {
 		m.cursor = 0
 		if len(m.filtered) > 0 {
 			m.cursor = len(m.filtered) - 1
+		}
+	}
+	m.adjustWindow()
+}
+
+// visibleRowCount returns how many rows fit in the available terminal space.
+// Returns len(m.filtered) when height isn't known yet (initial render before
+// WindowSizeMsg) so we don't artificially clip on the first frame.
+func (m *scopesModel) visibleRowCount() int {
+	if m.height == 0 {
+		return len(m.filtered)
+	}
+	v := m.height - reservedLines
+	if v < 1 {
+		v = 1
+	}
+	if v > len(m.filtered) {
+		v = len(m.filtered)
+	}
+	return v
+}
+
+// adjustWindow scrolls the visible window so the cursor stays in view.
+// Called after cursor moves, filter changes, or terminal resize.
+func (m *scopesModel) adjustWindow() {
+	visible := m.visibleRowCount()
+	if visible <= 0 {
+		m.windowStart = 0
+		return
+	}
+	if m.cursor < m.windowStart {
+		m.windowStart = m.cursor
+	}
+	if m.cursor >= m.windowStart+visible {
+		m.windowStart = m.cursor - visible + 1
+	}
+	// Clamp.
+	if m.windowStart < 0 {
+		m.windowStart = 0
+	}
+	if m.windowStart+visible > len(m.filtered) {
+		m.windowStart = len(m.filtered) - visible
+		if m.windowStart < 0 {
+			m.windowStart = 0
 		}
 	}
 }
@@ -319,6 +370,12 @@ func (m scopesModel) Update(msg tea.Msg) (scopesModel, tea.Cmd) {
 	if r, ok := msg.(applyResultMsg); ok {
 		return m.handleApplyResult(r), nil
 	}
+	// Window size updates affect rendering regardless of state.
+	if ws, ok := msg.(tea.WindowSizeMsg); ok {
+		m.height = ws.Height
+		m.adjustWindow()
+		return m, nil
+	}
 
 	switch m.state {
 	case stateAddCustom:
@@ -369,6 +426,7 @@ func (m scopesModel) updateList(msg tea.KeyMsg) (scopesModel, tea.Cmd) {
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
+			m.adjustWindow()
 		} else {
 			m.focus = focusSearch
 			m.search.Focus()
@@ -376,6 +434,7 @@ func (m scopesModel) updateList(msg tea.KeyMsg) (scopesModel, tea.Cmd) {
 	case "down", "j":
 		if m.cursor < len(m.filtered)-1 {
 			m.cursor++
+			m.adjustWindow()
 		}
 	case "/":
 		m.focus = focusSearch
@@ -619,7 +678,17 @@ func (m scopesModel) viewNormal() string {
 		b.WriteString(mutedStyle.Render("  (no scopes match filter)"))
 		b.WriteString("\n")
 	}
-	for visIdx, rowIdx := range m.filtered {
+	visible := m.visibleRowCount()
+	end := m.windowStart + visible
+	if end > len(m.filtered) {
+		end = len(m.filtered)
+	}
+	if m.windowStart > 0 {
+		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ↑ %d more above", m.windowStart)))
+		b.WriteString("\n")
+	}
+	for visIdx := m.windowStart; visIdx < end; visIdx++ {
+		rowIdx := m.filtered[visIdx]
 		r := m.rows[rowIdx]
 		check := "[ ]"
 		if r.target {
@@ -641,6 +710,10 @@ func (m scopesModel) viewNormal() string {
 		styled := styleForRow(r, m.focus == focusList && visIdx == m.cursor).Render(line)
 		b.WriteString(cursor)
 		b.WriteString(styled)
+		b.WriteString("\n")
+	}
+	if end < len(m.filtered) {
+		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ↓ %d more below", len(m.filtered)-end)))
 		b.WriteString("\n")
 	}
 
