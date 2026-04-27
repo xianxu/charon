@@ -11,23 +11,37 @@ package keychain
 
 // charon_set_generic_password upserts a generic-password keychain item.
 //
-// If with_acl is non-zero, NEW entries (entries the SecItemUpdate path
-// didn't find) are created with an SecAccess that trusts only the
-// current process's designated requirement; the OS prompts Allow/Deny
-// for any other reader. EXISTING entries are updated in place via
-// SecItemUpdate, which preserves their existing ACL — so token rotation
-// doesn't briefly drop the ACL between delete-and-add.
+// Uses the legacy file-based keychain APIs throughout:
+//   - SecKeychainFindGenericPassword to locate an existing entry,
+//   - SecKeychainItemModifyContent to update an existing entry's data
+//     atomically (preserving its ACL — important for token rotation),
+//   - SecKeychainAddGenericPassword + SecKeychainItemSetAccess to create
+//     a new entry with an SecAccess pinned to the current process's
+//     designated requirement.
 //
-// If with_acl is 0, the entry is written with no SecAccess, and macOS
-// applies its default for SecItemAdd-without-access (the writing
-// process is trusted; everything else prompts). For our usage that's
-// equivalent for ServiceDev (dev binaries are always the writer of
-// their own state).
+// Why legacy APIs and not modern SecItemAdd: SecItemAdd on macOS file-
+// based keychains accepts kSecAttrAccess in its attribute dictionary
+// without returning an error, but in practice does NOT attach the
+// SecAccess to the resulting item — verified empirically: entries
+// written via SecItemAdd had no Access attribute when inspected via
+// `security find-generic-password`. The legacy SecKeychainItemSetAccess
+// reliably attaches the SecAccess and is the path used by
+// `security add-generic-password -T`.
+//
+// SecTrustedApplicationCreateFromPath / SecAccessCreate / Sec*Keychain*
+// family APIs are formally deprecated since macOS 10.10 but remain
+// functional for the file-based keychain (login.keychain-db). Modern
+// replacements (SecAccessControlCreateWithFlags) are for iOS-style
+// biometric-gated access, not codesign-DR-based ACLs.
+//
+// If with_acl is 0, the entry is created with the default SecAccess
+// from SecKeychainAddGenericPassword (the writing process is trusted;
+// everything else prompts). Equivalent to ServiceDev semantics.
 //
 // Returns 0 (errSecSuccess) on success, non-zero OSStatus on failure.
 //
-// Memory: the function owns and releases all CF objects it creates;
-// the caller-passed C strings remain owned by Go (caller frees).
+// Memory: the function owns and releases all CF/SecKeychain objects it
+// creates; the caller-passed C strings remain owned by Go.
 static OSStatus charon_set_generic_password(
     const char *service,
     const char *account,
@@ -36,108 +50,143 @@ static OSStatus charon_set_generic_password(
     int with_acl
 ) {
     OSStatus rc = errSecSuccess;
-    CFStringRef cfService = NULL;
-    CFStringRef cfAccount = NULL;
-    CFDataRef   cfData    = NULL;
+    UInt32 serviceLen = (UInt32)strlen(service);
+    UInt32 accountLen = (UInt32)strlen(account);
+    SecKeychainItemRef item = NULL;
 
-    cfService = CFStringCreateWithCString(NULL, service, kCFStringEncodingUTF8);
-    cfAccount = CFStringCreateWithCString(NULL, account, kCFStringEncodingUTF8);
-    cfData    = CFDataCreate(NULL, (const UInt8 *)data, (CFIndex)data_len);
-    if (cfService == NULL || cfAccount == NULL || cfData == NULL) {
-        rc = errSecAllocate;
-        goto cleanup_inputs;
-    }
+    // Step 1: try to find an existing entry.
+    rc = SecKeychainFindGenericPassword(
+        NULL,
+        serviceLen, service,
+        accountLen, account,
+        NULL, NULL,
+        &item);
 
-    // Step 1: try SecItemUpdate (atomic in-place update; preserves ACL).
-    {
-        const void *qkeys[] = { kSecClass,                kSecAttrService, kSecAttrAccount };
-        const void *qvals[] = { kSecClassGenericPassword, cfService,       cfAccount       };
-        CFDictionaryRef query = CFDictionaryCreate(
-            NULL, qkeys, qvals, 3,
-            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-
-        const void *ukeys[] = { kSecValueData };
-        const void *uvals[] = { cfData        };
-        CFDictionaryRef update = CFDictionaryCreate(
-            NULL, ukeys, uvals, 1,
-            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-
-        rc = SecItemUpdate(query, update);
-        CFRelease(query);
-        CFRelease(update);
-
-        if (rc == errSecSuccess) goto cleanup_inputs;
-        // Fall through to add-with-fresh-ACL ONLY for "doesn't exist".
-        // Other errors (notably errSecAuthFailed when an existing entry
+    if (rc == errSecSuccess) {
+        // Update in place. Preserves the existing SecAccess — token
+        // rotation doesn't reset the ACL.
+        //
+        // Other errors (notably errSecAuthFailed, when an existing entry
         // has an ACL pinned to a different designated requirement than
         // the current process) propagate to the caller intentionally —
-        // we don't silently re-create or overwrite an entry someone
-        // else owns. Operator workaround:
+        // we don't silently overwrite an entry someone else owns.
+        // Operator workaround:
         //   security delete-generic-password -s <service> -a <account>
-        if (rc != errSecItemNotFound) goto cleanup_inputs;
-        rc = errSecSuccess;
+        rc = SecKeychainItemModifyContent(item, NULL, (UInt32)data_len, data);
+        CFRelease(item);
+        return rc;
     }
 
-    // Step 2: item didn't exist — SecItemAdd with a fresh ACL.
-    {
-        SecAccessRef access = NULL;
-        if (with_acl) {
-            // SecTrustedApplicationCreateFromPath(NULL, ...) represents the
-            // current process; the SecAccess stores its designated requirement
-            // (not its path), so the ACL evaluates by-DR for future reads
-            // including reinstalls of the same DR-matching binary.
-            //
-            // SecTrustedApplicationCreateFromPath / SecAccessCreate are formally
-            // deprecated since macOS 10.10 but remain functional for legacy
-            // file-based keychains (login.keychain-db) which is what we target.
-            // Modern replacements (SecAccessControlCreateWithFlags) are for
-            // iOS-style biometric-gated access, not the codesign-DR ACL we want.
-            SecTrustedApplicationRef self = NULL;
-            rc = SecTrustedApplicationCreateFromPath(NULL, &self);
-            if (rc != errSecSuccess) goto cleanup_inputs;
-
-            CFArrayRef trustList = CFArrayCreate(
-                NULL, (const void **)&self, 1, &kCFTypeArrayCallBacks);
-            rc = SecAccessCreate(CFSTR("charon"), trustList, &access);
-            CFRelease(self);
-            CFRelease(trustList);
-            if (rc != errSecSuccess) goto cleanup_inputs;
-        }
-
-        // Build attribute dictionary: include kSecAttrAccess only when we
-        // built one. kSecAttrSynchronizable=false keeps entries off iCloud.
-        // Note: this attribute set is only used on the SecItemAdd path —
-        // the SecItemUpdate path above only updates kSecValueData, leaving
-        // kSecAttrSynchronizable (and the ACL) intact on the existing
-        // entry. That's intentional: we own the namespace, attributes
-        // are written once at create time.
-        CFTypeRef akeys[6];
-        CFTypeRef avals[6];
-        int n = 0;
-        akeys[n] = kSecClass;                avals[n] = kSecClassGenericPassword;     n++;
-        akeys[n] = kSecAttrService;          avals[n] = (CFTypeRef)cfService;         n++;
-        akeys[n] = kSecAttrAccount;          avals[n] = (CFTypeRef)cfAccount;         n++;
-        akeys[n] = kSecValueData;            avals[n] = (CFTypeRef)cfData;            n++;
-        akeys[n] = kSecAttrSynchronizable;   avals[n] = (CFTypeRef)kCFBooleanFalse;   n++;
-        if (access != NULL) {
-            akeys[n] = kSecAttrAccess;       avals[n] = (CFTypeRef)access;            n++;
-        }
-
-        CFDictionaryRef addDict = CFDictionaryCreate(
-            NULL,
-            (const void **)akeys, (const void **)avals, n,
-            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-
-        rc = SecItemAdd(addDict, NULL);
-        CFRelease(addDict);
-        if (access) CFRelease(access);
+    if (rc != errSecItemNotFound) {
+        // Find failed for some non-not-found reason (auth, malformed,
+        // etc.). Surface it.
+        return rc;
     }
 
-cleanup_inputs:
-    if (cfService) CFRelease(cfService);
-    if (cfAccount) CFRelease(cfAccount);
-    if (cfData)    CFRelease(cfData);
+    // Step 2: not found — create new with optional ACL.
+    SecAccessRef access = NULL;
+    if (with_acl) {
+        // SecTrustedApplicationCreateFromPath(NULL, ...) represents the
+        // current process; the SecAccess stores its designated requirement
+        // (not its path), so the ACL evaluates by-DR for future reads
+        // including reinstalls of the same DR-matching binary.
+        SecTrustedApplicationRef self = NULL;
+        rc = SecTrustedApplicationCreateFromPath(NULL, &self);
+        if (rc != errSecSuccess) return rc;
+
+        CFArrayRef trustList = CFArrayCreate(
+            NULL, (const void **)&self, 1, &kCFTypeArrayCallBacks);
+        rc = SecAccessCreate(CFSTR("charon"), trustList, &access);
+        CFRelease(self);
+        CFRelease(trustList);
+        if (rc != errSecSuccess) return rc;
+    }
+
+    // Build attribute list for SecKeychainItemCreateFromContent — atomic
+    // create-with-access, so we never call SecKeychainItemSetAccess on
+    // an existing item. SetAccess triggers the owner-ACL auth prompt
+    // (a fresh SecAccess from SecAccessCreate has an empty owner ACL =
+    // "always prompt"), which non-interactive contexts can't satisfy
+    // and which surfaces as errSecUserCanceledAuthentication (-128).
+    SecKeychainAttribute attrs[] = {
+        { kSecServiceItemAttr, serviceLen, (void *)service },
+        { kSecAccountItemAttr, accountLen, (void *)account },
+    };
+    SecKeychainAttributeList attrList = { 2, attrs };
+
+    rc = SecKeychainItemCreateFromContent(
+        kSecGenericPasswordItemClass,
+        &attrList,
+        (UInt32)data_len, data,
+        NULL,     // default keychain
+        access,   // NULL when with_acl=0 → default access
+        &item);
+
+    if (access) CFRelease(access);
+    if (rc == errSecSuccess) CFRelease(item);
     return rc;
+}
+
+// charon_inspect_generic_password reports two ACL signals about an
+// existing keychain item, useful for tests:
+//   *out_acl_count   — number of ACL entries on the item's SecAccess
+//   *out_app_count   — total number of trusted applications across
+//                      all ACLs (the thing that determines whether a
+//                      foreign reader prompts or is silently denied)
+//
+// Returns 0 on success, errSecItemNotFound if no such item, or a
+// non-zero OSStatus on failure.
+//
+// "No ACL attached" is reported as out_acl_count=0, out_app_count=0
+// — distinguishable from "default ACL trusts only writer" (acl_count>0,
+// app_count=1) and "ACL with multiple trusted apps" (app_count>1).
+static OSStatus charon_inspect_generic_password(
+    const char *service,
+    const char *account,
+    int *out_acl_count,
+    int *out_app_count
+) {
+    *out_acl_count = 0;
+    *out_app_count = 0;
+
+    SecKeychainItemRef item = NULL;
+    OSStatus rc = SecKeychainFindGenericPassword(
+        NULL,
+        (UInt32)strlen(service), service,
+        (UInt32)strlen(account), account,
+        NULL, NULL,
+        &item);
+    if (rc != errSecSuccess) return rc;
+
+    SecAccessRef access = NULL;
+    rc = SecKeychainItemCopyAccess(item, &access);
+    CFRelease(item);
+    if (rc != errSecSuccess) return rc;
+
+    CFArrayRef aclList = NULL;
+    rc = SecAccessCopyACLList(access, &aclList);
+    CFRelease(access);
+    if (rc != errSecSuccess || aclList == NULL) return rc;
+
+    *out_acl_count = (int)CFArrayGetCount(aclList);
+    int app_total = 0;
+    for (CFIndex i = 0; i < CFArrayGetCount(aclList); i++) {
+        SecACLRef acl = (SecACLRef)CFArrayGetValueAtIndex(aclList, i);
+        CFArrayRef apps = NULL;
+        CFStringRef desc = NULL;
+        SecKeychainPromptSelector ps = 0;
+        OSStatus subrc = SecACLCopyContents(acl, &apps, &desc, &ps);
+        if (subrc == errSecSuccess) {
+            if (apps != NULL) {
+                app_total += (int)CFArrayGetCount(apps);
+                CFRelease(apps);
+            }
+            if (desc != NULL) CFRelease(desc);
+        }
+    }
+    *out_app_count = app_total;
+    CFRelease(aclList);
+    return errSecSuccess;
 }
 
 // charon_delete_generic_password deletes a generic-password keychain
@@ -217,6 +266,31 @@ import (
 // sentinel. Exposed as a Go error so the Store.Delete contract can
 // remain idempotent without callers reaching into OSStatus codes.
 const cErrSecItemNotFound = -25300
+
+// inspectGenericPasswordACL returns ACL signals for an existing
+// keychain item. Used by integration tests to verify our SecAccess
+// actually attached. Production code doesn't need it.
+//
+// aclCount = number of ACL entries on the SecAccess.
+// appCount = total trusted applications across those ACLs.
+//
+//	(0, 0)   → no SecAccess attached at all
+//	(>0, 0)  → SecAccess present but no trusted apps (always-prompt mode)
+//	(>0, 1)  → typical default: only one trusted app (the writer)
+//	(>0, N)  → multiple trusted apps
+func inspectGenericPasswordACL(service, account string) (aclCount, appCount int, err error) {
+	cService := C.CString(service)
+	defer C.free(unsafe.Pointer(cService))
+	cAccount := C.CString(account)
+	defer C.free(unsafe.Pointer(cAccount))
+
+	var ac, app C.int
+	rc := C.charon_inspect_generic_password(cService, cAccount, &ac, &app)
+	if rc != 0 {
+		return 0, 0, fmt.Errorf("inspect %s/%s: OSStatus %d", service, account, int(rc))
+	}
+	return int(ac), int(app), nil
+}
 
 // deleteGenericPassword removes a generic-password keychain item.
 // Treats "not found" as success (Delete is idempotent).

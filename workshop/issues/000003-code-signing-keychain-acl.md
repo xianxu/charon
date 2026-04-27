@@ -48,6 +48,49 @@ High-level milestones:
 
 ## Log
 
+- 2026-04-26: **Critical fix** — M4's SecItemAdd-with-kSecAttrAccess path was
+  silently dropping the SecAccess on macOS file-based keychains. SecItemAdd
+  accepted the attribute without error, but inspection showed entries had
+  zero ACL entries (`security find-generic-password ... -g` had no
+  `Access:` line). The earlier "Test 1 demo" Allow/Deny dialog the user saw
+  was probably macOS's first-time-access prompt for an unACL'd entry, NOT
+  our ACL working — meaning the security boundary M4 was supposed to build
+  wasn't actually enforced.
+
+  Switched the create path from `SecItemAdd(attrDict)` to atomic
+  `SecKeychainItemCreateFromContent(itemClass, attrList, data, keychain,
+  initialAccess, ...)` — same legacy file-keychain family as our delete
+  fallback, takes the SecAccess as an explicit parameter, attaches it
+  reliably. The update path uses `SecKeychainItemModifyContent` (also
+  legacy) for parity. Tried `SecKeychainAddGenericPassword +
+  SecKeychainItemSetAccess` first; SetAccess prompts for owner-ACL
+  authorization (returns -128 errSecUserCanceledAuthentication in
+  non-interactive contexts) because SecAccessCreate's default owner ACL
+  is "always prompt." The atomic create-with-access avoids the issue
+  entirely.
+
+  Added a `charon_inspect_generic_password` CGo helper +
+  `inspectGenericPasswordACL` Go wrapper that reports ACL entry count
+  and total trusted-application count. New integration test
+  `TestACL_ActuallyAttachesACL` asserts a fresh ACL'd write produces
+  >0 ACL entries — would have caught this bug. New test
+  `TestACL_AtomicUpsert_PreservesACL` asserts updates don't change the
+  ACL shape (token rotation safety).
+
+  Verified end-to-end: signed binary writes entry → 5 ACL entries, 1
+  trusted app. Previous code: 0 ACL entries, 0 trusted apps.
+
+- 2026-04-26: Fixed TUI revoke path treating Google's HTTP 400
+  (`error=invalid_token`, the response shape for already-revoked tokens)
+  as a fatal error and skipping the local `vault.Delete`. Surfaced when
+  user revoked an account from Google's side first (via
+  myaccount.google.com/permissions), then tried `charon auth` → revoke
+  in the TUI: HTTP 400 → no local cleanup → entry stuck. Fix: defined
+  `oauth.ErrAlreadyRevoked` sentinel; `oauth.Revoke` parses Google's
+  standard OAuth error envelope and returns the sentinel for
+  `error=invalid_token` at HTTP 400. TUI revoke handler treats sentinel
+  as non-fatal and proceeds to `vault.Delete`, with an exit note that
+  honestly captures "already revoked on Google's side."
 - 2026-04-26: Fixed `vault delete` returning errSecInvalidOwnerEdit (-25244)
   on entries created by another process. The keybase-library path uses
   modern `SecItemDelete`, which trips -25244 when the item's internal

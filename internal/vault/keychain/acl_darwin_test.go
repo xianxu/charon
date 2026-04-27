@@ -90,3 +90,77 @@ func TestACL_NoACLPath(t *testing.T) {
 		t.Fatalf("got %q want %q", got, "plain")
 	}
 }
+
+// TestACL_ActuallyAttachesACL is the regression test that catches the
+// "kSecAttrAccess silently dropped by SecItemAdd" bug we hit before
+// switching to SecKeychainAddGenericPassword + SecKeychainItemSetAccess.
+// Round-trip data tests pass on either path; only an ACL-state inspection
+// distinguishes them.
+//
+// Asserts: a fresh entry written with withACL=true has at least one
+// trusted application on its SecAccess. The default ACL from
+// SecKeychainAddGenericPassword (no SetAccess called) would also produce
+// trusted_apps>0, so this isn't strictly proof that *our* SecAccess
+// landed — but the previous bug produced trusted_apps == 0 (no ACL at
+// all), so this catches the actual regression.
+func TestACL_ActuallyAttachesACL(t *testing.T) {
+	const account = "acl-test:attach-check"
+	defer aclCleanup(account)
+
+	if err := setGenericPassword(aclTestService, account, []byte("acl-payload"), true); err != nil {
+		t.Fatalf("setGenericPassword(withACL=true) failed: %v", err)
+	}
+
+	aclCount, appCount, err := inspectGenericPasswordACL(aclTestService, account)
+	if err != nil {
+		t.Fatalf("inspectGenericPasswordACL failed: %v", err)
+	}
+	if aclCount == 0 {
+		t.Fatalf("entry has no SecAccess attached (regression: SecItemAdd silently dropped kSecAttrAccess)")
+	}
+	if appCount == 0 {
+		t.Fatalf("entry's SecAccess has zero trusted applications — would prompt every read forever")
+	}
+	t.Logf("ACL inspection: %d ACL entries, %d trusted apps total", aclCount, appCount)
+}
+
+// TestACL_AtomicUpsert_PreservesACL verifies the SecKeychainItemModifyContent
+// path: after creating an ACL'd entry, an update of its data leaves the
+// ACL intact. This is what makes token rotation safe — the ACL doesn't
+// briefly drop between writes.
+func TestACL_AtomicUpsert_PreservesACL(t *testing.T) {
+	const account = "acl-test:upsert-preserves"
+	defer aclCleanup(account)
+
+	// First write creates with ACL.
+	if err := setGenericPassword(aclTestService, account, []byte("v1"), true); err != nil {
+		t.Fatalf("first write failed: %v", err)
+	}
+	ac1, app1, err := inspectGenericPasswordACL(aclTestService, account)
+	if err != nil {
+		t.Fatalf("inspect after first write: %v", err)
+	}
+
+	// Second write goes through the SecKeychainItemModifyContent branch
+	// (existing item found). Should preserve ACL.
+	if err := setGenericPassword(aclTestService, account, []byte("v2"), true); err != nil {
+		t.Fatalf("second write (update) failed: %v", err)
+	}
+	ac2, app2, err := inspectGenericPasswordACL(aclTestService, account)
+	if err != nil {
+		t.Fatalf("inspect after second write: %v", err)
+	}
+
+	if ac2 != ac1 || app2 != app1 {
+		t.Fatalf("update changed ACL shape: was (%d,%d), now (%d,%d)",
+			ac1, app1, ac2, app2)
+	}
+
+	got, err := gokeychain.GetGenericPassword(aclTestService, account, "", "")
+	if err != nil {
+		t.Fatalf("read-back after update failed: %v", err)
+	}
+	if string(got) != "v2" {
+		t.Fatalf("expected v2 after update, got %q", got)
+	}
+}
