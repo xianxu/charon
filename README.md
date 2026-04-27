@@ -4,13 +4,13 @@ A credential proxy for AI agents. Single Go binary that acts as a transparent
 HTTPS forward proxy and injects OAuth tokens into requests on the agent's
 behalf — so the agent never sees credentials but can still call OAuth-protected
 APIs (Gmail, Calendar, Drive, etc.) using real upstream URLs and no code
-changes.
+changes, except setting two headers, one mandatory and one advisory.
 
-> Charon is one third of a layered architecture: **charon** (outbound
-> capability), **[nous](https://github.com/xianxu/nous)** (task capability,
-> public), **brain** (private state, personal). See the
-> [trio overview](https://github.com/xianxu/nous#the-trio-charon-nous-brain)
-> in nous's README for how the three fit together.
+> Charon is one third of a layered architecture: 
+>   **[charon](https://github.com/xianxu/charon)**: (this) outbound capability to access cloud services 
+>   **[nous](https://github.com/xianxu/nous)**: task capability, and agentic infrastructure, it use the main user of `charon`
+>   **brain**: private state, personal. 
+> See the [trio overview](https://github.com/xianxu/nous#the-trio-charon-nous-brain) in nous's README for how the three fit together.
 
 ## What it does
 
@@ -29,6 +29,9 @@ token in the OS keychain, attaches `Authorization: Bearer <token>`, and
 forwards to Google. The token never appears in the agent's memory or logs.
 
 ## Quick start
+
+First, [install charon](#installation) (one-time: bootstraps a self-signed
+code-signing identity and produces a signed `~/.local/bin/charon`). Then:
 
 ```bash
 # 1. Authenticate (opens browser, stores tokens in macOS Keychain).
@@ -130,12 +133,21 @@ charon service install/uninstall/...    # macOS launchd integration
 
 ## Security model
 
-- **Tokens at rest**: macOS Keychain (`security` generic password) under
-  service name `charon`, account key `<provider>:<email>`. Linux secret
-  service support is tracked in #000002.
-- **CA cert**: also in keychain, regenerated if expired. Used to MITM
-  HTTPS traffic the agent makes. Trust roots are wired into the child via
-  `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, etc.
+- **Tokens at rest**: macOS Keychain generic password under service name
+  `charon` (or `charon-dev` for unsigned dev binaries; see below).
+  Account key is `<provider>:<email>`. Linux secret service support is
+  tracked in #000002.
+- **Keychain ACL** ([#000003](workshop/issues/000003-code-signing-keychain-acl.md)):
+  the signed `make install` binary writes entries with a `SecAccess` ACL
+  pinned to its codesign designated requirement. Any other reader —
+  including `security find-generic-password`, an AI agent that learned
+  about Keychain APIs, or another developer logged in as the same user —
+  triggers the macOS "Allow / Deny" dialog. **This is the actual
+  security boundary**: an agent that exfiltrates `security`-CLI knowledge
+  still cannot read charon's tokens silently.
+- **CA cert**: same keychain, same ACL treatment as tokens. The CA
+  private key is at least as sensitive as OAuth tokens — owning it forges
+  HTTPS for any host.
 - **Process isolation**: charon runs as a separate process from the agent.
   The agent's only path to charon is the local HTTPS proxy port; tokens
   are never in the agent's address space.
@@ -174,18 +186,64 @@ workshop/history/              archived completed work
 - 🔜 Linux secret service — [#000002](workshop/issues/000002-linux-secret-service.md)
 - 🔜 Code signing + Keychain ACL — [#000003](workshop/issues/000003-code-signing-keychain-acl.md)
 
-## Building from source
+## Installation
+
+For day-to-day use, `make install` builds, code-signs, and installs to
+`~/.local/bin/charon`. Code signing is what makes the keychain ACL meaningful:
+an unsigned binary's entries don't get the ACL, and reads from outside the
+signed binary won't trigger the Allow/Deny dialog.
+
+First-time setup (one shell session):
 
 ```bash
 git clone https://github.com/xianxu/charon
 cd charon
-go build ./cmd/charon          # produces ./charon
-# or:
-go install ./cmd/charon        # installs to $GOBIN
+make signing-identity   # creates a self-signed code-signing cert (10y)
+                        # in your login keychain. idempotent; one-time.
+make install            # build → sign → copy to ~/.local/bin/charon
 ```
 
-Pure Go, no CGo. Builds hermetically on macOS and Linux. Linux currently
-lacks a credential store backend (in-memory only); see #000002.
+On the **first run** of any `charon` command after this, macOS will pop
+a Keychain Access dialog asking whether `codesign` may use the new
+private key. Click **Always Allow**. Subsequent installs are silent.
+
+To verify the installed binary is properly signed:
+
+```bash
+codesign -dv ~/.local/bin/charon
+# expect: Authority=Charon Self-Signed
+#         Identifier=com.charon.cli
+```
+
+### Dev builds (unsigned, fast iteration)
+
+```bash
+make build              # produces ./bin/charon, unsigned, uses
+                        # service "charon-dev" so it doesn't collide
+                        # with the signed install's keychain entries
+go test ./...           # full unit suite
+go test -tags integration ./internal/vault/keychain/   # hits real Keychain
+```
+
+`make build` is the fast inner loop; nothing is signed and the binary
+writes to a separate `charon-dev` keychain namespace. The signed install
+at `~/.local/bin/charon` and your dev rebuilds never overwrite each
+other's state.
+
+### Build prerequisites
+
+- Go 1.26+
+- macOS with Xcode Command Line Tools (for cgo + the Security framework)
+- Linux: cross-compile works with `CGO_ENABLED=0`, but the keychain
+  backend currently has no Linux implementation; see #000002.
+
+### Apple Developer ID upgrade (later)
+
+The self-signed identity is sufficient for personal use. Migrating to an
+Apple Developer ID is a Makefile-variable swap (`SIGN_IDENTITY=Developer
+ID Application: ...`) and a one-time `charon migrate-acl` to re-write
+existing entries under the team-anchored predicate; see
+[#000003](workshop/issues/000003-code-signing-keychain-acl.md).
 
 ## Documentation
 

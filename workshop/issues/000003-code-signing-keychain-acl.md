@@ -42,12 +42,35 @@ High-level milestones:
 - [x] M2 — CGo keychain backend (Security framework) replaces `security` CLI shelling on darwin
 - [x] M3 — Runtime self-signature check + dev/prod service-name split (`charon` vs `charon-dev`)
 - [x] M4 — ACL on `Set` for OAuth tokens + `_ca:cert` + `_ca:key`
-- [ ] M5 — Generic ACL migration (`charon migrate-acl`) + first-run auto-migrate of CA
-- [ ] M6 — `make install` signs the binary; README documents the bootstrap flow
+- [ ] M5 — Generic ACL migration (`charon migrate-acl`) + first-run auto-migrate of CA *(user-deferred; revoke + re-auth path used instead)*
+- [x] M6 — `make install` signs the binary; README documents the bootstrap flow
 - [ ] M7 — Manual test: unsigned reader gets Allow/Deny dialog; signed charon does not
 
 ## Log
 
+- 2026-04-26: M6 done. `make install` is now `build → sign → install` in one
+  shot: new `make sign` target codesigns `bin/charon` with `Charon Self-Signed`
+  + `--identifier com.charon.cli`, verifies, then the `install` target copies
+  to `~/.local/bin/charon`. Errors out with a clear message if
+  `make signing-identity` hasn't been run. Manually verified end-to-end:
+  `make install` → installed binary correctly resolves to ServiceProd, writes
+  ACL'd entries (read attempt from `security` CLI prompts Allow/Deny;
+  click Allow → token visible; click Deny → access denied). README rewritten:
+  new "Installation" section as the canonical entry point (one-time
+  signing-identity bootstrap + `make install`), updated "Security model"
+  with the ACL story, dropped the misleading "pure Go, no CGo" claim
+  from the build-from-source section. M5 (migration command) deferred per
+  user direction — the revoke-and-re-auth path covers existing
+  pre-M4 entries; M5 reopens when an Apple Dev ID transition happens.
+
+  Surfaced during manual verification: existing pre-M4 OAuth entries
+  (e.g. xianxu@gmail.com) are still in the keychain *without* an ACL,
+  because they predate M4 and SecItemUpdate only swaps data, not the
+  ACL attribute. The user has agreed to revoke + re-auth those rather
+  than migrate. The CA cert+key may also be pre-M4 if the user ran an
+  unsigned binary previously; deleting `_ca:cert` / `_ca:key` and
+  letting charon regenerate them is the cleanest path. Documented in
+  M7 manual checklist.
 - 2026-04-26: M4 review (post-milestone, fresh-eyes subagent) returned no
   Critical findings; CFRelease lifecycle and atomic-upsert path verified
   clean. Two Important + three Minor follow-ups; addressed:

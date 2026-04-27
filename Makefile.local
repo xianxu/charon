@@ -1,7 +1,15 @@
 # Repo-specific Makefile targets.
 # This file is included by Makefile — add your own targets here.
 
-.PHONY: build test run clean signing-identity
+.PHONY: build sign test run clean signing-identity install
+
+# ── Codesigning configuration ────────────────────────────────────────────────
+# These two values must stay in sync with charonCodesignIdentifier in
+# internal/vault/keychain/codesign_darwin.go. The runtime self-check uses
+# the identifier; the keychain ACL pins to the leaf cert hash that gets
+# embedded by codesign.
+SIGN_IDENTITY       ?= Charon Self-Signed
+CODESIGN_IDENTIFIER ?= com.charon.cli
 
 build:
 	go build -o bin/charon ./cmd/charon
@@ -15,11 +23,25 @@ run: build
 test-integration:
 	go test -tags integration ./...
 
-install: build
+# Sign the locally-built binary in place. Standalone target so you can
+# inspect the signature (`codesign -dv`) before installing.
+#
+# Requires that `make signing-identity` has been run once. Errors out
+# (with a hint) otherwise.
+sign: build
+	@if ! security find-identity ~/Library/Keychains/login.keychain-db 2>/dev/null | grep -q '"$(SIGN_IDENTITY)"'; then \
+		echo "Error: '$(SIGN_IDENTITY)' identity not found in login keychain." ; \
+		echo "Run 'make signing-identity' first to bootstrap a self-signed identity." ; \
+		exit 1 ; \
+	fi
+	@codesign --force --sign "$(SIGN_IDENTITY)" --identifier "$(CODESIGN_IDENTIFIER)" bin/charon
+	@codesign --verify --verbose=1 bin/charon
+
+install: sign
 	@mkdir -p ~/.local/bin
 	@rm -f ~/.local/bin/charon
 	@cp bin/charon ~/.local/bin/charon
-	@echo "Installed charon to ~/.local/bin/charon"
+	@echo "Installed signed charon to ~/.local/bin/charon"
 	@case ":$$PATH:" in \
 		*":$$HOME/.local/bin:"*) ;; \
 		*) echo "" ; \
