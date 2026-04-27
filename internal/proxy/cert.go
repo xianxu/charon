@@ -17,9 +17,8 @@ import (
 )
 
 const (
-	caKeychainService = "charon"
-	caCertAccount     = "_ca:cert"
-	caKeyAccount      = "_ca:key"
+	caCertAccount = "_ca:cert"
+	caKeyAccount  = "_ca:key"
 )
 
 // CA holds a certificate authority for TLS interception.
@@ -30,10 +29,18 @@ type CA struct {
 }
 
 // LoadOrCreateCA loads the CA from macOS Keychain, or creates and stores a new one.
+//
+// CA storage shares the same keychain service-name namespace as
+// credentials (`charon` for signed installs, `charon-dev` for unsigned
+// dev binaries). This means a dev binary can't read the signed binary's
+// CA — which is the right thing: dev runs that need a CA either
+// regenerate one or hit Allow/Deny if they try to share state.
 func LoadOrCreateCA() (*CA, error) {
+	caService := keychain.ResolveServiceName()
+
 	// Try loading existing CA from keychain.
-	certPEM, certErr := keychain.GetRaw(caKeychainService, caCertAccount)
-	keyPEM, keyErr := keychain.GetRaw(caKeychainService, caKeyAccount)
+	certPEM, certErr := keychain.GetRaw(caService, caCertAccount)
+	keyPEM, keyErr := keychain.GetRaw(caService, caKeyAccount)
 	if certErr == nil && keyErr == nil {
 		ca, err := parseCA([]byte(certPEM), []byte(keyPEM))
 		if err == nil && time.Now().Before(ca.Cert.NotAfter.Add(-24*time.Hour)) {
@@ -49,7 +56,7 @@ func LoadOrCreateCA() (*CA, error) {
 	}
 
 	// Store cert in keychain.
-	if err := keychain.SetRaw(caKeychainService, caCertAccount, string(ca.CertPEM)); err != nil {
+	if err := keychain.SetRaw(caService, caCertAccount, string(ca.CertPEM)); err != nil {
 		return nil, err
 	}
 
@@ -59,7 +66,7 @@ func LoadOrCreateCA() (*CA, error) {
 		return nil, err
 	}
 	keyPEMBytes := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	if err := keychain.SetRaw(caKeychainService, caKeyAccount, string(keyPEMBytes)); err != nil {
+	if err := keychain.SetRaw(caService, caKeyAccount, string(keyPEMBytes)); err != nil {
 		return nil, err
 	}
 

@@ -20,16 +20,18 @@ import (
 )
 
 // Store implements vault.Store using the macOS Keychain via the `security` CLI.
-type Store struct{}
+type Store struct {
+	service string
+}
 
 func New() *Store {
-	return &Store{}
+	return &Store{service: ResolveServiceName()}
 }
 
 func (s *Store) Get(provider, account string) (*vault.Credential, error) {
 	key := keyName(provider, account)
 	out, err := exec.Command("security", "find-generic-password",
-		"-s", serviceName,
+		"-s", s.service,
 		"-a", key,
 		"-w",
 	).Output()
@@ -54,12 +56,12 @@ func (s *Store) Set(cred *vault.Credential) error {
 
 	// Delete existing entry if present (security CLI errors on duplicate).
 	_ = exec.Command("security", "delete-generic-password",
-		"-s", serviceName,
+		"-s", s.service,
 		"-a", key,
 	).Run()
 
 	return exec.Command("security", "add-generic-password",
-		"-s", serviceName,
+		"-s", s.service,
 		"-a", key,
 		"-w", string(data),
 		"-U",
@@ -69,7 +71,7 @@ func (s *Store) Set(cred *vault.Credential) error {
 func (s *Store) Delete(provider, account string) error {
 	key := keyName(provider, account)
 	return exec.Command("security", "delete-generic-password",
-		"-s", serviceName,
+		"-s", s.service,
 		"-a", key,
 	).Run()
 }
@@ -92,7 +94,7 @@ func (s *Store) List() ([]*vault.Credential, error) {
 			currentAccount = extractQuotedValue(line)
 		}
 		// When we have both and service matches, extract credential info.
-		if currentService == serviceName && currentAccount != "" {
+		if currentService == s.service && currentAccount != "" {
 			parts := strings.SplitN(currentAccount, ":", 2)
 			// Skip internal namespaces (e.g. "_ca:cert" — CA storage, not a credential).
 			if len(parts) == 2 && !strings.HasPrefix(parts[0], "_") {

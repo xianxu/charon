@@ -21,15 +21,21 @@ import (
 )
 
 // Store implements vault.Store via the macOS Security framework.
-type Store struct{}
+//
+// service is the keychain service-name namespace, snapshotted from
+// ResolveServiceName at construction. ServiceProd for a signed binary,
+// ServiceDev for unsigned/dev — see service.go.
+type Store struct {
+	service string
+}
 
 func New() *Store {
-	return &Store{}
+	return &Store{service: ResolveServiceName()}
 }
 
 func (s *Store) Get(provider, account string) (*vault.Credential, error) {
 	key := keyName(provider, account)
-	data, err := gokeychain.GetGenericPassword(serviceName, key, "", "")
+	data, err := gokeychain.GetGenericPassword(s.service, key, "", "")
 	if err != nil {
 		return nil, fmt.Errorf("keychain Get %s: %w", key, err)
 	}
@@ -52,7 +58,7 @@ func (s *Store) Set(cred *vault.Credential) error {
 
 	item := gokeychain.NewItem()
 	item.SetSecClass(gokeychain.SecClassGenericPassword)
-	item.SetService(serviceName)
+	item.SetService(s.service)
 	item.SetAccount(key)
 	item.SetData(data)
 	item.SetSynchronizable(gokeychain.SynchronizableNo)
@@ -62,7 +68,7 @@ func (s *Store) Set(cred *vault.Credential) error {
 	// Idempotent — DeleteGenericPasswordItem on a missing key is a no-op
 	// at the Security framework level (returns errSecItemNotFound which
 	// we ignore).
-	if err := gokeychain.DeleteGenericPasswordItem(serviceName, key); err != nil &&
+	if err := gokeychain.DeleteGenericPasswordItem(s.service, key); err != nil &&
 		!isItemNotFound(err) {
 		return fmt.Errorf("keychain Set (pre-delete) %s: %w", key, err)
 	}
@@ -74,7 +80,7 @@ func (s *Store) Set(cred *vault.Credential) error {
 
 func (s *Store) Delete(provider, account string) error {
 	key := keyName(provider, account)
-	if err := gokeychain.DeleteGenericPasswordItem(serviceName, key); err != nil &&
+	if err := gokeychain.DeleteGenericPasswordItem(s.service, key); err != nil &&
 		!isItemNotFound(err) {
 		return fmt.Errorf("keychain Delete %s: %w", key, err)
 	}
@@ -82,7 +88,7 @@ func (s *Store) Delete(provider, account string) error {
 }
 
 func (s *Store) List() ([]*vault.Credential, error) {
-	accounts, err := gokeychain.GetGenericPasswordAccounts(serviceName)
+	accounts, err := gokeychain.GetGenericPasswordAccounts(s.service)
 	if err != nil {
 		return nil, fmt.Errorf("keychain List: %w", err)
 	}

@@ -40,7 +40,7 @@ High-level milestones:
 
 - [x] M1 — Self-signing identity bootstrap (`scripts/dev/setup-signing-identity.sh`)
 - [x] M2 — CGo keychain backend (Security framework) replaces `security` CLI shelling on darwin
-- [ ] M3 — Runtime self-signature check + dev/prod service-name split (`charon` vs `charon-dev`)
+- [x] M3 — Runtime self-signature check + dev/prod service-name split (`charon` vs `charon-dev`)
 - [ ] M4 — ACL on `Set` for OAuth tokens + `_ca:cert` + `_ca:key`
 - [ ] M5 — Generic ACL migration (`charon migrate-acl`) + first-run auto-migrate of CA
 - [ ] M6 — `make install` signs the binary; README documents the bootstrap flow
@@ -48,6 +48,23 @@ High-level milestones:
 
 ## Log
 
+- 2026-04-26: M3 done. New `service.go` + `codesign_darwin.go` resolve the
+  keychain service-name namespace at runtime. Signed binary (`make install`,
+  identifier `com.charon.cli`) → `charon`; everything else (linker-signed
+  `go build`/`go run`/`go test`, ad-hoc with different identifier) →
+  `charon-dev`. Empirically verified across signing states. The Store snapshot
+  the resolved name at `New()` time so a mid-process signatureCheck flip can't
+  silently re-route operations. `internal/proxy/cert.go` (CA storage) also
+  routes through `ResolveServiceName()`, so dev binary's CA lives separately
+  from the signed install's CA. Three unit tests added with an injectable
+  `signatureCheck` (no dependency on the test binary's actual signature).
+  Discovery: Go on Apple Silicon emits *linker-signed* binaries by default,
+  so a naive `SecCodeCheckValidity(...,nil)` returns true even for `go build`
+  output — defeating the dev/prod split. Tightened to require a specific
+  designated requirement (`identifier "com.charon.cli"`) via
+  `SecRequirementCreateWithString`. The check is non-strict on purpose:
+  identifier-only — the M4 keychain ACL pins to the specific cert leaf and
+  is the actual security boundary; M3 only does namespace selection.
 - 2026-04-26: M2 review (post-milestone, fresh-eyes subagent) returned no
   Critical/Important findings. Two minor items applied: (a) added a comment
   to `kv_darwin.go` GetRaw explaining the intentional no-TrimSpace asymmetry

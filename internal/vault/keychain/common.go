@@ -13,14 +13,6 @@ import (
 	"github.com/xianxu/charon/internal/vault"
 )
 
-// serviceName is the macOS Keychain "service" attribute under which
-// charon stores all of its entries (OAuth tokens, CA cert, CA key).
-//
-// M3 swaps this out for a runtime-resolved value so an unsigned dev
-// binary uses a separate `charon-dev` namespace and doesn't collide
-// with the signed binary's ACL'd entries.
-const serviceName = "charon"
-
 // keyName builds the per-entry account key. Entries are stored as one
 // row per (provider, account); the account attribute is rendered as
 // `<provider>:<account>` so a single service name covers all
