@@ -4,17 +4,20 @@
 // framework. Replaces the `security` CLI shell-out (kept as fallback in
 // keychain.go for !cgo / non-darwin builds).
 //
-// Get / Delete / List use github.com/keybase/go-keychain wrappers.
-// Set goes through acl_darwin.go's CGo helper directly so we can attach
-// a SecAccess (ACL) to ServiceProd entries — keybase doesn't expose
-// SecAccess construction. The Set path also uses SecItemUpdate for
-// atomic upserts, preserving the ACL across token rotation.
+// Get / List use github.com/keybase/go-keychain wrappers.
+// Set + Delete go through acl_darwin.go's CGo helpers directly:
+//   - Set attaches a SecAccess (ACL) to ServiceProd entries (keybase
+//     doesn't expose SecAccess construction) and uses SecItemUpdate
+//     for atomic upserts, preserving the ACL across token rotation.
+//   - Delete tries SecItemDelete first and falls back to the legacy
+//     SecKeychainItemDelete pair on errSecInvalidOwnerEdit (-25244),
+//     which the modern API surfaces for items whose access object is
+//     owned by another process — even without an explicit ACL.
 
 package keychain
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -71,12 +74,7 @@ func (s *Store) Set(cred *vault.Credential) error {
 }
 
 func (s *Store) Delete(provider, account string) error {
-	key := keyName(provider, account)
-	if err := gokeychain.DeleteGenericPasswordItem(s.service, key); err != nil &&
-		!isItemNotFound(err) {
-		return fmt.Errorf("keychain Delete %s: %w", key, err)
-	}
-	return nil
+	return deleteGenericPassword(s.service, keyName(provider, account))
 }
 
 func (s *Store) List() ([]*vault.Credential, error) {
@@ -102,13 +100,3 @@ func (s *Store) List() ([]*vault.Credential, error) {
 	return creds, nil
 }
 
-// isItemNotFound matches the keybase/go-keychain ErrorItemNotFound sentinel.
-// The library's Error type is an integer wrapping OSStatus; errors.Is doesn't
-// work because Error doesn't implement an Is method, so we type-assert.
-func isItemNotFound(err error) bool {
-	var ke gokeychain.Error
-	if errors.As(err, &ke) {
-		return ke == gokeychain.ErrorItemNotFound
-	}
-	return false
-}

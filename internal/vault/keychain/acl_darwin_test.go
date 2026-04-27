@@ -18,7 +18,11 @@ import (
 const aclTestService = "charon-acl-test"
 
 func aclCleanup(account string) {
-	_ = gokeychain.DeleteGenericPasswordItem(aclTestService, account)
+	// Use our deleteGenericPassword helper (with the -25244 fallback)
+	// rather than gokeychain.DeleteGenericPasswordItem so cleanup is
+	// robust against entries left by previous test runs whose access
+	// objects don't match the current process.
+	_ = deleteGenericPassword(aclTestService, account)
 }
 
 func TestACL_WriteAndReadBack(t *testing.T) {

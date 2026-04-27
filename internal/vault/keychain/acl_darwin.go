@@ -139,6 +139,72 @@ cleanup_inputs:
     if (cfData)    CFRelease(cfData);
     return rc;
 }
+
+// charon_delete_generic_password deletes a generic-password keychain
+// item by service+account.
+//
+// Tries SecItemDelete (modern API) first. If it returns
+// errSecInvalidOwnerEdit (-25244) — observed when an item's internal
+// access object is owned by a different process than the caller, even
+// for items with no explicit ACL — falls back to the legacy
+// SecKeychainFindGenericPassword + SecKeychainItemDelete pair, which
+// uses the file-based keychain code path that the `security` CLI uses
+// and doesn't trip the same access-modification check.
+//
+// Returns 0 on success, errSecItemNotFound when no entry exists (caller
+// treats this as idempotent success), or another OSStatus on failure.
+static OSStatus charon_delete_generic_password(
+    const char *service,
+    const char *account
+) {
+    OSStatus rc = errSecSuccess;
+    CFStringRef cfService = NULL;
+    CFStringRef cfAccount = NULL;
+
+    cfService = CFStringCreateWithCString(NULL, service, kCFStringEncodingUTF8);
+    cfAccount = CFStringCreateWithCString(NULL, account, kCFStringEncodingUTF8);
+    if (cfService == NULL || cfAccount == NULL) {
+        rc = errSecAllocate;
+        goto cleanup_delete;
+    }
+
+    // Try modern SecItemDelete.
+    {
+        const void *qkeys[] = { kSecClass,                kSecAttrService, kSecAttrAccount, kSecMatchLimit    };
+        const void *qvals[] = { kSecClassGenericPassword, cfService,       cfAccount,       kSecMatchLimitOne };
+        CFDictionaryRef query = CFDictionaryCreate(
+            NULL, qkeys, qvals, 4,
+            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        rc = SecItemDelete(query);
+        CFRelease(query);
+
+        if (rc != errSecInvalidOwnerEdit) goto cleanup_delete;
+        // -25244: fall through to the legacy path.
+    }
+
+    // Legacy fallback. NULL keychainOrArray means "search the default
+    // keychain search list" (typically just login.keychain-db). NULL
+    // password out-params mean "I just want the itemRef, don't return
+    // the password data."
+    {
+        SecKeychainItemRef itemRef = NULL;
+        rc = SecKeychainFindGenericPassword(
+            NULL,
+            (UInt32)strlen(service), service,
+            (UInt32)strlen(account), account,
+            NULL, NULL,
+            &itemRef);
+        if (rc != errSecSuccess) goto cleanup_delete;
+
+        rc = SecKeychainItemDelete(itemRef);
+        CFRelease(itemRef);
+    }
+
+cleanup_delete:
+    if (cfService) CFRelease(cfService);
+    if (cfAccount) CFRelease(cfAccount);
+    return rc;
+}
 */
 import "C"
 
@@ -146,6 +212,35 @@ import (
 	"fmt"
 	"unsafe"
 )
+
+// errSecItemNotFound is the macOS Security framework "no such item"
+// sentinel. Exposed as a Go error so the Store.Delete contract can
+// remain idempotent without callers reaching into OSStatus codes.
+const cErrSecItemNotFound = -25300
+
+// deleteGenericPassword removes a generic-password keychain item.
+// Treats "not found" as success (Delete is idempotent).
+//
+// Used by Store.Delete on darwin+cgo. Calls into a CGo helper that
+// tries the modern SecItemDelete first and falls back to the legacy
+// file-based keychain API on errSecInvalidOwnerEdit (-25244) — the
+// modern API surfaces -25244 for items whose internal access object
+// is owned by another process even when no explicit ACL is set, and
+// the legacy path doesn't have that hazard.
+func deleteGenericPassword(service, account string) error {
+	cService := C.CString(service)
+	defer C.free(unsafe.Pointer(cService))
+	cAccount := C.CString(account)
+	defer C.free(unsafe.Pointer(cAccount))
+
+	rc := C.charon_delete_generic_password(cService, cAccount)
+	switch rc {
+	case 0, cErrSecItemNotFound:
+		return nil
+	default:
+		return fmt.Errorf("keychain Delete %s/%s: OSStatus %d", service, account, int(rc))
+	}
+}
 
 // setGenericPassword upserts a generic-password keychain item under
 // `service` + `account`, atomic via SecItemUpdate when the entry
