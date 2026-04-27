@@ -66,30 +66,49 @@ signing-identity:
 # workshop/issues/000010-security-audit-tool.md and
 # scripts/dev/build-security-app.sh for the rationale.
 
-SECURITY_BUNDLE_ID  ?= com.charon.security
-SECURITY_APP_NAME   ?= Charon Security
-SECURITY_APP_DIR    ?= $(HOME)/Applications/$(SECURITY_APP_NAME).app
+SECURITY_BUNDLE_ID    ?= com.charon.security
+SECURITY_APP_NAME     ?= Charon Security
+SECURITY_APP_DIR      ?= $(HOME)/Applications/$(SECURITY_APP_NAME).app
+SECURITY_BUNDLE_STAMP := bin/.security-bundle.stamp
 
-security-build:
-	go build -o bin/charon-security ./cmd/charon-security
+# Track Go sources affecting charon-security so Make rebuilds the
+# binary only when something it cares about changed. Ran at makefile
+# parse time — cheap (~30 files).
+SEC_GO_SOURCES := $(shell find cmd/charon-security internal/security -name '*.go' 2>/dev/null)
 
-security-install: security-build
+bin/charon-security: $(SEC_GO_SOURCES)
+	go build -o $@ ./cmd/charon-security
+
+# Stamp file lives under bin/ (no spaces in path; the .app dir does
+# have a space which Make handles poorly). Touched after a successful
+# install. The codesign step inside the script is the expensive bit
+# (Allow/Deny keychain prompt), so we want to run it only when the
+# binary actually changed — Make's natural dep tracking on the stamp
+# delivers that.
+$(SECURITY_BUNDLE_STAMP): bin/charon-security scripts/dev/build-security-app.sh
 	@BUNDLE_ID="$(SECURITY_BUNDLE_ID)" \
 	 APP_NAME="$(SECURITY_APP_NAME)" \
 	 APP_DIR="$(SECURITY_APP_DIR)" \
 	 SIGN_IDENTITY="$(SIGN_IDENTITY)" \
 	 BINARY=bin/charon-security \
 	 scripts/dev/build-security-app.sh
+	@touch $@
 
-# Run the audit. Routes through the .app bundle so TCC attribution is
-# correct (M4 will read TCC.db; with a bare CLI, granting FDA would
-# attach to Terminal.app instead of com.charon.security).
-security: security-install
+security-build: bin/charon-security
+	@:
+
+security-install: $(SECURITY_BUNDLE_STAMP)
+	@:
+
+# Run the audit. Bundle is rebuilt + re-signed iff source changed
+# since last install, so steady-state `make security` runs trigger
+# zero codesign prompts.
+security: $(SECURITY_BUNDLE_STAMP)
 	@"$(SECURITY_APP_DIR)/Contents/MacOS/charon-security" check
 
-# Print the remediation playbook (no privileged access required, so we
-# don't need to route through the .app bundle).
-security-remedy: security-build
+# Print the remediation playbook (no privileged access required, so
+# we don't need to route through the .app bundle).
+security-remedy: bin/charon-security
 	@bin/charon-security remedy
 
 security-uninstall:
@@ -97,6 +116,7 @@ security-uninstall:
 		rm -rf "$(SECURITY_APP_DIR)" ; \
 		echo "Removed $(SECURITY_APP_DIR)" ; \
 	fi
+	@rm -f $(SECURITY_BUNDLE_STAMP)
 	@tccutil reset SystemPolicyAllFiles "$(SECURITY_BUNDLE_ID)" 2>/dev/null || true
 	@tccutil reset Accessibility       "$(SECURITY_BUNDLE_ID)" 2>/dev/null || true
 	@tccutil reset ScreenCapture       "$(SECURITY_BUNDLE_ID)" 2>/dev/null || true
