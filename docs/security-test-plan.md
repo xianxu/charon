@@ -11,6 +11,11 @@ tokens or the proxy CA private key. macOS surfaces an Allow/Deny dialog
 to the user. The signed charon binary itself reads its own entries
 without any prompt.
 
+For the structured analysis of what charon defends against, what it
+explicitly doesn't, and the ranked list of open weaknesses, see
+[threat-model.md](threat-model.md). This test plan only verifies the
+M4 keychain ACL boundary — one defense layer among several.
+
 **What this does NOT confirm**: that an attacker with arbitrary code
 execution as your user can't escalate. The keychain ACL is one layer;
 it doesn't defeat e.g. a malicious binary the user clicks "Always Allow"

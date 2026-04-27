@@ -156,6 +156,10 @@ charon service install/uninstall/...    # macOS launchd integration
   preemptively. Without the header, charon forwards blindly and the
   upstream API will return its own 403.
 
+For a structured analysis of what charon defends against, what it
+doesn't, and the ranked list of known weaknesses, see
+[`docs/threat-model.md`](docs/threat-model.md).
+
 ## Project layout
 
 ```
