@@ -186,7 +186,7 @@ Detailed design lives at [`workshop/plans/000010-security-audit-tool-plan.md`](.
 
 High-level milestones:
 
-- [ ] **M1** — Skeleton CLI (`cmd/charon-security/`) with cobra subcommands
+- [x] **M1** — Skeleton CLI (`cmd/charon-security/`) with cobra subcommands
   `check`, `remedy`. Pre-flight transparency block. Visual-mode fallback
   works end-to-end.
 - [ ] **M2** — Privilege-free checks: `sip`, `sudo`, `launchd`,
@@ -238,3 +238,8 @@ High-level milestones:
   `.app`-bundle requirement settled (CLI-attribution gotcha), pre-flight
   consent default-deny, auto-revoke default-yes, colorized text default
   output, severity tiers Critical/Important/Info/Hygiene.
+- 2026-04-27: M1 landed. `cmd/charon-security/` builds; `check`/`remedy`
+  subcommands wired; `--no-tcc` visual-walk fallback works on a tty,
+  cleanly skipped under `--yes` or non-interactive shells. Unit tests
+  on severity rollup. End-to-end smoke test passes; full `go test ./...`
+  green.
