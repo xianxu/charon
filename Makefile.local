@@ -1,7 +1,8 @@
 # Repo-specific Makefile targets.
 # This file is included by Makefile — add your own targets here.
 
-.PHONY: build sign test run clean signing-identity install
+.PHONY: build sign test run clean signing-identity install \
+        security-build security-install security security-remedy security-uninstall
 
 # ── Codesigning configuration ────────────────────────────────────────────────
 # These two values must stay in sync with charonCodesignIdentifier in
@@ -58,3 +59,46 @@ clean:
 # Idempotent. See scripts/dev/setup-signing-identity.sh for what this does.
 signing-identity:
 	@scripts/dev/setup-signing-identity.sh
+
+# ── Security audit tool ──────────────────────────────────────────────────────
+# `charon-security` is packaged as a .app bundle so TCC attributes
+# permissions to com.charon.security specifically. See
+# workshop/issues/000010-security-audit-tool.md and
+# scripts/dev/build-security-app.sh for the rationale.
+
+SECURITY_BUNDLE_ID  ?= com.charon.security
+SECURITY_APP_NAME   ?= Charon Security
+SECURITY_APP_DIR    ?= $(HOME)/Applications/$(SECURITY_APP_NAME).app
+
+security-build:
+	go build -o bin/charon-security ./cmd/charon-security
+
+security-install: security-build
+	@BUNDLE_ID="$(SECURITY_BUNDLE_ID)" \
+	 APP_NAME="$(SECURITY_APP_NAME)" \
+	 APP_DIR="$(SECURITY_APP_DIR)" \
+	 SIGN_IDENTITY="$(SIGN_IDENTITY)" \
+	 BINARY=bin/charon-security \
+	 scripts/dev/build-security-app.sh
+
+# Run the audit. Routes through the .app bundle so TCC attribution is
+# correct (M4 will read TCC.db; with a bare CLI, granting FDA would
+# attach to Terminal.app instead of com.charon.security).
+security: security-install
+	@"$(SECURITY_APP_DIR)/Contents/MacOS/charon-security" check
+
+# Print the remediation playbook (no privileged access required, so we
+# don't need to route through the .app bundle).
+security-remedy: security-build
+	@bin/charon-security remedy
+
+security-uninstall:
+	@if [ -d "$(SECURITY_APP_DIR)" ]; then \
+		rm -rf "$(SECURITY_APP_DIR)" ; \
+		echo "Removed $(SECURITY_APP_DIR)" ; \
+	fi
+	@tccutil reset SystemPolicyAllFiles "$(SECURITY_BUNDLE_ID)" 2>/dev/null || true
+	@tccutil reset Accessibility       "$(SECURITY_BUNDLE_ID)" 2>/dev/null || true
+	@tccutil reset ScreenCapture       "$(SECURITY_BUNDLE_ID)" 2>/dev/null || true
+	@tccutil reset AppleEvents         "$(SECURITY_BUNDLE_ID)" 2>/dev/null || true
+	@echo "Cleaned any TCC grants for $(SECURITY_BUNDLE_ID)."

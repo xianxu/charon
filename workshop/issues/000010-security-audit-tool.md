@@ -191,7 +191,7 @@ High-level milestones:
   works end-to-end.
 - [x] **M2** — Privilege-free checks: `sip`, `sudo`, `launchd`,
   `codesign-terms`, `installed-apps` detection.
-- [ ] **M3** — `.app` bundle packaging + `make security-install` /
+- [x] **M3** — `.app` bundle packaging + `make security-install` /
   `make security-uninstall`. Signed with `Charon Self-Signed`.
 - [ ] **M4** — TCC.db reader (sqlite, parse `access` table). Per-app
   grant report scoped to known-terminals list.
@@ -267,3 +267,16 @@ High-level milestones:
   remedy <ref>" hint per finding so users don't have to dig. Tests
   cover lookup, completeness, and check-emitted refs all having
   matching remedies (catches future drift).
+- 2026-04-27: Markdown rendering — remedy bodies are markdown source,
+  rendered through charmbracelet/glamour for terminal output. Fenced
+  code blocks for command snippets, ordered lists for procedures,
+  bold for imperative verbs. Width auto-detects from TTY (capped 100
+  cols). `--no-color` → glamour "ascii" style for pipes/CI.
+- 2026-04-27: M3 landed. `scripts/dev/build-security-app.sh`
+  assembles `Charon Security.app` at `~/Applications/`, signed with
+  `Charon Self-Signed`, hardened runtime on, no entitlements.
+  Bundle ID `com.charon.security` distinct from `com.charon.cli`.
+  Makefile targets: `security-build`, `security-install`, `security`
+  (= install + run check), `security-remedy`, `security-uninstall`.
+  Idempotent re-installs (bundle ID + leaf-cert pair stable across
+  rebuilds; existing TCC grants survive).
