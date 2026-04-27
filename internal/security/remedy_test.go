@@ -25,9 +25,13 @@ func TestEveryRemedyHasContent(t *testing.T) {
 
 func TestPrintRemedyShape(t *testing.T) {
 	var buf bytes.Buffer
-	PrintRemedy(&buf, LookupRemedy("sip"))
+	// NoColor + fixed width keeps the test stable against ANSI escapes
+	// and TTY size variation.
+	PrintRemedy(&buf, LookupRemedy("sip"), RenderOptions{NoColor: true, Width: 80})
 	out := buf.String()
-	for _, want := range []string{"sip", "Why:", "Fix:", "csrutil"} {
+	// Glamour transforms section headings and trims punctuation, so we
+	// look for content tokens that survive any reasonable styling.
+	for _, want := range []string{"sip", "Why", "Fix", "csrutil"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\n%s", want, out)
 		}

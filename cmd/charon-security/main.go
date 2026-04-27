@@ -135,8 +135,9 @@ func runCheck() error {
 }
 
 func runRemedy(args []string) error {
+	opts := security.RenderOptions{NoColor: flagNoColor}
 	if len(args) == 0 {
-		security.PrintAllRemedies(os.Stdout)
+		security.PrintAllRemedies(os.Stdout, opts)
 		return nil
 	}
 	ref := args[0]
@@ -145,7 +146,7 @@ func runRemedy(args []string) error {
 		security.PrintUnknownRef(os.Stderr, ref)
 		os.Exit(1)
 	}
-	security.PrintRemedy(os.Stdout, entry)
+	security.PrintRemedy(os.Stdout, entry, opts)
 	return nil
 }
 
