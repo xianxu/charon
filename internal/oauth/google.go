@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -223,10 +224,21 @@ func (g *GoogleProvider) buildAuthURL(redirectURI string, scopes []string, login
 	return googleAuthURL + "?" + params.Encode()
 }
 
+// ErrAlreadyRevoked indicates Google considers the token already invalid
+// (revoked, expired, or otherwise unusable). Callers can treat this as
+// success for local cleanup purposes — the upstream side is already in
+// the desired state. Distinguished from real network or protocol errors
+// so genuine failures still surface.
+var ErrAlreadyRevoked = errors.New("token already revoked or invalid on Google's side")
+
 // Revoke calls Google's revoke endpoint, invalidating the refresh token (and
 // the underlying authorization grant). After this, neither this token nor any
 // access tokens minted from it are usable. Use for "I'm done with this app
 // entirely" — not the routine scope-reduction flow.
+//
+// Returns ErrAlreadyRevoked when Google responds with HTTP 400 and a body
+// indicating the token is already invalid (`{"error":"invalid_token"}`).
+// Callers that just want the token gone may treat this as success.
 func (g *GoogleProvider) Revoke(refreshToken string) error {
 	if refreshToken == "" {
 		return fmt.Errorf("no refresh token to revoke")
@@ -238,10 +250,26 @@ func (g *GoogleProvider) Revoke(refreshToken string) error {
 		return fmt.Errorf("revoke request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("revoke returned HTTP %d", resp.StatusCode)
+	if resp.StatusCode == http.StatusOK {
+		return nil
 	}
-	return nil
+	// HTTP != 200. Try to parse Google's standard OAuth error envelope
+	// {"error": "...", "error_description": "..."}. Google's revoke
+	// endpoint returns 400 with `error=invalid_token` for tokens that
+	// are already revoked or never were valid; treat that as success.
+	body, _ := io.ReadAll(resp.Body)
+	var oauthErr struct {
+		Error            string `json:"error"`
+		ErrorDescription string `json:"error_description"`
+	}
+	_ = json.Unmarshal(body, &oauthErr)
+	if resp.StatusCode == http.StatusBadRequest && oauthErr.Error == "invalid_token" {
+		return ErrAlreadyRevoked
+	}
+	if oauthErr.Error != "" {
+		return fmt.Errorf("revoke returned HTTP %d (%s): %s", resp.StatusCode, oauthErr.Error, oauthErr.ErrorDescription)
+	}
+	return fmt.Errorf("revoke returned HTTP %d", resp.StatusCode)
 }
 
 func (g *GoogleProvider) exchangeCode(code, redirectURI string) (*vault.Credential, error) {

@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/xianxu/charon/internal/oauth"
 	"github.com/xianxu/charon/internal/vault"
 )
 
@@ -207,8 +209,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return applyResultMsg{err: err}
 			}
 		}
+		// Track whether Google actually revoked the token here, vs. the
+		// token being already-invalid on Google's side. Either way we
+		// proceed to delete the local entry — the user wants this
+		// account *gone* — but the exit note is honest about what
+		// happened upstream.
+		alreadyRevoked := false
 		if m.auth != nil {
-			if err := m.auth.Revoke(cred.RefreshToken); err != nil {
+			err := m.auth.Revoke(cred.RefreshToken)
+			switch {
+			case err == nil:
+				// Revoked at Google.
+			case errors.Is(err, oauth.ErrAlreadyRevoked):
+				// Token was already revoked or never valid (e.g. user
+				// revoked via myaccount.google.com/permissions before
+				// reaching us). Local cleanup still wanted.
+				alreadyRevoked = true
+			default:
 				return m, func() tea.Msg {
 					return applyResultMsg{err: err}
 				}
@@ -220,7 +237,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.notifyProxyCacheClear() // proxy must drop the now-revoked token
-		m.exitNote = "Revoked and removed " + msg.account
+		if alreadyRevoked {
+			m.exitNote = "Removed " + msg.account + " (already revoked on Google's side)"
+		} else {
+			m.exitNote = "Revoked and removed " + msg.account
+		}
 		return m, tea.Quit
 	}
 
