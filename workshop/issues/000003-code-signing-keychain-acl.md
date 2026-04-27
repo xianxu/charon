@@ -44,7 +44,7 @@ High-level milestones:
 - [x] M4 — ACL on `Set` for OAuth tokens + `_ca:cert` + `_ca:key`
 - [ ] M5 — Generic ACL migration (`charon migrate-acl`) + first-run auto-migrate of CA *(user-deferred; revoke + re-auth path used instead)*
 - [x] M6 — `make install` signs the binary; README documents the bootstrap flow
-- [ ] M7 — Manual test: unsigned reader gets Allow/Deny dialog; signed charon does not
+- [ ] M7 — Manual test: unsigned reader gets Allow/Deny dialog; signed charon does not (doc written; user run pending)
 
 ## Log
 
