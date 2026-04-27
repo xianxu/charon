@@ -11,6 +11,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/xianxu/charon/internal/security"
@@ -109,7 +111,12 @@ func runCheck() error {
 	report.Findings = append(report.Findings, security.CheckCodesignEntitlements(apps)...)
 
 	if !flagNoTCC {
-		report.Findings = append(report.Findings, security.CheckTCC(apps)...)
+		tccFindings := security.CheckTCC(apps)
+		report.Findings = append(report.Findings, tccFindings...)
+		// If we couldn't read TCC.db because of missing FDA, offer to
+		// open the System Settings pane right now — saves the user
+		// digging for instructions in the remedy.
+		offerFDAGrantIfNeeded(tccFindings, self)
 	}
 
 	// M5 plugs charon-specific keychain ACL checks here.
@@ -134,6 +141,45 @@ func runCheck() error {
 	}
 	os.Exit(report.ExitCode())
 	return nil
+}
+
+// offerFDAGrantIfNeeded looks for the tcc-no-fda-* findings produced
+// by CheckTCC and, when running interactively, walks the user through
+// adding the .app to the FDA pane. No-op on --yes (non-interactive)
+// or when running outside a .app bundle (where granting FDA wouldn't
+// be scoped to com.charon.security).
+func offerFDAGrantIfNeeded(findings []security.Finding, self security.SelfInfo) {
+	needsFDA := false
+	for _, f := range findings {
+		if strings.HasPrefix(f.ID, "tcc-no-fda-") {
+			needsFDA = true
+			break
+		}
+	}
+	if !needsFDA || flagYes || !security.IsInteractive() {
+		return
+	}
+	if self.BundleID == "" {
+		fmt.Fprintln(os.Stderr, "\nNote: running outside a .app bundle. Granting FDA now would attach to your terminal, not to charon-security. Run via `make security` for proper TCC attribution.")
+		return
+	}
+	fmt.Fprintf(os.Stderr, "\nFull Disk Access not granted to %s.\n", self.BundleID)
+	if !security.ConfirmDefaultYes("Open System Settings → Full Disk Access now?") {
+		return
+	}
+	if err := exec.Command("open",
+		"x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles").Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "(could not open System Settings: %v)\n", err)
+		return
+	}
+	if self.BundlePath != "" {
+		// Reveal the .app in Finder so the user can drag-drop.
+		_ = exec.Command("open", "-R", self.BundlePath).Run()
+	}
+	fmt.Fprintln(os.Stderr, "\nIn the System Settings pane:")
+	fmt.Fprintln(os.Stderr, "  1. Drag \"Charon Security.app\" from Finder into the list, OR click + and pick it.")
+	fmt.Fprintln(os.Stderr, "  2. Toggle the switch ON.")
+	fmt.Fprintln(os.Stderr, "  3. Re-run `make security` to read TCC.db.")
 }
 
 func runRemedy(args []string) error {
