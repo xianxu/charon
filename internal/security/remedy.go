@@ -202,7 +202,24 @@ func AllRemedyRefs() []string {
 // PrintRemedy renders one entry as multi-section text. Stable format
 // regardless of caller, so docs can quote it.
 func PrintRemedy(w io.Writer, e *RemedyEntry) {
-	fmt.Fprintf(w, "═══ %s  (%s)\n", e.Title, e.Ref)
+	printRemedyWithHeader(w, e, fmt.Sprintf("═══ %s  (%s)", e.Title, e.Ref))
+}
+
+// PrintAllRemedies prints every entry as a single playbook. Order
+// follows Remedies (curated, not alphabetical). Header announces total
+// count; each entry's heading carries a [N/M] position so the reader
+// can keep their place.
+func PrintAllRemedies(w io.Writer) {
+	total := len(Remedies)
+	fmt.Fprintf(w, "Charon Security remedy playbook — %d entries.\n\n", total)
+	for i := range Remedies {
+		header := fmt.Sprintf("═══ [%d/%d] %s  (%s)", i+1, total, Remedies[i].Title, Remedies[i].Ref)
+		printRemedyWithHeader(w, &Remedies[i], header)
+	}
+}
+
+func printRemedyWithHeader(w io.Writer, e *RemedyEntry, header string) {
+	fmt.Fprintln(w, header)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Why:")
 	fmt.Fprintln(w, indent(e.Why, "  "))
@@ -214,14 +231,6 @@ func PrintRemedy(w io.Writer, e *RemedyEntry) {
 		fmt.Fprintln(w, "See also:", e.SeeAlso)
 	}
 	fmt.Fprintln(w)
-}
-
-// PrintAllRemedies prints every entry as a single playbook. Order
-// follows Remedies (curated, not alphabetical).
-func PrintAllRemedies(w io.Writer) {
-	for i := range Remedies {
-		PrintRemedy(w, &Remedies[i])
-	}
 }
 
 // PrintUnknownRef prints a friendly error listing valid refs. Used by
