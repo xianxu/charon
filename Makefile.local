@@ -1,7 +1,7 @@
 # Repo-specific Makefile targets.
 # This file is included by Makefile — add your own targets here.
 
-.PHONY: build test run clean
+.PHONY: build test run clean signing-identity
 
 build:
 	go build -o bin/charon ./cmd/charon
@@ -31,3 +31,8 @@ install: build
 
 clean:
 	rm -rf bin/
+
+# Bootstrap a self-signed code-signing identity (macOS).
+# Idempotent. See scripts/dev/setup-signing-identity.sh for what this does.
+signing-identity:
+	@scripts/dev/setup-signing-identity.sh

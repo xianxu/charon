@@ -38,7 +38,7 @@ keychain service name based on the binary's own signing state.
 
 High-level milestones:
 
-- [ ] M1 — Self-signing identity bootstrap (`scripts/dev/setup-signing-identity.sh`)
+- [x] M1 — Self-signing identity bootstrap (`scripts/dev/setup-signing-identity.sh`)
 - [ ] M2 — CGo keychain backend (Security framework) replaces `security` CLI shelling on darwin
 - [ ] M3 — Runtime self-signature check + dev/prod service-name split (`charon` vs `charon-dev`)
 - [ ] M4 — ACL on `Set` for OAuth tokens + `_ca:cert` + `_ca:key`
@@ -48,6 +48,17 @@ High-level milestones:
 
 ## Log
 
+- 2026-04-26: M1 done. `scripts/dev/setup-signing-identity.sh` + `make signing-identity`
+  generate and import a self-signed code-signing identity (`Charon Self-Signed`,
+  10-year RSA-4096) into the user's login keychain. Verified by codesigning a test
+  binary; the auto-generated designated requirement is
+  `identifier "com.X" and certificate leaf = H"<sha1>"` — exactly the predicate
+  shape M4's ACL will reuse. Several finicky details documented inline:
+  OpenSSL 3.x requires `-legacy` p12 export; `find-identity` (without `-v`) is the
+  right verification path because `-v -p codesigning` filters to trusted-only and
+  hides untrusted self-signed identities; `set-key-partition-list` is deprecated
+  and brittle — we rely instead on the standard one-time "Always Allow" Keychain
+  Access dialog the user clicks during the first `make install`.
 - 2026-04-26: Brainstorm with user — landed on self-signed first, Apple Dev ID later.
   Discovered constraint: keychain ACLs gate on the requesting process's signature, so
   shelling out to `/usr/bin/security` defeats the model. Resolution: switch the
