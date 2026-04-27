@@ -48,6 +48,16 @@ High-level milestones:
 
 ## Log
 
+- 2026-04-26: M2 review (post-milestone, fresh-eyes subagent) returned no
+  Critical/Important findings. Two minor items applied: (a) added a comment
+  to `kv_darwin.go` GetRaw explaining the intentional no-TrimSpace asymmetry
+  with the CLI counterpart (Security framework returns exact bytes; CLI's
+  `-w` adds a newline so the CLI version trims); (b) noted in the plan that
+  M4 should switch `Set` to `SecItemUpdate` for atomic upsert — needed once
+  entries have ACLs since the M2 delete-then-add window would briefly drop
+  the ACL. Approve verdict from reviewer. The third minor (no default-run
+  cgo backend test) is mitigated by integration tests covering the same
+  surface; not addressed.
 - 2026-04-26: M2 done. New `internal/vault/keychain/keychain_darwin.go` +
   `kv_darwin.go` implement the Store interface via direct macOS Security
   framework calls (using `github.com/keybase/go-keychain`); the legacy

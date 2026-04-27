@@ -12,6 +12,11 @@ import (
 // (e.g., for storing CA certs). darwin+cgo path; CLI fallback in kv.go.
 
 // GetRaw reads a raw string value from the keychain.
+//
+// No TrimSpace here — the Security framework returns exact stored bytes.
+// The CLI counterpart in kv.go trims because `security -w` appends a
+// trailing newline. Round-trip via SetRaw→GetRaw is bytewise identical
+// on either backend.
 func GetRaw(service, account string) (string, error) {
 	data, err := gokeychain.GetGenericPassword(service, account, "", "")
 	if err != nil {

@@ -280,6 +280,13 @@ constructing `*Access` from a designated requirement is thin — we may
 need a small wrapper using `cgo` directly to call `SecAccessCreate` with
 `SecTrustedApplicationCreateFromRequirement`. Tracked as risk below.
 
+**M4 also migrates `Set` to atomic upsert via `SecItemUpdate`** instead
+of M2's delete-then-add. Once an entry has an ACL, the delete-then-add
+window briefly removes the ACL'd entry; if `AddItem` fails after the
+delete, the entry is gone *and* its ACL with it. `SecItemUpdate` is a
+single atomic operation that preserves the ACL across the value change
+— required for token rotation to be safe under concurrent reads.
+
 ## Migration
 
 ### `internal/vault/migrate/migrate.go`
