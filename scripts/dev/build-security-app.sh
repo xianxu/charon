@@ -65,9 +65,24 @@ info "Building $APP_NAME.app at $APP_DIR"
 
 mkdir -p "$APP_DIR/Contents/MacOS"
 
-# Copy the binary into the bundle. CFBundleExecutable points at this name.
-cp "$BINARY" "$APP_DIR/Contents/MacOS/charon-security"
-ok "binary copied"
+# Idempotency belt-and-suspenders: if the existing bundled binary
+# matches the source byte-for-byte AND the bundle already has a valid
+# signature, skip the entire re-copy + re-sign path. Re-signing
+# changes the cdhash and macOS's TCC will silently invalidate any
+# existing user grants (the toggle stays on, but reads fail). This
+# defends against any path where Make's stamp tracking doesn't catch
+# a no-op rebuild.
+existing_bin="$APP_DIR/Contents/MacOS/charon-security"
+if [ -f "$existing_bin" ] && cmp -s "$BINARY" "$existing_bin"; then
+    if codesign --verify "$APP_DIR" 2>/dev/null; then
+        ok "bundle unchanged and signature valid — skipping re-sign"
+        exit 0
+    fi
+    ok "binary unchanged but signature invalid — re-signing in place"
+else
+    cp "$BINARY" "$APP_DIR/Contents/MacOS/charon-security"
+    ok "binary copied"
+fi
 
 # Write Info.plist. LSUIElement=true makes this a background app — no
 # Dock icon, no menu bar entry, no app switcher presence. The bundle

@@ -95,6 +95,19 @@ func ReadTCC(dbPath string) ([]TCCRow, error) {
 		return nil, fmt.Errorf("TCC.db path is a directory: %s", dbPath)
 	}
 
+	// Probe FDA attribution by opening the file directly first. If
+	// this succeeds the running process has FDA via TCC; if a
+	// subsequent sqlite3 shell-out then fails, we've isolated the
+	// bug to child-process attribution rather than the grant itself.
+	probe, openErr := os.Open(dbPath)
+	if openErr != nil {
+		if os.IsPermission(openErr) {
+			return nil, ErrNoFDA
+		}
+		return nil, openErr
+	}
+	probe.Close()
+
 	cmd := exec.Command("/usr/bin/sqlite3",
 		"-readonly", "-json", dbPath,
 		"SELECT service, client, client_type, auth_value, "+
@@ -107,7 +120,11 @@ func ReadTCC(dbPath string) ([]TCCRow, error) {
 		case strings.Contains(s, "unable to open database"),
 			strings.Contains(s, "authorization denied"),
 			strings.Contains(s, "Operation not permitted"):
-			return nil, ErrNoFDA
+			// Direct os.Open succeeded above — so the parent bundle
+			// HAS FDA. sqlite3 failing here means the child process
+			// didn't inherit attribution. Surface that diagnosis
+			// rather than the vague "FDA required" hint.
+			return nil, fmt.Errorf("FDA attached to bundle but /usr/bin/sqlite3 child failed: %s", strings.TrimSpace(s))
 		default:
 			return nil, fmt.Errorf("sqlite3 query failed: %w: %s", err, strings.TrimSpace(s))
 		}
