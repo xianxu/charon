@@ -67,8 +67,14 @@ static OSStatus charon_set_generic_password(
         CFRelease(update);
 
         if (rc == errSecSuccess) goto cleanup_inputs;
+        // Fall through to add-with-fresh-ACL ONLY for "doesn't exist".
+        // Other errors (notably errSecAuthFailed when an existing entry
+        // has an ACL pinned to a different designated requirement than
+        // the current process) propagate to the caller intentionally —
+        // we don't silently re-create or overwrite an entry someone
+        // else owns. Operator workaround:
+        //   security delete-generic-password -s <service> -a <account>
         if (rc != errSecItemNotFound) goto cleanup_inputs;
-        // Fall through to add-with-fresh-ACL path.
         rc = errSecSuccess;
     }
 
@@ -100,6 +106,11 @@ static OSStatus charon_set_generic_password(
 
         // Build attribute dictionary: include kSecAttrAccess only when we
         // built one. kSecAttrSynchronizable=false keeps entries off iCloud.
+        // Note: this attribute set is only used on the SecItemAdd path —
+        // the SecItemUpdate path above only updates kSecValueData, leaving
+        // kSecAttrSynchronizable (and the ACL) intact on the existing
+        // entry. That's intentional: we own the namespace, attributes
+        // are written once at create time.
         CFTypeRef akeys[6];
         CFTypeRef avals[6];
         int n = 0;

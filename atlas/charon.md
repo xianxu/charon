@@ -93,9 +93,8 @@ sections.
 - **Scope resolution**: Short names (e.g. `calendar.readonly`) resolve to full URLs (e.g. `https://www.googleapis.com/auth/calendar.readonly`).
 
 ## Design Decisions
-- **Pure Go, no CGo** — hermetic builds, no C toolchain needed
+- **CGo on darwin for keychain access** (was: pure Go via `security` CLI; revisited in #000003 because the CLI shell-out makes keychain ACLs meaningless — the requesting process becomes `/usr/bin/security`, not charon). Build-tag split: darwin+cgo uses Security framework directly via `github.com/keybase/go-keychain` for Get/Delete/List + direct CGo (`acl_darwin.go`) for ACL'd Set; `!cgo || !darwin` keeps the legacy CLI shell-out for hermetic CI / cross-compile.
 - **Persistent CA** — stored in `~/.config/charon/`, reused across restarts
-- **Keychain via `security` CLI** — avoids CGo macOS bindings
 - **HTTP/1.1 forced upstream** — necessary for HTTP/1.1 MITM, standard practice
 - **Chunked re-encoding** — Go's transport dechunks upstream responses; proxy re-adds `Transfer-Encoding: chunked` when `ContentLength < 0` so clients know where the body ends
 - Token stored as JSON in keychain; access token cached in memory
@@ -121,11 +120,50 @@ sections.
 
 ## Zero-Config Deployment
 Single binary, everything in keychain:
-- CA cert + key → keychain (service: `charon`, accounts: `_ca:cert`, `_ca:key`)
-- OAuth credentials → keychain (service: `charon`, account: `provider:email`)
+- CA cert + key → keychain (account: `_ca:cert`, `_ca:key`)
+- OAuth credentials → keychain (account: `provider:email`)
 - CA bundle → ephemeral temp dir, regenerated on each `serve` start
 - Audit log → stderr by default, `--audit-log <path>` for file output
 - No config directory needed
+
+## Keychain Service Namespace + ACL (#000003)
+
+The keychain service-name is resolved at runtime from the binary's own
+codesign state:
+- Signed `make install` binary (codesign `--identifier com.charon.cli`,
+  signed by `Charon Self-Signed` self-signed cert) → service `charon`
+- Anything else (`go build`, `go run`, `go test`, ad-hoc-signed with a
+  different identifier) → service `charon-dev`
+
+So a dev binary and the installed binary never collide on state, and a
+dev rebuild can't read or accidentally overwrite the prod entries.
+
+Entries written under `charon` get a SecAccess (legacy macOS keychain
+ACL) whose trusted-applications list pins to the current process's
+designated requirement. Any other reader — including
+`security find-generic-password` — triggers the macOS Allow/Deny
+dialog. Entries written under `charon-dev` skip the ACL (dev iteration
+from many ephemeral binaries with non-matching DRs would otherwise
+lock itself out).
+
+Writes go through `SecItemUpdate` first (atomic in-place data swap;
+preserves the existing ACL), falling back to `SecItemAdd` only on
+`errSecItemNotFound`. Token rotation never opens a delete-then-add
+window during which the ACL would be absent.
+
+**Load-bearing observation, not Apple-spec**: SecItemUpdate is documented
+to leave attributes-not-in-the-update-dict unchanged; we rely on this
+applying to the kSecAttrAccess (SecAccess/ACL) attribute too. Verified
+empirically by integration test (`acl_darwin_test.go`); if a future
+macOS release changes that, the ACL would need to be re-attached on
+every update.
+
+**Deprecated APIs in use**: `SecTrustedApplicationCreateFromPath` +
+`SecAccessCreate` are deprecated since macOS 10.10 but remain
+functional for legacy file-based keychains (login.keychain-db). Modern
+`SecAccessControlCreateWithFlags` is for biometric/passcode gating, a
+different use case. Deprecation warnings suppressed via cgo
+`-Wno-deprecated-declarations`.
 
 ## Logging
 - Normal mode: startup info and errors only

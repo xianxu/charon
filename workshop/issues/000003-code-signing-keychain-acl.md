@@ -48,6 +48,32 @@ High-level milestones:
 
 ## Log
 
+- 2026-04-26: M4 review (post-milestone, fresh-eyes subagent) returned no
+  Critical findings; CFRelease lifecycle and atomic-upsert path verified
+  clean. Two Important + three Minor follow-ups; addressed:
+  - Comment at the SecItemUpdate fall-through clarifying that
+    DR-mismatched existing entries surface auth-failure intentionally
+    (we don't silently re-create entries someone else owns); operator
+    workaround documented inline.
+  - Comment in the SecItemAdd attr block noting kSecAttrSynchronizable
+    is intentionally not in the update path (we own the namespace; attrs
+    are write-once at create time).
+  - Atlas updated (`atlas/charon.md`): new "Keychain Service Namespace +
+    ACL" section captures the runtime service-name resolution, the
+    ACL-via-DR design, and the load-bearing observed-not-spec behavior
+    that SecItemUpdate preserves the SecAccess attribute.
+  Two known gaps logged here (non-blocking, M5/M7 follow-ups):
+  - **Test branch-coverage gap**: `TestACL_AtomicUpsert` writes twice
+    and verifies the second value is read back, but cannot fail-fast
+    if the SecItemUpdate path silently regresses to delete-then-add.
+    Light introspection (e.g. branch counter via cgo) would close the
+    gap; deferred.
+  - **Cleanup-across-runs**: integration tests use a dedicated
+    `charon-acl-test` service, but if a previous test run left an
+    ACL'd entry whose DR doesn't match the next test process, both
+    write (SecItemUpdate auth-failure) and cleanup (SecItemDelete
+    auth-failure) break. Operator workaround:
+    `security delete-generic-password -s charon-acl-test -a <account>`.
 - 2026-04-26: M4 done. New `acl_darwin.go` adds direct-CGo `setGenericPassword`
   helper that does atomic upsert via SecItemUpdate (preserves ACL across
   rotation) → SecItemAdd-with-fresh-ACL fallback when the entry doesn't
