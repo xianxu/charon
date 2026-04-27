@@ -93,26 +93,24 @@ func runCheck() error {
 	}
 
 	report := security.Report{}
+	report.Findings = append(report.Findings, security.CheckSIP()...)
+	report.Findings = append(report.Findings, security.CheckSudoCache()...)
+	report.Findings = append(report.Findings, security.CheckLaunchdAgents()...)
 
-	// M2 will populate privilege-free checks; M4 will populate TCC; M5
-	// charon-specific. For M1 we wire the flow end-to-end with a single
-	// placeholder finding so the rollup + visual fallback are exercisable.
+	apps := security.DetectInstalledApps()
+	fmt.Fprintf(os.Stderr, "Detected %d known terminals/editors/IDEs.\n", len(apps))
+	report.Findings = append(report.Findings, security.CheckCodesignEntitlements(apps)...)
+
+	// M4 plugs TCC checks here (uses `apps` for the join against
+	// terminals/editors/IDEs).
+	// M5 plugs charon-specific keychain ACL checks here.
+
 	if flagNoTCC {
-		// The walk is fundamentally interactive: it pauses for the user
-		// at each pane. Skip it under --yes (declared non-interactive)
-		// or when there's no tty available.
 		if !flagYes && security.IsInteractive() {
 			security.RunVisualWalk(os.Stderr)
 		} else {
 			fmt.Fprintln(os.Stderr, "(skipping visual TCC walk; re-run interactively without --yes for the System Settings audit)")
 		}
-	} else {
-		report.Findings = append(report.Findings, security.Finding{
-			ID:       "m1-stub",
-			Severity: security.SevInfo,
-			Title:    "M1 skeleton wired; no checks implemented yet",
-			Detail:   "M2 lands SIP/sudo/launchd; M4 lands TCC; M5 lands charon ACLs.",
-		})
 	}
 
 	printSummary(report)

@@ -189,7 +189,7 @@ High-level milestones:
 - [x] **M1** — Skeleton CLI (`cmd/charon-security/`) with cobra subcommands
   `check`, `remedy`. Pre-flight transparency block. Visual-mode fallback
   works end-to-end.
-- [ ] **M2** — Privilege-free checks: `sip`, `sudo`, `launchd`,
+- [x] **M2** — Privilege-free checks: `sip`, `sudo`, `launchd`,
   `codesign-terms`, `installed-apps` detection.
 - [ ] **M3** — `.app` bundle packaging + `make security-install` /
   `make security-uninstall`. Signed with `Charon Self-Signed`.
@@ -243,3 +243,10 @@ High-level milestones:
   cleanly skipped under `--yes` or non-interactive shells. Unit tests
   on severity rollup. End-to-end smoke test passes; full `go test ./...`
   green.
+- 2026-04-27: M2 landed. Five privilege-free checks: SIP, sudo cache,
+  third-party launchd plists, codesign weakening entitlements,
+  installed-app detection (mdfind primary, `/Applications` fallback).
+  Live run on author's machine surfaced 2 real findings (launchd
+  third-party plists, VS Code weakening entitlements) — no false
+  positives on SIP/sudo/known apps. Curated KnownApps list seeded
+  with ~25 entries (terminals/editors/JetBrains).
