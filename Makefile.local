@@ -34,8 +34,8 @@ sign: build
 		echo "Run 'make signing-identity' first to bootstrap a self-signed identity." ; \
 		exit 1 ; \
 	fi
-	@codesign --force --sign "$(SIGN_IDENTITY)" --identifier "$(CODESIGN_IDENTIFIER)" bin/charon
-	@codesign --verify --verbose=1 bin/charon
+	codesign --force --sign "$(SIGN_IDENTITY)" --identifier "$(CODESIGN_IDENTIFIER)" bin/charon
+	codesign --verify --verbose=1 bin/charon
 
 install: sign
 	@mkdir -p ~/.local/bin

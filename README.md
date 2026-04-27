@@ -8,7 +8,7 @@ changes, except setting two headers, one mandatory and one advisory.
 
 > Charon is one third of a layered architecture: 
 >   **[charon](https://github.com/xianxu/charon)**: (this) outbound capability to access cloud services 
->   **[nous](https://github.com/xianxu/nous)**: task capability, and agentic infrastructure, it use the main user of `charon`
+>   **[nous](https://github.com/xianxu/nous)**: task capability and agentic infrastructure; nous is the main user of `charon`
 >   **brain**: private state, personal. 
 > See the [trio overview](https://github.com/xianxu/nous#the-trio-charon-nous-brain) in nous's README for how the three fit together.
 
@@ -184,7 +184,7 @@ workshop/history/              archived completed work
 - 🔜 Scope catalog with categories + filter syntax — [#000007](workshop/issues/000007-scope-catalog-categories.md)
 - 🔜 Synthesize denials from upstream 403s — [#000008](workshop/issues/000008-synthesize-denials-from-403.md)
 - 🔜 Linux secret service — [#000002](workshop/issues/000002-linux-secret-service.md)
-- 🔜 Code signing + Keychain ACL — [#000003](workshop/issues/000003-code-signing-keychain-acl.md)
+- 🚧 Code signing + Keychain ACL — [#000003](workshop/issues/000003-code-signing-keychain-acl.md) *(M1–M4, M6 shipped; `make install` produces a signed, ACL-binding binary today; M7 manual verification pending)*
 
 ## Installation
 
@@ -203,9 +203,10 @@ make signing-identity   # creates a self-signed code-signing cert (10y)
 make install            # build → sign → copy to ~/.local/bin/charon
 ```
 
-On the **first run** of any `charon` command after this, macOS will pop
-a Keychain Access dialog asking whether `codesign` may use the new
-private key. Click **Always Allow**. Subsequent installs are silent.
+On the **first `make install`** after `make signing-identity`, macOS
+will pop a Keychain Access dialog asking whether `codesign` may use
+the new private key. Click **Always Allow**. Subsequent installs are
+silent.
 
 To verify the installed binary is properly signed:
 

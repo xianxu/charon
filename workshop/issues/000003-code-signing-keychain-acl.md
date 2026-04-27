@@ -48,6 +48,15 @@ High-level milestones:
 
 ## Log
 
+- 2026-04-26: M6 review (post-milestone, fresh-eyes subagent) returned no
+  Critical findings; four follow-ups applied: dropped the silencing `@`
+  prefix on the codesign + verify commands so failures surface their
+  diagnostic output; corrected the README claim that the macOS Keychain
+  Access dialog appears on "first `charon` run" — it actually fires
+  during the first `make install` for `codesign` to use the private key;
+  bumped the README Status entry for #000003 from `🔜` to `🚧` with a
+  one-liner about what's shipped today; fixed an unrelated typo in the
+  trio-overview blockquote (left in place from a pre-session user edit).
 - 2026-04-26: M6 done. `make install` is now `build → sign → install` in one
   shot: new `make sign` target codesigns `bin/charon` with `Charon Self-Signed`
   + `--identifier com.charon.cli`, verifies, then the `install` target copies
