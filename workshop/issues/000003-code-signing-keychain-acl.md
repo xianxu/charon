@@ -48,6 +48,22 @@ High-level milestones:
 
 ## Log
 
+- 2026-04-26: Fixed `vault delete` returning errSecInvalidOwnerEdit (-25244)
+  on entries created by another process. The keybase-library path uses
+  modern `SecItemDelete`, which trips -25244 when the item's internal
+  access object isn't owned by the current process — even for items with
+  no explicit ACL. Replaced with a new CGo helper that tries
+  `SecItemDelete` first and falls back to the legacy
+  `SecKeychainFindGenericPassword` + `SecKeychainItemDelete` pair (same
+  path the `security` CLI uses) on -25244. Verified by reproducing the
+  failure with a `security add-generic-password`-created entry and
+  confirming the new path deletes it cleanly. Side-effect: closes one
+  of the M4 review's known gaps (test cleanup robustness across
+  DR-mismatched runs) since `aclCleanup` now uses the same fallback
+  path. Note: TUI revoke flow at `internal/tui/model.go:217` calls
+  vault.Delete and was previously broken when Google's revoke endpoint
+  itself returned 400 (token already revoked) — that's a separate UX
+  bug (TUI bails before deleting local entry); not addressed here.
 - 2026-04-26: M6 review (post-milestone, fresh-eyes subagent) returned no
   Critical findings; four follow-ups applied: dropped the silencing `@`
   prefix on the codesign + verify commands so failures surface their
