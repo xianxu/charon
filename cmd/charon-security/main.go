@@ -102,7 +102,10 @@ func runCheck() error {
 	report.Findings = append(report.Findings, security.CheckLaunchdAgents()...)
 
 	apps := security.DetectInstalledApps()
-	fmt.Fprintf(os.Stderr, "Detected %d known terminals/editors/IDEs.\n", len(apps))
+	fmt.Fprintf(os.Stderr, "\nDetected %d known terminals/editors/IDEs:\n", len(apps))
+	for _, a := range apps {
+		fmt.Fprintf(os.Stderr, "  %-30s %s  (%s)\n", a.BundleID, a.Path, a.Category)
+	}
 	report.Findings = append(report.Findings, security.CheckCodesignEntitlements(apps)...)
 
 	// M4 plugs TCC checks here (uses `apps` for the join against
