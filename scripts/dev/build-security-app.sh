@@ -50,7 +50,12 @@ die()  { printf "%serror: %s%s\n" "$RED" "$*" "$RESET" >&2; exit 1; }
 [[ -f "$BINARY"            ]]   || die "binary not found: $BINARY  (run 'make security-build' first)"
 command -v codesign >/dev/null  || die "codesign not in PATH"
 
-if ! security find-identity -v -p codesigning "$HOME/Library/Keychains/login.keychain-db" \
+# Use the broad `find-identity` (no -v -p codesigning). Charon's
+# self-signed cert is intentionally untrusted by the system trust
+# store — codesign signs with it fine, but the strict policy filter
+# excludes it. Match the same check that Makefile.local's `sign:`
+# target uses.
+if ! security find-identity "$HOME/Library/Keychains/login.keychain-db" \
         2>/dev/null | grep -q "\"$SIGN_IDENTITY\""; then
     die "signing identity '$SIGN_IDENTITY' not found in login keychain. Run 'make signing-identity' first."
 fi
