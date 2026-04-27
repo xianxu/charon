@@ -28,22 +28,14 @@ func GetRaw(service, account string) (string, error) {
 	return string(data), nil
 }
 
-// SetRaw writes a raw string value to the keychain. Replace-on-write.
+// SetRaw writes a raw string value to the keychain.
+//
+// Atomic upsert via SecItemUpdate-then-SecItemAdd (see setGenericPassword).
+// Routes ACL based on service name: ServiceProd entries (signed binary)
+// get an ACL bound to the current process; ServiceDev entries don't,
+// since dev iteration writes from many ephemeral binaries with
+// non-matching designated requirements.
 func SetRaw(service, account, value string) error {
-	item := gokeychain.NewItem()
-	item.SetSecClass(gokeychain.SecClassGenericPassword)
-	item.SetService(service)
-	item.SetAccount(account)
-	item.SetData([]byte(value))
-	item.SetSynchronizable(gokeychain.SynchronizableNo)
-	item.SetAccessible(gokeychain.AccessibleWhenUnlocked)
-
-	if err := gokeychain.DeleteGenericPasswordItem(service, account); err != nil &&
-		!isItemNotFound(err) {
-		return fmt.Errorf("keychain SetRaw (pre-delete) %s/%s: %w", service, account, err)
-	}
-	if err := gokeychain.AddItem(item); err != nil {
-		return fmt.Errorf("keychain SetRaw %s/%s: %w", service, account, err)
-	}
-	return nil
+	withACL := service == ServiceProd
+	return setGenericPassword(service, account, []byte(value), withACL)
 }

@@ -41,13 +41,30 @@ High-level milestones:
 - [x] M1 — Self-signing identity bootstrap (`scripts/dev/setup-signing-identity.sh`)
 - [x] M2 — CGo keychain backend (Security framework) replaces `security` CLI shelling on darwin
 - [x] M3 — Runtime self-signature check + dev/prod service-name split (`charon` vs `charon-dev`)
-- [ ] M4 — ACL on `Set` for OAuth tokens + `_ca:cert` + `_ca:key`
+- [x] M4 — ACL on `Set` for OAuth tokens + `_ca:cert` + `_ca:key`
 - [ ] M5 — Generic ACL migration (`charon migrate-acl`) + first-run auto-migrate of CA
 - [ ] M6 — `make install` signs the binary; README documents the bootstrap flow
 - [ ] M7 — Manual test: unsigned reader gets Allow/Deny dialog; signed charon does not
 
 ## Log
 
+- 2026-04-26: M4 done. New `acl_darwin.go` adds direct-CGo `setGenericPassword`
+  helper that does atomic upsert via SecItemUpdate (preserves ACL across
+  rotation) → SecItemAdd-with-fresh-ACL fallback when the entry doesn't
+  exist yet. Both `Store.Set` and `kv.SetRaw` route through it, gated by
+  service name: ServiceProd → ACL bound to current process's designated
+  requirement (any other reader gets the macOS Allow/Deny dialog);
+  ServiceDev → no ACL (dev iteration writes from many ephemeral binaries
+  with non-matching DRs, so an ACL would lock dev out of its own state).
+  Three integration tests added (`TestACL_WriteAndReadBack`,
+  `TestACL_AtomicUpsert`, `TestACL_NoACLPath`) under a dedicated
+  `charon-acl-test` service so they don't pollute real prod entries.
+  Used the legacy `SecTrustedApplicationCreateFromPath(NULL,...) +
+  SecAccessCreate` API — formally deprecated since 10.10 but the only
+  path that gives codesign-DR-based ACL on file-based keychains; modern
+  `SecAccessControlCreateWithFlags` is for biometric/passcode gating, a
+  different use case. Suppressed deprecation warnings via cgo
+  `-Wno-deprecated-declarations`.
 - 2026-04-26: M3 review (post-milestone, fresh-eyes subagent) returned no
   Critical/Important findings; race-detector clean. One minor follow-up
   applied: warning comment on `signatureCheck` against `t.Parallel()` in

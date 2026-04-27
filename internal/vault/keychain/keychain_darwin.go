@@ -1,12 +1,14 @@
 //go:build darwin && cgo
 
 // Primary darwin Store implementation: direct calls to the macOS Security
-// framework via github.com/keybase/go-keychain. Replaces the `security` CLI
-// shell-out (kept as fallback in keychain.go for !cgo / non-darwin builds).
+// framework. Replaces the `security` CLI shell-out (kept as fallback in
+// keychain.go for !cgo / non-darwin builds).
 //
-// M2 scope: parity with the CLI backend — Get/Set/Delete/List, no ACL writes.
-// ACL plumbing arrives in M4. Service-name selection (`charon` vs
-// `charon-dev` based on the binary's signing state) arrives in M3.
+// Get / Delete / List use github.com/keybase/go-keychain wrappers.
+// Set goes through acl_darwin.go's CGo helper directly so we can attach
+// a SecAccess (ACL) to ServiceProd entries — keybase doesn't expose
+// SecAccess construction. The Set path also uses SecItemUpdate for
+// atomic upserts, preserving the ACL across token rotation.
 
 package keychain
 
@@ -56,26 +58,16 @@ func (s *Store) Set(cred *vault.Credential) error {
 	}
 	key := keyName(cred.Provider, cred.Account)
 
-	item := gokeychain.NewItem()
-	item.SetSecClass(gokeychain.SecClassGenericPassword)
-	item.SetService(s.service)
-	item.SetAccount(key)
-	item.SetData(data)
-	item.SetSynchronizable(gokeychain.SynchronizableNo)
-	item.SetAccessible(gokeychain.AccessibleWhenUnlocked)
-
-	// Replace-on-write: AddItem fails on duplicate, so delete first.
-	// Idempotent — DeleteGenericPasswordItem on a missing key is a no-op
-	// at the Security framework level (returns errSecItemNotFound which
-	// we ignore).
-	if err := gokeychain.DeleteGenericPasswordItem(s.service, key); err != nil &&
-		!isItemNotFound(err) {
-		return fmt.Errorf("keychain Set (pre-delete) %s: %w", key, err)
-	}
-	if err := gokeychain.AddItem(item); err != nil {
-		return fmt.Errorf("keychain Set %s: %w", key, err)
-	}
-	return nil
+	// ServiceProd entries are written with an ACL bound to the current
+	// process's designated requirement; ServiceDev entries skip the ACL
+	// (dev iteration writes from many ephemeral binaries — go test, go
+	// run — whose DRs don't match each other, so an ACL would lock dev
+	// out of its own state).
+	//
+	// Both paths use SecItemUpdate-then-SecItemAdd for atomic upsert,
+	// which preserves the ACL across token rotation on the prod path.
+	withACL := s.service == ServiceProd
+	return setGenericPassword(s.service, key, data, withACL)
 }
 
 func (s *Store) Delete(provider, account string) error {
