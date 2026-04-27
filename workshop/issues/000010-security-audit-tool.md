@@ -193,7 +193,7 @@ High-level milestones:
   `codesign-terms`, `installed-apps` detection.
 - [x] **M3** — `.app` bundle packaging + `make security-install` /
   `make security-uninstall`. Signed with `Charon Self-Signed`.
-- [ ] **M4** — TCC.db reader (sqlite, parse `access` table). Per-app
+- [x] **M4** — TCC.db reader (sqlite, parse `access` table). Per-app
   grant report scoped to known-terminals list.
 - [ ] **M5** — Charon-specific checks: signing-key ACL inspection
   (trusted-apps list empty), charon keychain entries' ACL non-empty
@@ -280,3 +280,14 @@ High-level milestones:
   (= install + run check), `security-remedy`, `security-uninstall`.
   Idempotent re-installs (bundle ID + leaf-cert pair stable across
   rebuilds; existing TCC grants survive).
+- 2026-04-27: M4 landed. `internal/security/check_tcc.go` reads both
+  user- and system-scope TCC.db via `/usr/bin/sqlite3 -readonly -json`
+  (no Go-SQLite dep — schema is stable, query is one-shot, macOS
+  ships sqlite3). `evaluateTCCRows` is pure; tests cover the severity
+  matrix end-to-end (FDA/A11y on terminal=Critical, ScreenCapture=Important,
+  AppleEvents to credential apps=Critical, others=Important, plus
+  filtered cases: denied, path-based, unknown, empty target). When
+  the DB can't be opened due to missing FDA, surfaces an Info finding
+  pointing at the remedy + visual-mode fallback rather than failing.
+  Curated CredentialApps map (Keychain Access, 1Password, Bitwarden,
+  Dashlane, LastPass) drives the AppleEvents severity bump.

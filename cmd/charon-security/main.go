@@ -79,9 +79,9 @@ func runCheck() error {
 	}
 
 	opts := security.PreflightOptions{
-		// Toggled on as M4 / M5 / M6 land. Keeping these honest now is
-		// the difference between a transparency block and a fairy tale.
-		WillReadTCC:      false,
+		// Toggled on as M5 / M6 land. Keeping these honest now is the
+		// difference between a transparency block and a fairy tale.
+		WillReadTCC:      !flagNoTCC,
 		WillCheckCharon:  false,
 		WillPromptRevoke: false,
 	}
@@ -108,8 +108,10 @@ func runCheck() error {
 	}
 	report.Findings = append(report.Findings, security.CheckCodesignEntitlements(apps)...)
 
-	// M4 plugs TCC checks here (uses `apps` for the join against
-	// terminals/editors/IDEs).
+	if !flagNoTCC {
+		report.Findings = append(report.Findings, security.CheckTCC(apps)...)
+	}
+
 	// M5 plugs charon-specific keychain ACL checks here.
 
 	if flagNoTCC {
