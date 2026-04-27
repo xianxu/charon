@@ -48,6 +48,15 @@ High-level milestones:
 
 ## Log
 
+- 2026-04-26: M1 review (post-milestone, fresh-eyes subagent) returned no Critical
+  findings, three Important/Minor follow-ups applied: (a) plan updated to reflect
+  the actual M1 implementation (no `set-key-partition-list`, no `add-trusted-cert`,
+  `find-identity` without filters), preventing future milestones from re-litigating
+  those choices; (b) corrected SHA-256 → SHA-1 in plan's designated-requirement
+  spec, verified empirically against `codesign -dr-` output (40-hex-char identity
+  hash matches the auto-generated `H"..."` value); (c) trimmed the inaccurate
+  "repairs partial state" claim from the script header. Approve verdict from
+  reviewer.
 - 2026-04-26: M1 done. `scripts/dev/setup-signing-identity.sh` + `make signing-identity`
   generate and import a self-signed code-signing identity (`Charon Self-Signed`,
   10-year RSA-4096) into the user's login keychain. Verified by codesigning a test

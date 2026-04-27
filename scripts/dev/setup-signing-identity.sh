@@ -2,9 +2,10 @@
 # Bootstrap a self-signed code-signing identity named "Charon Self-Signed"
 # in the user's login keychain.
 #
-# Idempotent: re-running with the identity already present and configured
-# is a no-op. Re-running with a partial state (identity present but not on
-# the codesign partition list) repairs it.
+# Idempotent: re-running with the identity already present is a no-op.
+# (If the identity is somehow corrupt — present but unusable — delete it
+# manually with `security delete-identity -c "Charon Self-Signed"` and
+# re-run; the script will recreate it cleanly.)
 #
 # After this script runs successfully, `make install` can sign the charon
 # binary with: codesign --sign "Charon Self-Signed" ...

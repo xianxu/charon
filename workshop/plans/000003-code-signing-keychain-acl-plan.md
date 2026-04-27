@@ -116,12 +116,16 @@ recipe.
 
 ### `scripts/dev/setup-signing-identity.sh`
 
-Idempotent. Skips if `Charon Self-Signed` already exists in
-`security find-identity -v -p codesigning`.
+Idempotent. Skips if `Charon Self-Signed` already exists in the user's
+login keychain.
 
 Steps:
 
-1. Check for existing `Charon Self-Signed` identity → exit 0 if present.
+1. Existence check: `security find-identity "$LOGIN_KC" | grep "$CN"`.
+   We use plain `find-identity` (no `-v -p codesigning`) on purpose —
+   the filtered form lists only *trusted* identities and would hide our
+   self-signed cert (which is correctly marked `CSSMERR_TP_NOT_TRUSTED`
+   without an explicit trust override). On match → exit 0.
 2. Generate a 4096-bit RSA key + self-signed X.509 cert via `openssl req`
    with these extensions:
    - `extendedKeyUsage = codeSigning`
@@ -129,16 +133,24 @@ Steps:
      for codesign to accept it)
    - 10-year validity (`-days 3650`)
    - Subject CN: `Charon Self-Signed`
-3. Bundle into a `.p12` with a random throwaway password.
-4. `security import <p12> -k login.keychain -P <pw> -T /usr/bin/codesign`
-   — imports the cert+key, marks `/usr/bin/codesign` as trusted to use
-   the private key without prompting.
-5. `security set-key-partition-list -S apple-tool:,apple: -k <login-pw>`
-   may be required to suppress the keychain prompt during codesign on
-   modern macOS — script will detect and prompt for login password if so.
-6. `security add-trusted-cert -d -r trustRoot -p codeSign` — trust the
-   cert for code signing in the user's trust settings.
-7. Print "ready, run `make install`."
+3. Bundle into a `.p12` (with `openssl pkcs12 -legacy` — OpenSSL 3.x's
+   default PBE encoding is unreadable by macOS's importer) using a
+   random throwaway password.
+4. `security import <p12> -k login.keychain -P <pw> -T /usr/bin/codesign -f pkcs12`
+   — imports the cert+key, adds `/usr/bin/codesign` to the entry's ACL
+   so it can use the private key.
+5. Print "ready, run `make install`."
+
+We deliberately do **not** run:
+
+- `security set-key-partition-list` — deprecated in modern macOS,
+  requires the user's login password through a brittle stdin path, and
+  the standard "Always Allow" Keychain Access dialog on first
+  `make install` accomplishes the same thing more reliably.
+- `security add-trusted-cert` — the M4 ACL predicate
+  (`certificate leaf = H"<sha1>"`) matches by leaf cert hash, not by
+  trust anchor, so user-trust-root status is irrelevant. Running it
+  would trigger an admin auth UI dialog for no benefit.
 
 The script is also runnable as `make signing-identity` (added to
 `Makefile.local`) for discoverability.
@@ -211,13 +223,21 @@ item without prompt." See `acl_darwin.go`.
 ### Designated requirement (self-signed era)
 
 ```
-identifier "com.charon.cli" and certificate leaf = H"<sha256-of-Charon-Self-Signed-leaf>"
+identifier "com.charon.cli" and certificate leaf = H"<sha1-of-Charon-Self-Signed-leaf>"
 ```
+
+This is exactly the predicate codesign auto-generates and embeds in the
+binary as the designated requirement when signing with `Charon Self-Signed`
+(verified empirically in M1 via `codesign -dr- <signed-binary>`).
 
 - `identifier "com.charon.cli"` is set at codesign time via `--identifier`.
   Constant across rebuilds.
-- `certificate leaf = H"..."` pins the specific self-signed cert by SHA-256.
-  Stable until the cert is regenerated (every 10 years per script default,
+- `certificate leaf = H"..."` pins the specific self-signed cert. The
+  hash is **SHA-1** (40 hex chars) — that's macOS's code-signing
+  designated-requirement format, regardless of the digest used elsewhere
+  in the signature (which is SHA-256 on modern macOS). The hash equals
+  the identity hash printed by `security find-identity`.
+- Stable until the cert is regenerated (every 10 years per script default,
   or on machine move).
 
 The fingerprint is computed at first `make install` and embedded in a
@@ -233,10 +253,12 @@ keychain by querying the identity's leaf and hashing. Tradeoff:
   automatically.
 
 **Pick: read at runtime.** `ResolveDesignatedRequirement()` does
-`SecIdentityCopyCertificate` for the `Charon Self-Signed` identity, hashes
-the DER, plugs into the predicate string. Cached in memory after first call.
-Cleaner build pipeline; aligns with the "binary adapts to its own state"
-philosophy.
+`SecIdentityCopyCertificate` for the `Charon Self-Signed` identity,
+SHA-1's the DER, plugs into the predicate string. Cached in memory after
+first call. Cleaner build pipeline; aligns with the "binary adapts to its
+own state" philosophy. Even better: read the binary's *own* designated
+requirement back via `SecCodeCopyDesignatedRequirement` and reuse it
+verbatim — no need to recompute.
 
 When upgrading to Apple Dev ID later, this function returns the
 team-anchored predicate instead, with no other code changes.
