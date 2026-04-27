@@ -6,6 +6,12 @@ behalf — so the agent never sees credentials but can still call OAuth-protecte
 APIs (Gmail, Calendar, Drive, etc.) using real upstream URLs and no code
 changes.
 
+> Charon is one third of a layered architecture: **charon** (outbound
+> capability), **[nous](https://github.com/xianxu/nous)** (task capability,
+> public), **brain** (private state, personal). See the
+> [trio overview](https://github.com/xianxu/nous#the-trio-charon-nous-brain)
+> in nous's README for how the three fit together.
+
 ## What it does
 
 ```
