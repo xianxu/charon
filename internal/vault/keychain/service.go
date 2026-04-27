@@ -23,7 +23,10 @@ const (
 // check.
 //
 // Tests override this directly to verify routing without depending on
-// the test binary's signing state.
+// the test binary's signing state. Tests that override signatureCheck
+// MUST NOT call t.Parallel() — there's no mutex around this var; in
+// production it's written twice during init (here + the darwin init)
+// before any goroutine reads it, but parallel tests would race.
 var signatureCheck = func() bool { return false }
 
 // ResolveServiceName picks the keychain service namespace for this

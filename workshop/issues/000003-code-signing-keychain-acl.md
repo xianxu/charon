@@ -48,6 +48,11 @@ High-level milestones:
 
 ## Log
 
+- 2026-04-26: M3 review (post-milestone, fresh-eyes subagent) returned no
+  Critical/Important findings; race-detector clean. One minor follow-up
+  applied: warning comment on `signatureCheck` against `t.Parallel()` in
+  overriding tests (no mutex; production-safe via init order; parallel
+  tests would race).
 - 2026-04-26: M3 done. New `service.go` + `codesign_darwin.go` resolve the
   keychain service-name namespace at runtime. Signed binary (`make install`,
   identifier `com.charon.cli`) → `charon`; everything else (linker-signed
