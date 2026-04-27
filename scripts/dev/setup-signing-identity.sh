@@ -11,16 +11,25 @@
 # binary with: codesign --sign "Charon Self-Signed" ...
 #
 # Interactive prompts you may see:
-#   1. (One-time, on FIRST `make install` after this script): a Keychain
-#      Access dialog asking whether to allow `codesign` to access the
-#      "Charon Self-Signed" private key. Click **Always Allow**. Future
-#      `make install` runs are silent.
+#   1. On EVERY subsequent `make install`: a Keychain Access dialog
+#      asking whether to allow `codesign` to use the "Charon Self-Signed"
+#      private key. Click **Allow** (single-use) — NOT "Always Allow."
+#      Always Allow adds codesign to the key's trusted-applications list
+#      and silently neutralises this protection.
 #
-# We deliberately do not run `add-trusted-cert` (the predicate we'll use
-# later in #000003 matches by leaf cert hash, not trust anchor) and we do
-# not run `set-key-partition-list` (deprecated, requires the user's login
-# password, and the GUI "Always Allow" dialog accomplishes the same goal
-# more reliably).
+# Why prompt every time: the alternative — adding /usr/bin/codesign to
+# the private key's trusted-applications list (`-T /usr/bin/codesign` on
+# `security import`) — means any process running as you can invoke
+# `codesign --sign "Charon Self-Signed" /tmp/some-binary` and produce a
+# Mach-O whose designated requirement matches charon's keychain ACL
+# predicate. That defeats the M3+M4 boundary (#000003). Treating
+# `make install` as a release ritual that demands user attention each
+# time keeps the signing key effectively single-use.
+#
+# We deliberately do not run `add-trusted-cert` (the predicate we use
+# in M4 matches by leaf cert hash, not trust anchor) and we do not run
+# `set-key-partition-list` (deprecated, requires the user's login
+# password through a brittle stdin path).
 
 set -euo pipefail
 
@@ -104,10 +113,12 @@ EOF
         || die "openssl pkcs12 -legacy failed (need OpenSSL 3.x with legacy provider)"
 
     info "Importing identity into login keychain..."
+    # No -T flag: the private key's trusted-applications list stays empty.
+    # macOS will pop Allow/Deny on every codesign use — the desired
+    # posture for "make install is a deliberate release ritual."
     security import "$P12" \
         -k "$LOGIN_KC" \
         -P "$P12_PW" \
-        -T /usr/bin/codesign \
         -f pkcs12 >/dev/null \
         || die "security import failed"
 fi
@@ -120,6 +131,10 @@ fi
 ok "Identity '$CN' is ready for codesign."
 info "Next: run 'make install'."
 info ""
-info "On the FIRST install only, macOS will show a keychain dialog asking"
-info "whether codesign may use the 'Charon Self-Signed' private key."
-info "Click 'Always Allow'. Subsequent installs are silent."
+info "macOS will pop a Keychain Access dialog on EVERY 'make install'"
+info "asking whether codesign may use the '$CN' private key."
+info "Click 'Allow' (single-use), NOT 'Always Allow'."
+info ""
+info "Always Allow adds codesign to the key's trusted-applications list,"
+info "which lets any process running as you sign Mach-O binaries with"
+info "your charon identity. That defeats the keychain ACL boundary."

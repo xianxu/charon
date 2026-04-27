@@ -203,10 +203,16 @@ make signing-identity   # creates a self-signed code-signing cert (10y)
 make install            # build → sign → copy to ~/.local/bin/charon
 ```
 
-On the **first `make install`** after `make signing-identity`, macOS
-will pop a Keychain Access dialog asking whether `codesign` may use
-the new private key. Click **Always Allow**. Subsequent installs are
-silent.
+On **every `make install`**, macOS will pop a Keychain Access dialog
+asking whether `codesign` may use the `Charon Self-Signed` private key.
+Click **Allow** (single-use), **not "Always Allow"** — Always Allow
+puts `codesign` on the key's trusted-applications list, which lets any
+process running as you produce Mach-O binaries signed with your charon
+identity. That would defeat the keychain ACL boundary.
+
+`make install` is intended as a deliberate release ritual rather than a
+fast inner-loop step; the per-install prompt is the price of keeping the
+signing key effectively single-use.
 
 To verify the installed binary is properly signed:
 

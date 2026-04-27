@@ -15,7 +15,14 @@ without any prompt.
 execution as your user can't escalate. The keychain ACL is one layer;
 it doesn't defeat e.g. a malicious binary the user clicks "Always Allow"
 on, full-disk-access TCC bypasses, or compromise of the charon binary
-itself. See the threat model in the issue's Spec section.
+itself.
+
+A specifically important hygiene point: when prompted by macOS during
+`make install` ("codesign wants to use a key…"), **always click Allow,
+never Always Allow**. Always Allow adds codesign to the signing key's
+trusted-applications list, after which any process running as you can
+sign a Mach-O with the charon identity and silently satisfy the M4
+keychain ACL — fully bypassing the boundary this doc verifies.
 
 ---
 
