@@ -39,7 +39,7 @@ keychain service name based on the binary's own signing state.
 High-level milestones:
 
 - [x] M1 — Self-signing identity bootstrap (`scripts/dev/setup-signing-identity.sh`)
-- [ ] M2 — CGo keychain backend (Security framework) replaces `security` CLI shelling on darwin
+- [x] M2 — CGo keychain backend (Security framework) replaces `security` CLI shelling on darwin
 - [ ] M3 — Runtime self-signature check + dev/prod service-name split (`charon` vs `charon-dev`)
 - [ ] M4 — ACL on `Set` for OAuth tokens + `_ca:cert` + `_ca:key`
 - [ ] M5 — Generic ACL migration (`charon migrate-acl`) + first-run auto-migrate of CA
@@ -48,6 +48,20 @@ High-level milestones:
 
 ## Log
 
+- 2026-04-26: M2 done. New `internal/vault/keychain/keychain_darwin.go` +
+  `kv_darwin.go` implement the Store interface via direct macOS Security
+  framework calls (using `github.com/keybase/go-keychain`); the legacy
+  `security` CLI shell-out is preserved under `//go:build !darwin || !cgo`
+  for hermetic CI / non-darwin builds. Shared types (`serviceName`,
+  `keyName`, `storedCredential`) factored into `common.go`. M2 deliberately
+  does not write keychain ACLs — that lands in M4. All 5 keychain
+  integration tests pass under the new backend (Set/Get/Delete/List/Overwrite
+  parity); CGO_ENABLED=0 darwin and Linux cross-compile both green; full
+  test suite still green. Discovered during this work: `vault.Store`
+  lacks `context.Context` and the service name is hardcoded — both fine
+  for local Keychain but blockers for any future cloud-secrets backend.
+  Captured as #000009 ("cloud-scalable vault backend + multi-user
+  readiness"); not blocking #000003.
 - 2026-04-26: M1 review (post-milestone, fresh-eyes subagent) returned no Critical
   findings, three Important/Minor follow-ups applied: (a) plan updated to reflect
   the actual M1 implementation (no `set-key-partition-list`, no `add-trusted-cert`,

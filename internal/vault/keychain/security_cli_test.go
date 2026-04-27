@@ -1,3 +1,5 @@
+//go:build !darwin || !cgo
+
 package keychain
 
 import (
@@ -8,8 +10,11 @@ import (
 )
 
 // These tests verify that the macOS `security` CLI supports the subcommands
-// and flags that keychain.go depends on. No keychain data is read or written.
-// They run on macOS only (skipped elsewhere).
+// and flags that the CLI fallback in keychain.go depends on. No keychain
+// data is read or written. They run on macOS only (skipped on non-darwin
+// fallback hosts), and only when the CLI fallback is the active backend
+// (build tag !darwin || !cgo); the primary darwin+cgo backend doesn't use
+// the security CLI so these contract checks aren't relevant there.
 
 func skipIfNotMacOS(t *testing.T) {
 	t.Helper()

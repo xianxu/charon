@@ -1,5 +1,13 @@
-// Package keychain implements vault.Store using the macOS security CLI.
-// Pure Go — no CGo required.
+//go:build !darwin || !cgo
+
+// Fallback Store implementation that shells out to the macOS `security`
+// CLI. Active when CGo is disabled or on non-darwin platforms; the
+// primary darwin+cgo backend lives in keychain_darwin.go.
+//
+// This path does not write keychain ACLs (security CLI runs as a
+// separate process, so any ACL would gate `security` itself, not
+// charon). It exists for hermetic CI / non-darwin development only.
+
 package keychain
 
 import (
@@ -7,34 +15,15 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/xianxu/charon/internal/vault"
 )
-
-const serviceName = "charon"
 
 // Store implements vault.Store using the macOS Keychain via the `security` CLI.
 type Store struct{}
 
 func New() *Store {
 	return &Store{}
-}
-
-func keyName(provider, account string) string {
-	return provider + ":" + account
-}
-
-// storedCredential is the JSON blob stored in keychain.
-// For MVP, access_token is stored directly for manual testing.
-// In production (M2+), only refresh_token is persisted; access_token is cached in memory.
-type storedCredential struct {
-	Provider     string    `json:"provider"`
-	Account      string    `json:"account"`
-	AccessToken  string    `json:"access_token,omitempty"`
-	RefreshToken string    `json:"refresh_token,omitempty"`
-	Expiry       time.Time `json:"expiry,omitempty"`
-	Scopes       []string  `json:"scopes,omitempty"`
 }
 
 func (s *Store) Get(provider, account string) (*vault.Credential, error) {
@@ -52,27 +41,11 @@ func (s *Store) Get(provider, account string) (*vault.Credential, error) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(string(out))), &sc); err != nil {
 		return nil, fmt.Errorf("corrupt credential for %s: %w", key, err)
 	}
-
-	return &vault.Credential{
-		Provider:     sc.Provider,
-		Account:      sc.Account,
-		AccessToken:  sc.AccessToken,
-		RefreshToken: sc.RefreshToken,
-		Expiry:       sc.Expiry,
-		Scopes:       sc.Scopes,
-	}, nil
+	return sc.toCredential(), nil
 }
 
 func (s *Store) Set(cred *vault.Credential) error {
-	sc := storedCredential{
-		Provider:     cred.Provider,
-		Account:      cred.Account,
-		AccessToken:  cred.AccessToken,
-		RefreshToken: cred.RefreshToken,
-		Expiry:       cred.Expiry,
-		Scopes:       cred.Scopes,
-	}
-	data, err := json.Marshal(sc)
+	data, err := json.Marshal(fromCredential(cred))
 	if err != nil {
 		return err
 	}

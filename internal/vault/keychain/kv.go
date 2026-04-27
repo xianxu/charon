@@ -1,3 +1,5 @@
+//go:build !darwin || !cgo
+
 package keychain
 
 import (
@@ -7,7 +9,8 @@ import (
 )
 
 // Low-level keychain key-value operations, usable beyond vault.Store
-// (e.g., for storing CA certs).
+// (e.g., for storing CA certs). CLI fallback path; the darwin+cgo
+// counterpart lives in kv_darwin.go.
 
 // GetRaw reads a raw string value from the keychain.
 func GetRaw(service, account string) (string, error) {
