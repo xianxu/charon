@@ -135,9 +135,17 @@ func runCheck() error {
 }
 
 func runRemedy(args []string) error {
-	// M8 fills this in. For M1 we print a placeholder so the subcommand
-	// is reachable.
-	fmt.Println("Remedy text lands in M8. See docs/threat-model.md for now.")
+	if len(args) == 0 {
+		security.PrintAllRemedies(os.Stdout)
+		return nil
+	}
+	ref := args[0]
+	entry := security.LookupRemedy(ref)
+	if entry == nil {
+		security.PrintUnknownRef(os.Stderr, ref)
+		os.Exit(1)
+	}
+	security.PrintRemedy(os.Stdout, entry)
 	return nil
 }
 
@@ -151,6 +159,9 @@ func printSummary(r security.Report) {
 		fmt.Fprintf(os.Stderr, "  [%s] %s — %s\n", f.Severity, f.ID, f.Title)
 		for _, a := range f.Affects {
 			fmt.Fprintf(os.Stderr, "      %s\n", a)
+		}
+		if f.RemedyRef != "" {
+			fmt.Fprintf(os.Stderr, "      → details: charon-security remedy %s\n", f.RemedyRef)
 		}
 	}
 }

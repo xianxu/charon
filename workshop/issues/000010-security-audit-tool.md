@@ -200,8 +200,9 @@ High-level milestones:
   with proper DR.
 - [ ] **M6** — Auto-revoke flow with `tccutil reset` + verification.
 - [ ] **M7** — Severity tiers, exit codes, `--json` output, colorization.
-- [ ] **M8** — Remediation prose for each finding ID. `make security-remedy`
-  prints the playbook.
+- [x] **M8** — Remediation prose for each finding ID. `make security-remedy`
+  prints the playbook. *(Reordered ahead of M3 per user — more value
+  immediately than packaging.)*
 - [ ] **M9** — Manual test plan: run on clean Mac, dirty Mac (intentionally
   granted Terminal FDA), verify findings + auto-revoke roundtrip.
 - [ ] **M10** — README section + atlas entry. Link from `docs/threat-model.md`
@@ -250,3 +251,19 @@ High-level milestones:
   third-party plists, VS Code weakening entitlements) — no false
   positives on SIP/sudo/known apps. Curated KnownApps list seeded
   with ~25 entries (terminals/editors/JetBrains).
+- 2026-04-27: Detection bug fixes — Info.plist regex was XML-only,
+  silently skipping binary plists (Warp, WezTerm). Switched to
+  PlistBuddy. Also added /System/Applications/Utilities to scan dirs
+  (Apple's Terminal/Console live there; Spotlight didn't index).
+  Detection now finds 5/5 expected apps. Audit summary lists the
+  detected apps explicitly so user can verify coverage.
+- 2026-04-27: M8 landed (reordered ahead of M3 per user — remedies
+  unlock immediate value). `internal/security/remedy.go` curates 10
+  RemedyEntry records: 4 for live M2 checks (sip/sudo/launchd/codesign),
+  4 for TCC family (M4 will fill in matching findings; prose stable),
+  2 for charon-specific keychain ACL (M5). `charon-security remedy`
+  prints all; `remedy <ref>` prints one; unknown ref lists valid refs
+  and exits 1. Audit summary now appends "→ details: charon-security
+  remedy <ref>" hint per finding so users don't have to dig. Tests
+  cover lookup, completeness, and check-emitted refs all having
+  matching remedies (catches future drift).
