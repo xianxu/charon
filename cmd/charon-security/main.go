@@ -79,13 +79,17 @@ func runCheck() error {
 	}
 
 	opts := security.PreflightOptions{
-		WillReadTCC:      !flagNoTCC,
-		WillCheckCharon:  true,
-		WillPromptRevoke: !flagNoTCC && self.BundleID != "",
+		// Toggled on as M4 / M5 / M6 land. Keeping these honest now is
+		// the difference between a transparency block and a fairy tale.
+		WillReadTCC:      false,
+		WillCheckCharon:  false,
+		WillPromptRevoke: false,
 	}
 	security.PrintPreflight(os.Stderr, self, opts)
 
-	if !flagYes {
+	if flagYes {
+		fmt.Fprintln(os.Stderr, "(--yes specified, skipping consent gate)")
+	} else {
 		if !security.ConfirmDefaultDeny("Continue with the audit?") {
 			fmt.Fprintln(os.Stderr, "aborted.")
 			return nil
@@ -142,5 +146,8 @@ func printSummary(r security.Report) {
 		counts[security.SevInfo], counts[security.SevHygiene])
 	for _, f := range r.Findings {
 		fmt.Fprintf(os.Stderr, "  [%s] %s — %s\n", f.Severity, f.ID, f.Title)
+		for _, a := range f.Affects {
+			fmt.Fprintf(os.Stderr, "      %s\n", a)
+		}
 	}
 }
