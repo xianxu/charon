@@ -193,18 +193,29 @@ The bootstrap script intentionally omits ` + "`-T /usr/bin/codesign`" + `. The l
 			"```bash\n" +
 			"open /System/Applications/Utilities/Keychain\\ Access.app\n" +
 			"```\n" +
-			"2. Search \"Charon Self-Signed\".\n" +
+			"2. Find the identity (`Charon Self-Signed` or `Developer ID Application: ...`). For Dev ID, click the disclosure triangle (▶) to expand the cert and reveal the matching private key beneath it (Apple labels it with the CSR's Common Name, often just your name).\n" +
 			"3. Right-click the **private key** → Get Info → **Access Control** tab.\n\n" +
-			"Expected: \"Confirm before allowing access\" selected, lower list **empty**.\n\n" +
-			"**If `codesign` or any app is in the list**, two paths:\n\n" +
-			"- Remove it manually from that pane, OR\n" +
-			"- Regenerate the identity entirely:\n" +
+			"Expected: \"Confirm before allowing access\" selected, lower list **empty** (Charon Self-Signed) or **Apple defaults only** (Dev ID).\n\n" +
+			"### Classifying entries\n\n" +
+			"**✓ Benign — Apple defaults from key generation. Safe to leave or remove for strict hygiene.**\n\n" +
+			"- `Certificate Assistant` — the app that created the key (CSR generator). May appear twice (one ACL slot per key operation).\n" +
+			"- `racoon` — deprecated Apple IPsec daemon, vestigial. The binary may not even exist on macOS 13+.\n" +
+			"- `com.apple.ServerManagerDaemon` — vestigial macOS Server daemon. Apple killed macOS Server in 2022.\n" +
+			"- `SecurityAgent` — Apple's auth dialog presenter.\n" +
+			"- `Keychain Access` — Apple's keychain UI itself.\n\n" +
+			"**✗ Catastrophic — REMOVE IMMEDIATELY.**\n\n" +
+			"- `/usr/bin/codesign` — any process can sign a Mach-O satisfying charon's M4 ACL DR. This is the A10 case.\n" +
+			"- `/usr/bin/security` — any process can read keychain entries by shelling out to the security CLI.\n" +
+			"- Anything **outside** `/System/Library/`, `/usr/sbin/`, or `/System/Applications/Utilities/` — these paths are Apple system tools; anything else is suspicious.\n\n" +
+			"### Acting on it\n\n" +
+			"**For the catastrophic case** (codesign / security in the list): regenerate the identity to be safe.\n\n" +
 			"```bash\n" +
 			"make signing-identity   # bootstrap a fresh self-signed cert\n" +
 			"make install            # re-sign + re-create keychain entries\n" +
 			"```\n" +
 			"Old charon entries (signed by the previous cert) become unreadable. Recovery: revoke + re-auth your OAuth accounts.\n\n" +
-			"**Going forward**: during every `make install`, click **Allow** (single-use), never **Always Allow** — the latter re-adds codesign to the trust list.",
+			"**For the benign Apple defaults**: pick strict or pragmatic. Strict = highlight each row and click `−`, then Save Changes; list goes empty, audit passes. Pragmatic = leave them; the Important finding stays until #12A names them and auto-classifies.\n\n" +
+			"**Going forward**: during every `make install`, click **Allow** (single-use), never **Always Allow** — the latter is what would add codesign to the trust list and flip benign → catastrophic.",
 		SeeAlso: "`docs/threat-model.md` → **A10** (signing key abuse via codesign).",
 	},
 	{

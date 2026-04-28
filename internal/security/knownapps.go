@@ -48,7 +48,7 @@ var KnownApps = []KnownApp{
 	{"com.github.wez.wezterm", "WezTerm", CatTerminal},
 	{"net.kovidgoyal.kitty", "Kitty", CatTerminal},
 	{"org.tabby", "Tabby", CatTerminal},
-	{"com.cmux.cmux", "cmux", CatTerminal}, // bundle ID needs empirical confirmation
+	{"com.cmuxterm.app", "cmux", CatTerminal}, // verified empirically via TCC AttributionChain log
 
 	// Editors
 	{"com.microsoft.VSCode", "VS Code", CatEditor},
