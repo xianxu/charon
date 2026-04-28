@@ -200,6 +200,9 @@ High-level milestones:
   requires CGo to walk a non-charon-namespace cert/key item; manual
   Keychain Access verification covered by the remedy text instead.)*
 - [ ] **M6** — Auto-revoke flow with `tccutil reset` + verification.
+  *(Blocked on [#000011](000011-apple-developer-id.md): Tahoe TCC
+  won't grant FDA to self-signed bundles, so there's nothing to
+  revoke. Resume after Apple Developer ID transition.)*
 - [ ] **M7** — Severity tiers, exit codes, `--json` output, colorization.
 - [x] **M8** — Remediation prose for each finding ID. `make security-remedy`
   prints the playbook. *(Reordered ahead of M3 per user — more value
