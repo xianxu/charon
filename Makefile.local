@@ -152,7 +152,7 @@ security:
 	@open -W -n "$(SECURITY_APP_DIR)" \
 	       --stdout /dev/stdout \
 	       --stderr /dev/stderr \
-	       --args check
+	       --args check --yes
 
 # Print the remediation playbook (no privileged access required, so
 # we don't need to route through the .app bundle).
