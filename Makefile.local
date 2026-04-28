@@ -100,10 +100,28 @@ security-build: bin/charon-security
 security-install: $(SECURITY_BUNDLE_STAMP)
 	@:
 
-# Run the audit. Bundle is rebuilt + re-signed iff source changed
-# since last install, so steady-state `make security` runs trigger
-# zero codesign prompts.
-security: $(SECURITY_BUNDLE_STAMP)
+# Run the audit. Pure run — no rebuild, no re-sign, no codesign
+# prompt. macOS TCC binds FDA grants to the bundle's cdhash; every
+# re-sign produces a new cdhash and silently invalidates the grant
+# (the toggle in System Settings stays on, but reads fail). So we
+# DO NOT touch signing here.
+#
+# If the bundle is missing → tells you to install. If your source is
+# newer than the bundle → warns you (you'll see stale behavior until
+# you explicitly re-install, which means re-granting FDA).
+security:
+	@if [ ! -x "$(SECURITY_APP_DIR)/Contents/MacOS/charon-security" ]; then \
+		echo "Charon Security.app not found at $(SECURITY_APP_DIR)" ; \
+		echo "Run 'make security-install' first." ; \
+		exit 1 ; \
+	fi
+	@if [ -f "$(SECURITY_BUNDLE_STAMP)" ] \
+	    && [ -n "$$(find $(SEC_GO_SOURCES) -newer $(SECURITY_BUNDLE_STAMP) -print -quit 2>/dev/null)" ]; then \
+		echo "  [!] Source files are newer than the installed bundle." ; \
+		echo "  [!] To pick up changes: 'make security-install'  (re-signs → invalidates FDA grant)." ; \
+		echo "  [!] Running the OLD bundle..." ; \
+		echo "" ; \
+	fi
 	@"$(SECURITY_APP_DIR)/Contents/MacOS/charon-security" check
 
 # Print the remediation playbook (no privileged access required, so
