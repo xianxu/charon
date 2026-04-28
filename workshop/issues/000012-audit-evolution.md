@@ -152,11 +152,18 @@ keychain entries are pinned to. Specifically:
 Surfaces the stale-daemon-overwriting-with-old-DR pattern that
 motivated `_dev` namespace splitting in [#000003](000003-code-signing-keychain-acl.md).
 
-### G. Hardened-runtime check for charon proper
+### G. Hardened-runtime check for charon proper ✅ landed 2026-04-28
 
-Charon CLI is signed but doesn't currently apply `--options runtime`.
-Audit could check and warn. Not strictly required for keychain ACL,
-but defense in depth (A5 in threat model).
+`make install` now signs with `--options runtime --timestamp`. No
+weakening entitlements declared. Verified functionally on the
+author's machine: `charon serve`, `charon accounts list`, and
+proxied requests all work under hardened-runtime defaults.
+
+The audit doesn't yet *check* that the installed charon binary is
+hardened (the Make target enforces it for fresh installs, but a
+user could have an old binary). Adding that check is a small
+follow-on under (F) — read `codesign -d ... | grep flags` on
+`~/.local/bin/charon` and warn if `runtime` is missing.
 
 ### H. Per-detected-terminal entitlement details
 
