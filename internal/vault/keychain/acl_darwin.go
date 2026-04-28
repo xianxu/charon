@@ -189,6 +189,119 @@ static OSStatus charon_inspect_generic_password(
     return errSecSuccess;
 }
 
+// charon_inspect_key_acl_by_label looks up a code-signing identity
+// by its CERTIFICATE label (the string shown by `security
+// find-identity`, e.g. "Charon Self-Signed" or "Developer ID
+// Application: <Name> (<TEAMID>)"), pulls the matching private key
+// out of the identity, and reports its ACL signals. Used by the
+// security audit tool to verify the signing-key trusted-apps list
+// is empty (the property defense layer 5 / A10 hinges on).
+//
+// The cert label and the private-key label often differ — Apple's
+// Certificate Assistant labels the key with the CSR's Common Name
+// while the cert may show "Developer ID Application: ...". Looking
+// up by cert label and following SecIdentityCopyPrivateKey gives us
+// a stable hook regardless of how the key was labeled at creation.
+//
+// Returns errSecItemNotFound when no identity matches the label.
+//
+// Reading the ACL is metadata-only; does NOT trigger key-use
+// authentication, so this function does NOT prompt the user.
+static OSStatus charon_inspect_key_acl_by_label(
+    const char *label,
+    int *out_acl_count,
+    int *out_app_count
+) {
+    *out_acl_count = 0;
+    *out_app_count = 0;
+
+    CFStringRef cfLabel = CFStringCreateWithCString(NULL, label, kCFStringEncodingUTF8);
+    if (cfLabel == NULL) return errSecAllocate;
+
+    // Walk all identities and match by certificate Common Name. The
+    // cert-attribute kSecAttrLabel is sometimes set to the CN, but
+    // not always — the bootstrap script for Charon Self-Signed uses
+    // SecCertificateCopyCommonName via openssl-imported certs, while
+    // Apple's Certificate Assistant for Dev ID labels both fields.
+    // CN is the consistent identifier across both.
+    CFMutableDictionaryRef query = CFDictionaryCreateMutable(
+        NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionarySetValue(query, kSecClass, kSecClassIdentity);
+    CFDictionarySetValue(query, kSecReturnRef, kCFBooleanTrue);
+    CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitAll);
+
+    CFTypeRef result = NULL;
+    OSStatus rc = SecItemCopyMatching(query, &result);
+    CFRelease(query);
+    if (rc != errSecSuccess) {
+        CFRelease(cfLabel);
+        return rc;
+    }
+
+    CFArrayRef identities = (CFArrayRef)result;
+    SecIdentityRef matched = NULL;
+    for (CFIndex i = 0; i < CFArrayGetCount(identities); i++) {
+        SecIdentityRef identity = (SecIdentityRef)CFArrayGetValueAtIndex(identities, i);
+        SecCertificateRef cert = NULL;
+        if (SecIdentityCopyCertificate(identity, &cert) != errSecSuccess) continue;
+        CFStringRef cn = NULL;
+        if (SecCertificateCopyCommonName(cert, &cn) == errSecSuccess && cn != NULL) {
+            if (CFStringCompare(cn, cfLabel, 0) == kCFCompareEqualTo) {
+                CFRetain(identity);
+                matched = identity;
+                CFRelease(cn);
+                CFRelease(cert);
+                break;
+            }
+            CFRelease(cn);
+        }
+        CFRelease(cert);
+    }
+    CFRelease(identities);
+    CFRelease(cfLabel);
+
+    if (matched == NULL) return errSecItemNotFound;
+
+    SecKeyRef privateKey = NULL;
+    rc = SecIdentityCopyPrivateKey(matched, &privateKey);
+    CFRelease(matched);
+    if (rc != errSecSuccess) return rc;
+
+    // Toll-free bridge: legacy private keys (those imported via the
+    // Certificate Assistant or our openssl-bootstrap path) ARE
+    // SecKeychainItem-compatible and SecKeychainItemCopyAccess works
+    // on them.
+    SecAccessRef access = NULL;
+    rc = SecKeychainItemCopyAccess((SecKeychainItemRef)privateKey, &access);
+    CFRelease(privateKey);
+    if (rc != errSecSuccess) return rc;
+
+    CFArrayRef aclList = NULL;
+    rc = SecAccessCopyACLList(access, &aclList);
+    CFRelease(access);
+    if (rc != errSecSuccess || aclList == NULL) return rc;
+
+    *out_acl_count = (int)CFArrayGetCount(aclList);
+    int app_total = 0;
+    for (CFIndex i = 0; i < CFArrayGetCount(aclList); i++) {
+        SecACLRef acl = (SecACLRef)CFArrayGetValueAtIndex(aclList, i);
+        CFArrayRef apps = NULL;
+        CFStringRef desc = NULL;
+        SecKeychainPromptSelector ps = 0;
+        OSStatus subrc = SecACLCopyContents(acl, &apps, &desc, &ps);
+        if (subrc == errSecSuccess) {
+            if (apps != NULL) {
+                app_total += (int)CFArrayGetCount(apps);
+                CFRelease(apps);
+            }
+            if (desc != NULL) CFRelease(desc);
+        }
+    }
+    *out_app_count = app_total;
+    CFRelease(aclList);
+    return errSecSuccess;
+}
+
 // charon_delete_generic_password deletes a generic-password keychain
 // item by service+account.
 //
@@ -258,6 +371,7 @@ cleanup_delete:
 import "C"
 
 import (
+	"errors"
 	"fmt"
 	"unsafe"
 )
@@ -296,6 +410,46 @@ func inspectGenericPasswordACL(service, account string) (aclCount, appCount int,
 	rc := C.charon_inspect_generic_password(cService, cAccount, &ac, &app)
 	if rc != 0 {
 		return 0, 0, fmt.Errorf("inspect %s/%s: OSStatus %d", service, account, int(rc))
+	}
+	return int(ac), int(app), nil
+}
+
+// ErrSigningKeyNotFound is returned by InspectSigningKeyACL when no
+// private key with the given label exists in the user's login
+// keychain. Distinguishes "key absent" from "key present but ACL
+// inspection failed" so callers can ignore expected absence (e.g.
+// when checking both a Charon Self-Signed and a Developer ID
+// identity but only one of the two exists on this machine).
+var ErrSigningKeyNotFound = errors.New("signing key not found")
+
+// InspectSigningKeyACL looks up a private-key item by its label in
+// the user's login keychain (e.g. "Charon Self-Signed",
+// "Developer ID Application: <Name> (<TEAMID>)") and returns the
+// same ACL signals as the generic-password equivalent.
+//
+// For a charon-related signing key, the desired state is appCount=0
+// (empty trusted-applications list → every codesign use prompts).
+// Any non-zero appCount means at least one binary can use the key
+// without a user click — defeating defense layer 5 (A10 in the
+// threat model) and breaking the agent's "can't silently sign as
+// charon" property.
+//
+// Reading the ACL is metadata-only; does not prompt for key use.
+//
+// Returns ErrSigningKeyNotFound (wrapping errSecItemNotFound) when
+// no key matches the label.
+func InspectSigningKeyACL(label string) (aclCount, appCount int, err error) {
+	cLabel := C.CString(label)
+	defer C.free(unsafe.Pointer(cLabel))
+
+	var ac, app C.int
+	rc := C.charon_inspect_key_acl_by_label(cLabel, &ac, &app)
+	const errSecItemNotFound = -25300
+	if rc == errSecItemNotFound {
+		return 0, 0, ErrSigningKeyNotFound
+	}
+	if rc != 0 {
+		return 0, 0, fmt.Errorf("inspect signing key %q: OSStatus %d", label, int(rc))
 	}
 	return int(ac), int(app), nil
 }

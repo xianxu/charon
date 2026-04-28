@@ -3,6 +3,9 @@ package security
 import (
 	"errors"
 	"fmt"
+	"os/exec"
+	"regexp"
+	"strings"
 
 	"github.com/xianxu/charon/internal/vault/keychain"
 )
@@ -122,3 +125,151 @@ func inspectCharonNamespace(service string) ([]Finding, int) {
 // adding a new exported error to the keychain package isn't worth the
 // blast radius for this one diagnostic.
 var errInspectUnavailable = errors.New("InspectACL requires darwin+cgo")
+
+// signingIdentityLine matches lines from `security find-identity -v`
+// of the form `  N) <40-hex> "Identity Name"`. Used to enumerate
+// charon-relevant signing identities to audit.
+var signingIdentityLine = regexp.MustCompile(`^\s*\d+\)\s+[0-9A-Fa-f]+\s+"([^"]+)"`)
+
+// CheckCharonSigningKeyACL inspects the signing-key ACLs for any
+// charon-related code-signing identities present in the user's login
+// keychain. The desired state is an EMPTY trusted-applications list
+// — every codesign use should prompt. Any non-zero appCount is a
+// Critical finding because it lets a process sign a Mach-O that
+// satisfies charon's M4 ACL DR predicate without prompting,
+// defeating defense layer 5 and adversary A10.
+//
+// Identities checked: anything whose label is "Charon Self-Signed"
+// or starts with "Developer ID Application:". The latter is the
+// post-#000011 production signing identity; the former is the
+// historical self-signed one (still present on machines that
+// haven't fully migrated). Both should have empty trusted-apps
+// lists for the same reason.
+//
+// Discovery uses `security find-identity -v -p codesigning` rather
+// than walking the keychain directly — that's the same approach
+// Makefile.local takes to auto-detect SIGN_IDENTITY and matches
+// what the user sees in their environment.
+func CheckCharonSigningKeyACL() []Finding {
+	// Drop the `-p codesigning` policy filter: it excludes self-signed
+	// certs (CSSMERR_TP_NOT_TRUSTED), but charon's M4 ACL doesn't
+	// route through that policy — it evaluates the DR predicate
+	// directly. So both Charon Self-Signed and Developer ID
+	// identities matter. Plain `find-identity` returns everything.
+	out, err := exec.Command("security", "find-identity").Output()
+	if err != nil {
+		return []Finding{{
+			ID:       "charon-signing-discovery-error",
+			Severity: SevImportant,
+			Title:    "Could not enumerate signing identities",
+			Detail:   fmt.Sprintf("`security find-identity` failed: %v", err),
+		}}
+	}
+
+	labels := []string{}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		m := signingIdentityLine.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		name := m[1]
+		if !isCharonSigningIdentity(name) || seen[name] {
+			continue
+		}
+		seen[name] = true
+		labels = append(labels, name)
+	}
+
+	if len(labels) == 0 {
+		// No charon-relevant identities present. Not a finding —
+		// machine may not have charon installed yet, or may use a
+		// different signing setup. Silent.
+		return nil
+	}
+
+	var findings []Finding
+	for _, label := range labels {
+		ac, app, err := keychain.InspectSigningKeyACL(label)
+		if err != nil {
+			if errors.Is(err, keychain.ErrSigningKeyNotFound) {
+				// Identity listed by find-identity but the matching
+				// private key isn't directly findable by label —
+				// possible on Dev ID where the cert label and key
+				// label can diverge. Skip silently rather than alarm.
+				continue
+			}
+			findings = append(findings, Finding{
+				ID:       "charon-signing-acl-error-" + safeLabel(label),
+				Severity: SevImportant,
+				Title:    fmt.Sprintf("Could not inspect signing key %q", label),
+				Detail:   err.Error(),
+			})
+			continue
+		}
+		switch {
+		case ac == 0:
+			// No SecAccess at all — extremely unusual for a private
+			// key but theoretically possible. Treat as Critical
+			// because the key's protections are unknown.
+			findings = append(findings, Finding{
+				ID:        "charon-signing-acl-missing-" + safeLabel(label),
+				Severity:  SevCritical,
+				Title:     fmt.Sprintf("Signing key %q has no SecAccess", label),
+				Detail:    "Private key has no access controls. Inspect via Keychain Access; consider regenerating the identity.",
+				RemedyRef: "charon-signing-acl",
+				Affects:   []string{label},
+			})
+		case app > 0:
+			findings = append(findings, Finding{
+				ID:       "charon-signing-acl-trusted-apps-" + safeLabel(label),
+				Severity: SevImportant,
+				Title:    fmt.Sprintf("Signing key %q has %d trusted application(s) (expected 0)", label, app),
+				Detail: fmt.Sprintf(
+					"Charon's signing key trusted-applications list should be empty so every codesign use prompts the user. "+
+						"%d entries are present.\n\n"+
+						"This audit can count the entries but cannot yet name them (issue #000012 item A is the planned extension). "+
+						"You need to verify in Keychain Access which apps are listed:\n\n"+
+						"  - **Catastrophic** (the A10 case): /usr/bin/codesign or /usr/bin/security in the list. Any process "+
+						"running as you can then sign a Mach-O that satisfies charon's M4 keychain ACL silently. Remove "+
+						"immediately.\n"+
+						"  - **Probably benign**: Keychain Access, SecurityAgent, or similar Apple system services. These "+
+						"are the default state for keys generated via Certificate Assistant. Strict hygiene removes them; "+
+						"in practice they don't compromise the layer 5 protection.\n\n"+
+						"How to inspect: Open Keychain Access → search %q → right-click the *private key* → Get Info → "+
+						"Access Control tab. Each row in the lower list is a trusted app. Remove anything codesign- or "+
+						"signing-related; leave Apple system services alone unless you want maximum strictness.\n\n"+
+						"To prove the catastrophic case isn't happening: try `make install`. If you got a Keychain Access "+
+						"Allow/Deny prompt, codesign is NOT trusted (good). If install completed silently, codesign IS "+
+						"trusted (bad — the A10 case).",
+					app, label),
+				RemedyRef: "charon-signing-acl",
+				Affects:   []string{label},
+			})
+			// Healthy state (ac > 0 && app == 0) — silent.
+		}
+	}
+	return findings
+}
+
+// isCharonSigningIdentity reports whether the given identity name is
+// one we audit. Filtering at name match time keeps us from
+// accidentally inspecting unrelated user identities (e.g. a separate
+// Developer ID for some other project) — though that's also valid
+// hygiene, it's outside charon's scope.
+func isCharonSigningIdentity(name string) bool {
+	if name == "Charon Self-Signed" {
+		return true
+	}
+	if strings.HasPrefix(name, "Developer ID Application:") {
+		return true
+	}
+	return false
+}
+
+// safeLabel turns an identity label into something usable as a
+// Finding ID suffix (no spaces, no quotes).
+func safeLabel(label string) string {
+	r := strings.NewReplacer(" ", "-", "(", "", ")", "", `"`, "", ":", "")
+	return r.Replace(label)
+}

@@ -31,6 +31,17 @@ func (s *Store) InspectACL(account string) (aclCount, appCount int, err error) {
 	return 0, 0, fmt.Errorf("InspectACL requires darwin+cgo")
 }
 
+// ErrSigningKeyNotFound mirrors the darwin+cgo sentinel so callers
+// can branch on it on either build path. The fallback never returns
+// it (it always returns the unsupported error), but having the
+// sentinel keeps imports consistent.
+var ErrSigningKeyNotFound = fmt.Errorf("signing key not found")
+
+// InspectSigningKeyACL is unimplemented on the non-CGo fallback path.
+func InspectSigningKeyACL(label string) (aclCount, appCount int, err error) {
+	return 0, 0, fmt.Errorf("InspectSigningKeyACL requires darwin+cgo")
+}
+
 func New() *Store {
 	return &Store{service: ResolveServiceName()}
 }

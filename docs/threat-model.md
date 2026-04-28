@@ -82,7 +82,7 @@ identity's private key in your login keychain has an **empty
 trusted-applications list** by intent. Every `codesign` invocation —
 i.e., every `make install` — pops a keychain Allow/Deny dialog. The
 agent can't bypass this without a human keystroke. The user's job at
-that prompt: click **Allow**, never **Always Allow**.
+that prompt: click **Allow**, **NEVER Always Allow**.
 
 **Layer 3 — Audit hygiene** (the `charon-security` tool, in
 [atlas/security-audit.md](../atlas/security-audit.md)). Layers 1 and 2

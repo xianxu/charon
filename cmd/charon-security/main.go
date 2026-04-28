@@ -120,6 +120,7 @@ func runCheck() error {
 	}
 
 	report.Findings = append(report.Findings, security.CheckCharonKeychainACLs()...)
+	report.Findings = append(report.Findings, security.CheckCharonSigningKeyACL()...)
 
 	if flagNoTCC {
 		if !flagYes && security.IsInteractive() {

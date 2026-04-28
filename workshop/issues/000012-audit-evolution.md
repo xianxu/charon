@@ -65,25 +65,33 @@ say *which* app is the extra. With names, the user can see whether
 it's `/usr/bin/security` (the catastrophic A10 case) or some
 other app they actually intended to add.
 
-### B. Programmatic signing-key ACL inspection
+### B. Programmatic signing-key ACL inspection ✅ landed 2026-04-28
 
-Currently the audit punts on the signing key (`Charon Self-Signed` /
-`Developer ID Application`) and links to a manual Keychain Access
-check in the remedy text. Same Security-framework APIs as (A) apply,
-but the target item lives outside the `charon` keychain namespace —
-needs a separate lookup path that finds the key by name rather than
-by service+account.
+`internal/vault/keychain/acl_darwin.go` adds `InspectSigningKeyACL`
+which finds an identity by certificate Common Name (the cert label
+and key label diverge often; matching by CN via SecIdentity is
+robust to that), follows `SecIdentityCopyPrivateKey` to get the
+private key, and inspects its `SecAccess` ACL list. Returns the
+same `(aclCount, appCount)` shape as the generic-password
+inspector.
 
-CGo: `SecKeychainSearchCreateFromAttributes` filtered by
-`kSecLabelItemAttr` = `"Charon Self-Signed"` /
-`"Developer ID Application: <name> (<TEAMID>)"` → SecKeychainItemRef
-→ same ACL walk as (A).
+`internal/security/check_charon.go` adds `CheckCharonSigningKeyACL`
+which discovers charon-relevant identities via
+`security find-identity` (no policy filter — self-signed certs
+need to be checked too even though they fail codesigning policy
+validation), inspects each, and emits findings.
 
-**Why this matters**: this is the highest-stakes ACL on the box. If
-codesign joins the trusted-apps list (the A10 catastrophic case),
-every charon-signed Mach-O can be silently impersonated. Manual
-verification works but most users won't do it. Programmatic check
-moves it into every `make security` run.
+Coarse-grained: counts trusted apps but doesn't name them. Severity
+is **Important** (not Critical) because Apple's Certificate
+Assistant default state for Dev ID Application keys is ~4 trusted
+apps (Keychain Access, SecurityAgent, etc.) — usually benign. The
+catastrophic A10 case (codesign in the list) requires a Critical,
+but distinguishing the two requires (A) below.
+
+The remedy text walks the user through manually inspecting in
+Keychain Access to determine whether the trusted apps include
+codesign (catastrophic) or only Apple system services (probably
+benign).
 
 ### C. Path-based TCC grants
 
@@ -179,8 +187,12 @@ completeness.
 
 Roughly decreasing value-per-effort:
 
-1. **(A)** Enumerate trusted apps by name in keychain entries — concrete user ask, catches the A10-class drift that count-only checks gloss over.
-2. **(B)** Programmatic signing-key ACL inspection — same severity, currently manual.
+1. **(A)** Enumerate trusted apps by name in keychain entries —
+   concrete user ask, catches the A10-class drift that count-only
+   checks gloss over. **Higher priority now that (B) is landed but
+   coarse-grained**: B counts but can't say whether the trusted apps
+   are catastrophic (codesign) or benign (Apple system services).
+2. ~~(B) Programmatic signing-key ACL inspection~~ — landed 2026-04-28.
 3. **(F)** Charon binary self-attestation — catches the stale-daemon class of bug that motivated dev/prod split.
 4. **(E)** FileVault + Time Machine encryption status — closes the user-checklist gap from threat-model item #4.
 5. Everything else as motivation arrives.
