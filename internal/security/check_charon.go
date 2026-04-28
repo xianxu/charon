@@ -192,13 +192,9 @@ func CheckCharonSigningKeyACL() []Finding {
 
 	var findings []Finding
 	for _, label := range labels {
-		ac, app, err := keychain.InspectSigningKeyACL(label)
+		ac, app, drs, err := keychain.InspectSigningKeyACLDetailed(label)
 		if err != nil {
 			if errors.Is(err, keychain.ErrSigningKeyNotFound) {
-				// Identity listed by find-identity but the matching
-				// private key isn't directly findable by label —
-				// possible on Dev ID where the cert label and key
-				// label can diverge. Skip silently rather than alarm.
 				continue
 			}
 			findings = append(findings, Finding{
@@ -211,9 +207,6 @@ func CheckCharonSigningKeyACL() []Finding {
 		}
 		switch {
 		case ac == 0:
-			// No SecAccess at all — extremely unusual for a private
-			// key but theoretically possible. Treat as Critical
-			// because the key's protections are unknown.
 			findings = append(findings, Finding{
 				ID:        "charon-signing-acl-missing-" + safeLabel(label),
 				Severity:  SevCritical,
@@ -224,28 +217,23 @@ func CheckCharonSigningKeyACL() []Finding {
 				BarItem:   BarSigningKeyACL,
 			})
 		case app > 0:
+			classified := classifyTrustedApps(drs)
+			worst := worstTrustedAppVerdict(classified)
+			sev := SevHygiene
+			titleSuffix := "(all benign)"
+			switch worst {
+			case verdictCatastrophic:
+				sev = SevCritical
+				titleSuffix = "(includes catastrophic entries — see detail)"
+			case verdictUnknown:
+				sev = SevImportant
+				titleSuffix = "(some entries unrecognized — see detail)"
+			}
 			findings = append(findings, Finding{
-				ID:       "charon-signing-acl-trusted-apps-" + safeLabel(label),
-				Severity: SevImportant,
-				Title:    fmt.Sprintf("Signing key %q has %d trusted application(s) (expected 0)", label, app),
-				Detail: fmt.Sprintf(
-					"Charon's signing key trusted-applications list should be empty so every codesign use prompts the user. "+
-						"%d entries are present.\n\n"+
-						"This audit can count the entries but cannot yet name them (issue #000012 item A is the planned extension). "+
-						"You need to verify in Keychain Access which apps are listed:\n\n"+
-						"  - **Catastrophic** (the A10 case): /usr/bin/codesign or /usr/bin/security in the list. Any process "+
-						"running as you can then sign a Mach-O that satisfies charon's M4 keychain ACL silently. Remove "+
-						"immediately.\n"+
-						"  - **Probably benign**: Keychain Access, SecurityAgent, or similar Apple system services. These "+
-						"are the default state for keys generated via Certificate Assistant. Strict hygiene removes them; "+
-						"in practice they don't compromise the layer 5 protection.\n\n"+
-						"How to inspect: Open Keychain Access → search %q → right-click the *private key* → Get Info → "+
-						"Access Control tab. Each row in the lower list is a trusted app. Remove anything codesign- or "+
-						"signing-related; leave Apple system services alone unless you want maximum strictness.\n\n"+
-						"To prove the catastrophic case isn't happening: try `make install`. If you got a Keychain Access "+
-						"Allow/Deny prompt, codesign is NOT trusted (good). If install completed silently, codesign IS "+
-						"trusted (bad — the A10 case).",
-					app, label),
+				ID:        "charon-signing-acl-trusted-apps-" + safeLabel(label),
+				Severity:  sev,
+				Title:     fmt.Sprintf("Signing key %q has %d trusted application(s) %s", label, app, titleSuffix),
+				Detail:    formatTrustedAppsDetail(label, classified),
 				RemedyRef: "charon-signing-acl",
 				Affects:   []string{label},
 				BarItem:   BarSigningKeyACL,
@@ -254,6 +242,174 @@ func CheckCharonSigningKeyACL() []Finding {
 		}
 	}
 	return findings
+}
+
+// trustedAppVerdict captures the "is this entry safe?" classification
+// for one trusted application's Designated Requirement.
+type trustedAppVerdict int
+
+const (
+	verdictBenign       trustedAppVerdict = iota // recognized Apple default; safe
+	verdictUnknown                               // not on the curated list; user judgment
+	verdictCatastrophic                          // codesign / security CLI / similar; A10 case
+)
+
+func (v trustedAppVerdict) String() string {
+	switch v {
+	case verdictBenign:
+		return "benign"
+	case verdictCatastrophic:
+		return "CATASTROPHIC"
+	default:
+		return "unknown"
+	}
+}
+
+type classifiedTrustedApp struct {
+	DR      string
+	Verdict trustedAppVerdict
+	Label   string // human-readable name for output
+	Reason  string // why we classified it that way
+}
+
+// classifyTrustedApps walks each DR string and rules on it. The DR
+// strings come from SecRequirementCopyString, which produces
+// codesign-grammar predicates like:
+//
+//	identifier "com.apple.CertificateAssistant" and anchor apple
+//	identifier "/usr/sbin/racoon"
+//	identifier H"abc..." and anchor apple
+//
+// Pattern matching on identifier value covers the well-known cases.
+func classifyTrustedApps(drs []string) []classifiedTrustedApp {
+	out := make([]classifiedTrustedApp, 0, len(drs))
+	for _, dr := range drs {
+		out = append(out, classifyOne(dr))
+	}
+	return out
+}
+
+// catastrophicIdentifiers are the bundle IDs / paths that, if trusted
+// for the signing key, defeat charon's layer-5 protection entirely.
+// Any process running as the user can drive these to sign a Mach-O
+// satisfying charon's M4 ACL DR predicate without prompting.
+var catastrophicIdentifiers = []struct {
+	pattern string
+	label   string
+	reason  string
+}{
+	{`"/usr/bin/codesign"`, "/usr/bin/codesign", "any process can sign a Mach-O satisfying charon's M4 ACL → A10 catastrophic"},
+	{`"com.apple.codesign"`, "codesign (bundle ID)", "any process can sign as charon → A10 catastrophic"},
+	{`"/usr/bin/security"`, "/usr/bin/security", "any process can read keychain entries via the security CLI"},
+	{`"com.apple.security"`, "security (bundle ID)", "any process can read keychain entries via the security CLI"},
+}
+
+// benignIdentifiers are Apple system services that legitimately end up
+// in default-generated key ACLs. Their presence isn't great hygiene
+// but doesn't compromise charon's layer 5 (none of them are general-
+// purpose code signers or keychain readers).
+var benignIdentifiers = []struct {
+	pattern string
+	label   string
+	reason  string
+}{
+	// Bundle-ID based DRs (newer Apple-issued or notarized apps)
+	{`"com.apple.CertificateAssistant"`, "Certificate Assistant", "Apple's CSR generator — created the key, auto-trusted itself"},
+	{`"com.apple.ServerManagerDaemon"`, "ServerManagerDaemon", "vestigial macOS Server daemon (Apple killed macOS Server in 2022)"},
+	{`"com.apple.keychainaccess"`, "Keychain Access", "Apple's keychain UI"},
+	{`"com.apple.SecurityAgent"`, "SecurityAgent", "Apple's auth dialog presenter"},
+	{`"com.apple.systempreferences"`, "System Settings / System Preferences", "Apple's settings UI"},
+
+	// Path-based DRs (legacy apps stored by absolute path; common
+	// for Certificate Assistant and old daemons that ship pre-signed
+	// without proper bundle IDs in the trust list).
+	{`/System/Library/CoreServices/Certificate Assistant.app`, "Certificate Assistant", "Apple's CSR generator — created the key, auto-trusted itself"},
+	{`"/usr/sbin/racoon"`, "racoon", "deprecated Apple IPsec daemon, vestigial entry"},
+	{`/usr/sbin/racoon`, "racoon", "deprecated Apple IPsec daemon, vestigial entry"},
+}
+
+func classifyOne(dr string) classifiedTrustedApp {
+	for _, c := range catastrophicIdentifiers {
+		if strings.Contains(dr, c.pattern) {
+			return classifiedTrustedApp{
+				DR: dr, Verdict: verdictCatastrophic, Label: c.label, Reason: c.reason,
+			}
+		}
+	}
+	for _, b := range benignIdentifiers {
+		if strings.Contains(dr, b.pattern) {
+			return classifiedTrustedApp{
+				DR: dr, Verdict: verdictBenign, Label: b.label, Reason: b.reason,
+			}
+		}
+	}
+	// Pull the identifier "..." substring as the label for unknowns.
+	label := extractIdentifier(dr)
+	if label == "" {
+		label = "(unparseable DR)"
+	}
+	return classifiedTrustedApp{
+		DR: dr, Verdict: verdictUnknown, Label: label,
+		Reason: "not on the curated benign or catastrophic list — review manually",
+	}
+}
+
+// extractIdentifier pulls the identifier value out of a DR string for
+// display when classification fails. e.g.
+//
+//	`identifier "/usr/bin/foo" and anchor apple` → `/usr/bin/foo`
+//	`identifier "com.example" and anchor apple` → `com.example`
+//	`identifier H"abc..."` → `(hashed identifier)`
+func extractIdentifier(dr string) string {
+	const marker = `identifier "`
+	i := strings.Index(dr, marker)
+	if i < 0 {
+		if strings.Contains(dr, `identifier H"`) {
+			return "(hashed identifier — opaque)"
+		}
+		return ""
+	}
+	rest := dr[i+len(marker):]
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		return ""
+	}
+	return rest[:end]
+}
+
+func worstTrustedAppVerdict(apps []classifiedTrustedApp) trustedAppVerdict {
+	worst := verdictBenign
+	for _, a := range apps {
+		if a.Verdict > worst {
+			worst = a.Verdict
+		}
+	}
+	return worst
+}
+
+func formatTrustedAppsDetail(label string, apps []classifiedTrustedApp) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Trusted applications on the private key for %q:\n\n", label)
+	for _, a := range apps {
+		marker := "✓"
+		switch a.Verdict {
+		case verdictCatastrophic:
+			marker = "✗ CATASTROPHIC"
+		case verdictUnknown:
+			marker = "? unknown"
+		}
+		fmt.Fprintf(&b, "  %s  %s — %s\n", marker, a.Label, a.Reason)
+	}
+	b.WriteString("\nAction: ")
+	switch worstTrustedAppVerdict(apps) {
+	case verdictCatastrophic:
+		b.WriteString("entries marked CATASTROPHIC must be removed immediately. Open Keychain Access → identity → expand cert → right-click private key → Get Info → Access Control → highlight the offending row → click `−` → Save Changes. Consider regenerating the identity entirely if you don't trust the current state.")
+	case verdictUnknown:
+		b.WriteString("the unknown entries should be inspected manually in Keychain Access. If they're Apple system services with paths under /System or /usr, probably benign; otherwise treat with suspicion. Add them to internal/security/check_charon.go's classification lists once verified.")
+	default:
+		b.WriteString("all entries are recognized Apple defaults from key generation; no action required for safety. Strict hygiene: remove them anyway via Keychain Access (highlight each row, click `−`, Save Changes). The audit will then pass.")
+	}
+	return b.String()
 }
 
 // isCharonSigningIdentity reports whether the given identity name is

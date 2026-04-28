@@ -197,6 +197,11 @@ static OSStatus charon_inspect_generic_password(
 // security audit tool to verify the signing-key trusted-apps list
 // is empty (the property defense layer 5 / A10 hinges on).
 //
+// out_drs is filled with a newline-separated list of Designated
+// Requirement strings — one per trusted application across all
+// ACLs, deduplicated. Caller must free() it. Pass NULL to skip
+// extraction (count-only mode).
+//
 // The cert label and the private-key label often differ — Apple's
 // Certificate Assistant labels the key with the CSR's Common Name
 // while the cert may show "Developer ID Application: ...". Looking
@@ -210,7 +215,8 @@ static OSStatus charon_inspect_generic_password(
 static OSStatus charon_inspect_key_acl_by_label(
     const char *label,
     int *out_acl_count,
-    int *out_app_count
+    int *out_app_count,
+    char **out_drs
 ) {
     *out_acl_count = 0;
     *out_app_count = 0;
@@ -283,21 +289,93 @@ static OSStatus charon_inspect_key_acl_by_label(
 
     *out_acl_count = (int)CFArrayGetCount(aclList);
     int app_total = 0;
+    CFMutableStringRef drBuf = (out_drs != NULL) ? CFStringCreateMutable(NULL, 0) : NULL;
+    CFMutableSetRef seenDRs = (out_drs != NULL) ? CFSetCreateMutable(NULL, 0, &kCFTypeSetCallBacks) : NULL;
+
     for (CFIndex i = 0; i < CFArrayGetCount(aclList); i++) {
         SecACLRef acl = (SecACLRef)CFArrayGetValueAtIndex(aclList, i);
         CFArrayRef apps = NULL;
         CFStringRef desc = NULL;
         SecKeychainPromptSelector ps = 0;
         OSStatus subrc = SecACLCopyContents(acl, &apps, &desc, &ps);
-        if (subrc == errSecSuccess) {
-            if (apps != NULL) {
-                app_total += (int)CFArrayGetCount(apps);
-                CFRelease(apps);
+        if (subrc != errSecSuccess) continue;
+        if (apps != NULL) {
+            app_total += (int)CFArrayGetCount(apps);
+            if (drBuf != NULL) {
+                for (CFIndex j = 0; j < CFArrayGetCount(apps); j++) {
+                    SecTrustedApplicationRef appRef = (SecTrustedApplicationRef)CFArrayGetValueAtIndex(apps, j);
+                    // Apple doesn't expose a SecTrustedApplicationCopyRequirement
+                    // in the public API. The supported path is to pull the
+                    // application's serialized data and try two interpretations:
+                    //   1. SecRequirementCreateWithData → DR string (newer apps,
+                    //      created from-requirement)
+                    //   2. UTF-8 path bytes (legacy apps, created from path)
+                    // Whichever decodes wins; we emit one line per trusted app.
+                    CFDataRef appData = NULL;
+                    if (SecTrustedApplicationCopyData(appRef, &appData) != errSecSuccess || appData == NULL) {
+                        continue;
+                    }
+                    CFStringRef appDesc = NULL;
+
+                    // Path #1: try as SecRequirement.
+                    SecRequirementRef req = NULL;
+                    if (SecRequirementCreateWithData(appData, kSecCSDefaultFlags, &req) == errSecSuccess && req != NULL) {
+                        SecRequirementCopyString(req, kSecCSDefaultFlags, &appDesc);
+                        CFRelease(req);
+                    }
+
+                    // Path #2: treat as a UTF-8 path. Trim trailing NUL.
+                    if (appDesc == NULL) {
+                        const UInt8 *bytes = CFDataGetBytePtr(appData);
+                        CFIndex len = CFDataGetLength(appData);
+                        while (len > 0 && bytes[len-1] == 0) len--;
+                        if (len > 0) {
+                            CFStringRef path = CFStringCreateWithBytes(
+                                NULL, bytes, len, kCFStringEncodingUTF8, false);
+                            if (path != NULL) {
+                                // Wrap in a path-shaped synthetic DR so the
+                                // Go-side classifier sees a uniform format.
+                                appDesc = CFStringCreateWithFormat(
+                                    NULL, NULL, CFSTR("identifier \"%@\""), path);
+                                CFRelease(path);
+                            }
+                        }
+                    }
+
+                    if (appDesc != NULL) {
+                        if (!CFSetContainsValue(seenDRs, appDesc)) {
+                            CFSetAddValue(seenDRs, appDesc);
+                            if (CFStringGetLength(drBuf) > 0) {
+                                CFStringAppendCString(drBuf, "\n", kCFStringEncodingUTF8);
+                            }
+                            CFStringAppend(drBuf, appDesc);
+                        }
+                        CFRelease(appDesc);
+                    }
+                    CFRelease(appData);
+                }
             }
-            if (desc != NULL) CFRelease(desc);
+            CFRelease(apps);
         }
+        if (desc != NULL) CFRelease(desc);
     }
     *out_app_count = app_total;
+
+    if (out_drs != NULL && drBuf != NULL) {
+        CFIndex bufSize = CFStringGetMaximumSizeForEncoding(CFStringGetLength(drBuf), kCFStringEncodingUTF8) + 1;
+        char *cstr = malloc(bufSize);
+        if (cstr != NULL) {
+            if (CFStringGetCString(drBuf, cstr, bufSize, kCFStringEncodingUTF8)) {
+                *out_drs = cstr;
+            } else {
+                free(cstr);
+                *out_drs = NULL;
+            }
+        }
+        CFRelease(drBuf);
+    }
+    if (seenDRs != NULL) CFRelease(seenDRs);
+
     CFRelease(aclList);
     return errSecSuccess;
 }
@@ -373,6 +451,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"unsafe"
 )
 
@@ -422,36 +501,42 @@ func inspectGenericPasswordACL(service, account string) (aclCount, appCount int,
 // identity but only one of the two exists on this machine).
 var ErrSigningKeyNotFound = errors.New("signing key not found")
 
-// InspectSigningKeyACL looks up a private-key item by its label in
-// the user's login keychain (e.g. "Charon Self-Signed",
-// "Developer ID Application: <Name> (<TEAMID>)") and returns the
-// same ACL signals as the generic-password equivalent.
-//
-// For a charon-related signing key, the desired state is appCount=0
-// (empty trusted-applications list → every codesign use prompts).
-// Any non-zero appCount means at least one binary can use the key
-// without a user click — defeating defense layer 5 (A10 in the
-// threat model) and breaking the agent's "can't silently sign as
-// charon" property.
-//
-// Reading the ACL is metadata-only; does not prompt for key use.
-//
-// Returns ErrSigningKeyNotFound (wrapping errSecItemNotFound) when
-// no key matches the label.
+// InspectSigningKeyACL looks up a private-key item by its certificate
+// label and returns ACL signals. See InspectSigningKeyACLDetailed for
+// the variant that also returns each trusted application's DR text.
 func InspectSigningKeyACL(label string) (aclCount, appCount int, err error) {
+	ac, app, _, err := InspectSigningKeyACLDetailed(label)
+	return ac, app, err
+}
+
+// InspectSigningKeyACLDetailed extends InspectSigningKeyACL with the
+// per-trusted-application Designated Requirement strings — the actual
+// codesign predicates the kernel evaluates. Strings are deduplicated
+// (one per unique DR even if it appears in multiple ACLs).
+//
+// Returns ErrSigningKeyNotFound when no key matches the label.
+func InspectSigningKeyACLDetailed(label string) (aclCount, appCount int, drs []string, err error) {
 	cLabel := C.CString(label)
 	defer C.free(unsafe.Pointer(cLabel))
 
 	var ac, app C.int
-	rc := C.charon_inspect_key_acl_by_label(cLabel, &ac, &app)
+	var drsPtr *C.char
+	rc := C.charon_inspect_key_acl_by_label(cLabel, &ac, &app, &drsPtr)
 	const errSecItemNotFound = -25300
 	if rc == errSecItemNotFound {
-		return 0, 0, ErrSigningKeyNotFound
+		return 0, 0, nil, ErrSigningKeyNotFound
 	}
 	if rc != 0 {
-		return 0, 0, fmt.Errorf("inspect signing key %q: OSStatus %d", label, int(rc))
+		return 0, 0, nil, fmt.Errorf("inspect signing key %q: OSStatus %d", label, int(rc))
 	}
-	return int(ac), int(app), nil
+	if drsPtr != nil {
+		s := C.GoString(drsPtr)
+		C.free(unsafe.Pointer(drsPtr))
+		if s != "" {
+			drs = strings.Split(s, "\n")
+		}
+	}
+	return int(ac), int(app), drs, nil
 }
 
 // deleteGenericPassword removes a generic-password keychain item.

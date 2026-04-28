@@ -42,6 +42,12 @@ func InspectSigningKeyACL(label string) (aclCount, appCount int, err error) {
 	return 0, 0, fmt.Errorf("InspectSigningKeyACL requires darwin+cgo")
 }
 
+// InspectSigningKeyACLDetailed mirrors the darwin+cgo signature for
+// build compatibility; same unsupported error.
+func InspectSigningKeyACLDetailed(label string) (aclCount, appCount int, drs []string, err error) {
+	return 0, 0, nil, fmt.Errorf("InspectSigningKeyACLDetailed requires darwin+cgo")
+}
+
 func New() *Store {
 	return &Store{service: ResolveServiceName()}
 }
