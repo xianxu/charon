@@ -1,6 +1,6 @@
 ---
 id: 000011
-status: open
+status: working
 deps: [000003, 000010]
 github_issue:
 created: 2026-04-28
@@ -96,6 +96,63 @@ Sketch (detailed plan when prerequisites in hand):
 6. Validate on Tahoe: install, grant FDA, run `make security`, expect
    TCC reads to actually succeed.
 7. Resume #000010 M6.
+
+## Log
+
+- 2026-04-28: Apple Developer Program renewed. Personal Apple ID (Xian Xu).
+  Team ID `23GUFD3P3G`. Generated CSR via Keychain Access → Certificate
+  Assistant; downloaded G2 Sub-CA Developer ID Application cert. Initially
+  showed `CSSMERR_TP_NOT_TRUSTED` because the G2 intermediate
+  (`DeveloperIDG2CA.cer`) wasn't installed; fetched from
+  <https://www.apple.com/certificateauthority/>, double-clicked, chain
+  validates. `security find-identity -v -p codesigning` returns the
+  Dev ID identity.
+- 2026-04-28: Wired auto-detect into `Makefile.local`. `SIGN_IDENTITY`
+  picks the first `Developer ID Application` cert from the login keychain;
+  falls back to `Charon Self-Signed` when absent. `make
+  print-sign-identity` reveals which one is selected. No M4 DR predicate
+  change needed: the ACL captures the running binary's DR via
+  `SecTrustedApplicationCreateFromPath` at write time, so subsequent
+  `make install` runs automatically write entries pinned to the new DR.
+
+## Migration runbook
+
+To pick up Dev ID signing on a machine with prior self-signed-era
+keychain entries:
+
+```bash
+# 1. Confirm auto-detect found the Dev ID identity.
+make print-sign-identity
+# Expect: SIGN_IDENTITY = Developer ID Application: <Name> (<TEAMID>)
+
+# 2. Re-sign + install charon.
+make install
+# Click "Allow" on the Keychain Access dialog for the Dev ID private
+# key the first time. NEVER "Always Allow" — same A10 hygiene as the
+# self-signed key.
+
+# 3. Delete old self-signed-era charon keychain entries. The new
+# binary's DR doesn't satisfy their existing ACLs, so writes would
+# fail with errSecAuthFailed.
+security delete-generic-password -s charon -a _ca:cert  2>/dev/null
+security delete-generic-password -s charon -a _ca:key   2>/dev/null
+# For each OAuth account currently registered:
+charon accounts list                    # see what to delete
+security delete-generic-password -s charon -a "google:<email>"
+
+# 4. Regenerate CA + re-auth accounts.
+charon serve &                          # writes new CA cert/key with new DR
+sleep 1
+kill %1
+charon auth google <email>              # writes new token with new DR
+
+# 5. Re-sign + reinstall the security audit bundle.
+make security-uninstall                 # clean slate
+make security-install                   # signs Charon Security.app with Dev ID
+# In FDA pane: drag the new bundle in, toggle on. On Tahoe this should
+# now actually grant FDA (the original blocker that motivated #11).
+make security                           # verify TCC reads work
+```
 
 ## Notes
 

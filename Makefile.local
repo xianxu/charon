@@ -1,16 +1,30 @@
 # Repo-specific Makefile targets.
 # This file is included by Makefile — add your own targets here.
 
-.PHONY: build sign test run clean signing-identity install \
+.PHONY: build sign test run clean signing-identity install print-sign-identity \
         security-build security-install security security-remedy security-uninstall
 
 # ── Codesigning configuration ────────────────────────────────────────────────
-# These two values must stay in sync with charonCodesignIdentifier in
+# CODESIGN_IDENTIFIER must stay in sync with charonCodesignIdentifier in
 # internal/vault/keychain/codesign_darwin.go. The runtime self-check uses
-# the identifier; the keychain ACL pins to the leaf cert hash that gets
-# embedded by codesign.
-SIGN_IDENTITY       ?= Charon Self-Signed
+# the identifier; the M4 keychain ACL captures whatever DR the running
+# binary has via SecTrustedApplicationCreateFromPath at write time.
+#
+# SIGN_IDENTITY auto-detects: Apple Developer ID (preferred — Apple-anchored
+# trust, satisfies Tahoe TCC / Gatekeeper) if present in the login keychain;
+# falls back to "Charon Self-Signed" (M4 ACL still works, but Tahoe TCC
+# silently denies — see issue #000011). Override at the command line:
+#
+#     make install SIGN_IDENTITY="Charon Self-Signed"
+#
+DEV_ID_IDENTITY     := $(shell security find-identity -v -p codesigning 2>/dev/null | grep -m1 "Developer ID Application:" | sed -E 's/.*"([^"]+)".*/\1/')
+SIGN_IDENTITY       ?= $(or $(DEV_ID_IDENTITY),Charon Self-Signed)
 CODESIGN_IDENTIFIER ?= com.charon.cli
+
+# Reveal which identity will be used. Useful when debugging signing
+# issues; harmless when not.
+print-sign-identity:
+	@echo "SIGN_IDENTITY = $(SIGN_IDENTITY)"
 
 build:
 	go build -o bin/charon ./cmd/charon
