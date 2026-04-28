@@ -110,15 +110,18 @@ table.
 | **4** | Terminal/IDE has no Screen Recording grant | …same pane, Screen Recording section |
 | **5** | Terminal/IDE has no Automation grant to credential apps (Keychain Access, 1Password, Bitwarden, etc.) | …same pane, Automation section |
 | **6** | Sudo cache empty when launching agents | `sudo -k` before, fresh terminal afterwards |
-| **7** | **Always Allow never clicked** on the charon signing-key dialog — trusted-apps list is empty | `make security` reports no `charon-signing-acl-*` finding (with caveat: counts only, doesn't yet name the trusted apps); or Keychain Access → identity → Get Info → Access Control |
+| **7** | **Always Allow never clicked** on the charon signing-key dialog — and no `codesign` / `security` CLI in the key's trusted-applications list (Apple-default entries like Certificate Assistant, racoon, ServerManagerDaemon are tolerated) | `make security` rolls finding to Hygiene with verdict "all benign" if only Apple defaults are present, Critical if codesign / security CLI are trusted, Important if any entry is unrecognized |
 | **8** | Charon's keychain entries have ACLs | `make security` reports no `charon-entries-acl-missing-*` finding |
 | **9** | No suspicious launchd persistence | `make security` lists what's there; user reviews |
 
 `make security` automates all nine. Caveats: items 2–5 require Full
 Disk Access on the bundle (Tahoe needs Dev ID + notarization for
-that — done in #000011); item 7 currently counts trusted apps
-without naming them (depth improvement tracked in
-[#000012](../workshop/issues/000012-audit-evolution.md) item A).
+that — done in #000011); item 7's classifier covers the named
+catastrophic apps (codesign, security CLI) and ~6 Apple-default
+benign apps — anything outside those lists surfaces as "unknown"
+for manual review (curated list maintained in
+`internal/security/check_charon.go`; new patterns get added as
+they're encountered).
 
 The single most overlooked item is **#3, Accessibility on a terminal**.
 A process with Accessibility can synthesize keystrokes and clicks,

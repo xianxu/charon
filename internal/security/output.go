@@ -76,7 +76,7 @@ var barItemLabels = map[BarItem]string{
 	BarTerminalScreen:     "Terminal/IDE has no Screen Recording",
 	BarTerminalEvents:     "Terminal/IDE has no AppleEvents to credential apps",
 	BarSudoCache:          "Sudo cache empty in this shell",
-	BarSigningKeyACL:      "Charon signing-key trusted-apps list is empty",
+	BarSigningKeyACL:      "Charon signing-key has no dangerous trusted apps",
 	BarKeychainEntries:    "Charon keychain entries have ACLs",
 	BarLaunchdPersistence: "No suspicious launchd persistence",
 }
