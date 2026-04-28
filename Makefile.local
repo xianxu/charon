@@ -43,14 +43,35 @@ test-integration:
 #
 # Requires that `make signing-identity` has been run once. Errors out
 # (with a hint) otherwise.
+#
+# --options runtime enables Apple's hardened runtime, which is the
+# blanket fix for the A5 (in-process injection) class:
+#   - blocks DYLD_INSERT_LIBRARIES injection
+#   - requires entitlements for debugger attach
+#   - blocks unsigned dylib loading
+#   - blocks unsigned executable memory
+# Charon doesn't need any weakening entitlements: no JIT, no
+# debugger-attach requirement, no unsigned libraries to load. Pure-Go
+# (with CGo only for the keychain framework) operates fine under
+# hardened runtime defaults.
+#
+# --timestamp signs with an Apple timestamp authority. Required for
+# notarization (which we don't do for charon proper today, since its
+# security boundary doesn't go through TCC). Cheap to include now in
+# case we ever need to notarize (e.g. for distribution).
 sign: build
 	@if ! security find-identity ~/Library/Keychains/login.keychain-db 2>/dev/null | grep -q '"$(SIGN_IDENTITY)"'; then \
 		echo "Error: '$(SIGN_IDENTITY)' identity not found in login keychain." ; \
 		echo "Run 'make signing-identity' first to bootstrap a self-signed identity." ; \
 		exit 1 ; \
 	fi
-	codesign --force --sign "$(SIGN_IDENTITY)" --identifier "$(CODESIGN_IDENTIFIER)" bin/charon
+	codesign --force --sign "$(SIGN_IDENTITY)" \
+	         --identifier "$(CODESIGN_IDENTIFIER)" \
+	         --options runtime \
+	         --timestamp \
+	         bin/charon
 	codesign --verify --verbose=1 bin/charon
+	@codesign -dvv bin/charon 2>&1 | grep -E '^(Identifier|TeamIdentifier|Authority|CodeDirectory)' | sed 's/^/    /'
 
 install: sign
 	@mkdir -p ~/.local/bin
