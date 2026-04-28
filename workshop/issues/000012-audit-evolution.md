@@ -187,15 +187,18 @@ completeness.
 
 Roughly decreasing value-per-effort:
 
-1. **(A)** Enumerate trusted apps by name in keychain entries —
-   concrete user ask, catches the A10-class drift that count-only
-   checks gloss over. **Higher priority now that (B) is landed but
-   coarse-grained**: B counts but can't say whether the trusted apps
-   are catastrophic (codesign) or benign (Apple system services).
+1. ~~(A) Enumerate trusted apps by name~~ — landed 2026-04-28 for
+   the signing-key path. Extending to charon-namespace keychain
+   entries is the remaining bit (broader scope still open).
 2. ~~(B) Programmatic signing-key ACL inspection~~ — landed 2026-04-28.
-3. **(F)** Charon binary self-attestation — catches the stale-daemon class of bug that motivated dev/prod split.
-4. **(E)** FileVault + Time Machine encryption status — closes the user-checklist gap from threat-model item #4.
-5. Everything else as motivation arrives.
+3. ~~(G) Hardened runtime on charon proper~~ — landed 2026-04-28.
+4. **(F)** Charon binary self-attestation — catches the stale-daemon
+   class of bug that motivated dev/prod split. Could include a
+   hardened-runtime sanity check on the installed binary as a
+   sub-bullet.
+5. **(E)** FileVault + Time Machine encryption status — closes the
+   user-checklist gap from threat-model open item #3.
+6. Everything else as motivation arrives.
 
 ## Notes
 

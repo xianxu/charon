@@ -393,16 +393,20 @@ this isn't a risk.
 attach. Once injected, the attacker code runs as charon — DR matches,
 ACL trivially satisfied.
 
-🟡 Partial. `Charon Security.app` (the audit bundle) signs with
-`--options runtime` and ships zero weakening entitlements — that
-bundle is hardened. **`charon` proper (the credential-proxy CLI at
-`~/.local/bin/charon`) is signed but does NOT enable hardened
-runtime**, so injection mitigations there are still TODO. Tracked
-in [#000012](../workshop/issues/000012-audit-evolution.md) item G.
-Now that Apple Developer ID is in place ([#000011](../workshop/issues/000011-apple-developer-id.md)),
-flipping the runtime flag on `make install` is straightforward
-(notarization optional for charon since it's a single Mach-O without
-TCC dependencies).
+✅ Defended. Both binaries sign with `--options runtime` and ship
+zero weakening entitlements:
+
+- `Charon Security.app` (audit bundle) — hardened from inception.
+- `charon` proper (`~/.local/bin/charon`) — hardened as of
+  2026-04-28 ([#000012 item G](../workshop/issues/000012-audit-evolution.md)).
+  Verified functionally: `charon serve`, `charon accounts list`,
+  and proxied requests all work under hardened-runtime defaults.
+
+Defaults in effect: `DYLD_INSERT_LIBRARIES` blocked, debugger attach
+gated by entitlement (we declare none), unsigned dylib loading
+blocked, unsigned executable memory blocked. Charon needs none of
+those weakening exemptions — pure Go (AOT) with CGo only against
+Apple's Security framework.
 
 ### A6. Refresh token blast radius
 
@@ -618,33 +622,31 @@ because its security boundary (M4 keychain ACL) routes through
   `make security` walks the 9-item bar (SIP, terminal/IDE TCC,
   sudo cache, signing-key trust list, charon keychain ACLs, launchd
   persistence) with severity-tiered output and JSON support.
+- ✅ **Hardened runtime on `charon` proper** (A5; 2026-04-28).
+  [#000012 item G](../workshop/issues/000012-audit-evolution.md).
+  `make install` signs with `--options runtime` + `--timestamp`;
+  no weakening entitlements declared.
 
 ### Open
 
 Roughly decreasing value-per-effort for a single-user dev tool:
 
-1. **Hardened runtime + entitlements on `charon` proper** (A5).
-   Apple's blanket fix for the in-process injection class. Now that
-   #000011 gave us a Dev ID, this is a one-flag change in the
-   Makefile — `--options runtime` + minimal entitlements plist on
-   `make install`. Tracked in
-   [#000012 item G](../workshop/issues/000012-audit-evolution.md).
+1. **`govulncheck` in CI** (A8). Cheap dependency audit; covers
+   known CVEs in our Go deps. Currently no CI; first step is a
+   `make security-deps` target.
 
-2. **`govulncheck` in CI** (A8). Cheap dependency audit; covers
-   known CVEs in our Go deps.
-
-3. **OS firewall rule sample** (A2). A pf rule (or Little Snitch
+2. **OS firewall rule sample** (A2). A pf rule (or Little Snitch
    profile) blocking outbound TLS to Google API hosts unless via
    localhost. Make it opt-in; document in README.
 
-4. **FileVault + Time Machine encryption checks**. The audit
+3. **FileVault + Time Machine encryption checks**. The audit
    currently doesn't cover the at-rest paths (C1). Adding `fdesetup
    status` + `tmutil destinationinfo` to `charon-security` is
    straightforward — tracked in
    [#000012 item E](../workshop/issues/000012-audit-evolution.md).
 
-5. **Audit naming for `charon` keychain entries' trusted apps**
-   (B/A1 hardening). The signing-key check now names trusted apps;
+4. **Audit naming for `charon` keychain entries' trusted apps**
+   (B/A1 hardening). The signing-key check names trusted apps;
    the same plumbing extends to `charon`-namespace entries to catch
    Always-Allow drift on per-entry ACLs. Tracked in
    [#000012 item A](../workshop/issues/000012-audit-evolution.md)
