@@ -84,10 +84,19 @@ if [ -f "$existing_bin" ] && cmp -s "$BINARY" "$existing_bin"; then
         ok "bundle unchanged, signed by '$SIGN_IDENTITY', notarization=$([ $is_stapled -eq 1 ] && echo stapled || echo skipped) — skipping re-sign"
         exit 0
     fi
-    ok "binary unchanged but signature/notarization stale — re-applying"
+    ok "binary unchanged but signature/notarization stale — re-applying in place"
 else
+    # Binary content differs. Nuke and recreate — notarized+stapled
+    # bundles get a com.apple.macl xattr at the bundle level that can
+    # block in-place writes (`cp: Operation not permitted` even though
+    # the user owns the file), and stapler tickets are bound to the
+    # specific cdhash anyway. Cleanest: tear down and rebuild.
+    if [ -d "$APP_DIR" ]; then
+        rm -rf "$APP_DIR"
+    fi
+    mkdir -p "$APP_DIR/Contents/MacOS"
     cp "$BINARY" "$APP_DIR/Contents/MacOS/charon-security"
-    ok "binary copied"
+    ok "binary copied (recreated bundle from scratch)"
 fi
 
 # Write Info.plist. LSUIElement=true makes this a background app — no
