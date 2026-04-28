@@ -31,6 +31,12 @@ func (s *Store) InspectACL(account string) (aclCount, appCount int, err error) {
 	return 0, 0, fmt.Errorf("InspectACL requires darwin+cgo")
 }
 
+// InspectACLDetailed mirrors the darwin+cgo signature for build
+// compatibility; same unsupported error.
+func (s *Store) InspectACLDetailed(account string) (aclCount, appCount int, drs []string, err error) {
+	return 0, 0, nil, fmt.Errorf("InspectACLDetailed requires darwin+cgo")
+}
+
 // ErrSigningKeyNotFound mirrors the darwin+cgo sentinel so callers
 // can branch on it on either build path. The fallback never returns
 // it (it always returns the unsupported error), but having the

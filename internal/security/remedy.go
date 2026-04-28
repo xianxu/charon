@@ -284,23 +284,34 @@ FileVault closes this path by encrypting the entire boot volume with a key deriv
 	},
 	{
 		Ref:   "charon-entries-acl",
-		Title: "Charon keychain entry is missing or has weak ACL",
-		Why: `Each entry in the ` + "`charon`" + ` keychain namespace should have a ` + "`SecAccess`" + ` whose trusted-applications list pins to charon's designated requirement (` + "`identifier \"com.charon.cli\" and certificate leaf = H\"<sha1>\"`" + `). An entry without that ACL is readable by any process running as your user via ` + "`security find-generic-password`" + ` — exactly the bypass M4 was supposed to eliminate.
+		Title: "Charon keychain entry has missing/weak ACL or extra trusted apps",
+		Why: `Each entry in the ` + "`charon`" + ` keychain namespace should have a ` + "`SecAccess`" + ` whose trusted-applications list contains exactly one entry: charon itself. An entry without that ACL — or with extra trusted apps beyond charon — opens the M4 boundary that's supposed to keep your tokens private from foreign readers.
 
-**Common cause**: a stale ` + "`charon serve`" + ` daemon running an older binary wrote the entry before M4 landed (or after a code change that regressed the path). The entry inherits the writer's behavior, not the current binary's.`,
-		Fix: "**Stop any stale `charon serve` instances**:\n" +
+**Three failure modes the audit distinguishes**:
+
+- ` + "`charon-entries-acl-missing-*`" + ` — entry has no SecAccess at all. Critical. Any process can read via ` + "`security find-generic-password`" + `. Cause: stale ` + "`charon serve`" + ` daemon wrote it before M4 landed (or after a regression).
+- ` + "`charon-entries-acl-extra-*`" + ` (catastrophic detail) — Critical. Extra trusted app is ` + "`/usr/bin/codesign`" + ` or ` + "`/usr/bin/security`" + ` — silent reads possible by any process. Same kind of issue as the signing-key A10 case but per-entry.
+- ` + "`charon-entries-acl-extra-*`" + ` (unrecognized detail) — Important. Extra trusted app is something the classifier doesn't recognize. Could be benign (a tool you intentionally Always-Allowed) or hostile (an attacker added itself); user judgment.`,
+		Fix: "### For `charon-entries-acl-missing-*`\n\n" +
+			"Stop any stale `charon serve` instances and re-write the affected entries:\n\n" +
 			"```bash\n" +
 			"launchctl bootout gui/$(id -u)/com.charon.proxy   # if launched via launchd\n" +
 			"pkill -f \"charon serve\"\n" +
 			"```\n\n" +
-			"**Re-write the affected entry**: any operation that writes the entry will now go through the ACL'd path.\n\n" +
-			"For OAuth tokens specifically, the safest reset is **revoke + re-auth** the affected account: that drops the old entry and creates a new one with a fresh ACL.\n\n" +
-			"**Manual inspection** of one entry:\n" +
+			"For OAuth tokens, the safest reset is **revoke + re-auth** the affected account — drops the old entry and creates a fresh one with a proper ACL. For `_ca:cert` / `_ca:key`, deleting them and restarting `charon serve` regenerates them.\n\n" +
+			"### For `charon-entries-acl-extra-*`\n\n" +
+			"Open Keychain Access:\n" +
+			"```bash\n" +
+			"open /System/Applications/Utilities/Keychain\\ Access.app\n" +
+			"```\n" +
+			"Search for `charon` (the service name). Right-click the affected entry → Get Info → Access Control. Highlight every row that ISN'T charon and click `−` → Save Changes.\n\n" +
+			"For the catastrophic case (`/usr/bin/codesign` or `/usr/bin/security` in the list): consider revoking + re-authing the affected OAuth account, since you don't know how long the silent-read window has been open.\n\n" +
+			"### Verify\n\n" +
 			"```bash\n" +
 			"security find-generic-password -s charon -a <account> -g\n" +
 			"```\n" +
-			"Healthy output includes an `Access:` block listing the trusted application. Missing or empty `Access:` line → the entry has no ACL.",
-		SeeAlso: "`docs/threat-model.md` → **Defense layer 3** (Keychain ACL).",
+			"Healthy output includes an `Access:` block listing exactly one trusted application: charon.",
+		SeeAlso: "`docs/threat-model.md` → **Defense layer 3** (Keychain ACL); related: `charon-signing-acl` for the same pattern on the signing key.",
 	},
 }
 

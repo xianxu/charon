@@ -211,9 +211,9 @@ completeness.
 
 Roughly decreasing value-per-effort:
 
-1. ~~(A) Enumerate trusted apps by name~~ — landed 2026-04-28 for
-   the signing-key path. Extending to charon-namespace keychain
-   entries is the remaining bit (broader scope still open).
+1. ~~(A) Enumerate trusted apps by name~~ — landed 2026-04-28
+   (signing-key path, then extended to charon-namespace keychain
+   entries — full scope done).
 2. ~~(B) Programmatic signing-key ACL inspection~~ — landed 2026-04-28.
 3. ~~(G) Hardened runtime on charon proper~~ — landed 2026-04-28.
 4. ~~(F) Charon binary self-attestation~~ — first pass landed

@@ -79,7 +79,7 @@ func inspectCharonNamespace(service string) ([]Finding, int) {
 	var findings []Finding
 	checked := 0
 	for _, account := range accounts {
-		ac, app, err := store.InspectACL(account)
+		ac, app, drs, err := store.InspectACLDetailed(account)
 		if err != nil {
 			if errors.Is(err, errInspectUnavailable) {
 				return []Finding{{
@@ -106,20 +106,62 @@ func inspectCharonNamespace(service string) ([]Finding, int) {
 				Affects:   []string{label},
 				BarItem:   BarKeychainEntries,
 			})
-		case ac > 0 && app > 1:
+		case app > 0:
+			classified := classifyTrustedAppsForEntry(drs)
+			worst := worstTrustedAppVerdict(classified)
+			if worst == verdictExpected {
+				// All trusted apps are the legitimate charon DR.
+				// This is the healthy state for charon entries —
+				// silent.
+				continue
+			}
+			sev := SevHygiene
+			titleSuffix := "(includes only Apple-default benign entries beyond charon)"
+			switch worst {
+			case verdictCatastrophic:
+				sev = SevCritical
+				titleSuffix = "(includes catastrophic entries — see detail)"
+			case verdictUnknown:
+				sev = SevImportant
+				titleSuffix = "(includes unrecognized entries — see detail)"
+			}
 			findings = append(findings, Finding{
-				ID:        "charon-entries-acl-many-" + service + "-" + account,
-				Severity:  SevImportant,
-				Title:     fmt.Sprintf("Keychain entry %q has %d trusted applications (expected 1)", label, app),
-				Detail:    "Multiple apps in the trusted-applications list. Expected state is one entry: charon's own DR. Verify each via Keychain Access → Get Info → Access Control.",
+				ID:        "charon-entries-acl-extra-" + service + "-" + account,
+				Severity:  sev,
+				Title:     fmt.Sprintf("Keychain entry %q trusts %d application(s) %s", label, app, titleSuffix),
+				Detail:    formatTrustedAppsDetail(label, classified),
 				RemedyRef: "charon-entries-acl",
 				Affects:   []string{label},
 				BarItem:   BarKeychainEntries,
 			})
-			// (>0, 0) and (>0, 1) — healthy. No finding.
+			// (>0, 0) — always-prompt mode. Silent. No finding.
 		}
 	}
 	return findings, checked
+}
+
+// classifyTrustedAppsForEntry classifies each trusted-app DR string
+// from a charon-namespace keychain entry. Recognizes charon's own
+// trust as verdictExpected; defers everything else to the shared
+// classifyOne (used by signing-key check too).
+//
+// Two recognition patterns:
+//   - `identifier "com.charon.cli"` — bundle-ID DR (when Apple
+//     stored the binary's actual code-signing requirement).
+//   - `/charon"` — path-based form (when Apple stored the binary's
+//     path; the C side wraps it as `identifier "/path/to/charon"`).
+//     The trailing close-quote anchors to a binary basename of
+//     exactly `charon` (no `charon-foo` ambiguity).
+func classifyTrustedAppsForEntry(drs []string) []classifiedTrustedApp {
+	expected := []string{
+		`identifier "com.charon.cli"`,
+		`/charon"`,
+	}
+	out := make([]classifiedTrustedApp, 0, len(drs))
+	for _, dr := range drs {
+		out = append(out, classifyOneFor(dr, expected...))
+	}
+	return out
 }
 
 // errInspectUnavailable is the sentinel the keychain package returns on
@@ -246,16 +288,22 @@ func CheckCharonSigningKeyACL() []Finding {
 
 // trustedAppVerdict captures the "is this entry safe?" classification
 // for one trusted application's Designated Requirement.
+//
+// Ordering matters: worstTrustedAppVerdict picks the max. Lower =
+// safer.
 type trustedAppVerdict int
 
 const (
-	verdictBenign       trustedAppVerdict = iota // recognized Apple default; safe
+	verdictExpected     trustedAppVerdict = iota // the legitimate writer (charon itself for charon entries); silent
+	verdictBenign                                // recognized Apple default; visible but safe
 	verdictUnknown                               // not on the curated list; user judgment
 	verdictCatastrophic                          // codesign / security CLI / similar; A10 case
 )
 
 func (v trustedAppVerdict) String() string {
 	switch v {
+	case verdictExpected:
+		return "expected"
 	case verdictBenign:
 		return "benign"
 	case verdictCatastrophic:
@@ -329,6 +377,31 @@ var benignIdentifiers = []struct {
 }
 
 func classifyOne(dr string) classifiedTrustedApp {
+	return classifyOneFor(dr, "")
+}
+
+// classifyOneFor is classifyOne with one or more "expected" patterns.
+// Any DR matching one of the patterns gets verdictExpected — used by
+// the charon-entries check to recognize charon's own DR as the
+// legitimate writer (versus the signing-key check which has no
+// expected entries — its desired state is empty).
+//
+// Multiple patterns because the same logical "this is charon" can
+// surface as different DR text depending on how the trusted-app data
+// was stored: bundle-ID DR for proper Mach-O signatures
+// (`identifier "com.charon.cli"`), or path-based fallback when Apple
+// stored the binary's path rather than its DR predicate (visible as
+// `identifier "/path/to/charon"` after the C-side wrapping).
+func classifyOneFor(dr string, expectedPatterns ...string) classifiedTrustedApp {
+	for _, p := range expectedPatterns {
+		if p != "" && strings.Contains(dr, p) {
+			return classifiedTrustedApp{
+				DR: dr, Verdict: verdictExpected,
+				Label:  "charon (expected)",
+				Reason: "the legitimate writer — M4 ACL pins to this",
+			}
+		}
+	}
 	for _, c := range catastrophicIdentifiers {
 		if strings.Contains(dr, c.pattern) {
 			return classifiedTrustedApp{
@@ -343,7 +416,6 @@ func classifyOne(dr string) classifiedTrustedApp {
 			}
 		}
 	}
-	// Pull the identifier "..." substring as the label for unknowns.
 	label := extractIdentifier(dr)
 	if label == "" {
 		label = "(unparseable DR)"
@@ -389,7 +461,7 @@ func worstTrustedAppVerdict(apps []classifiedTrustedApp) trustedAppVerdict {
 
 func formatTrustedAppsDetail(label string, apps []classifiedTrustedApp) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Trusted applications on the private key for %q:\n\n", label)
+	fmt.Fprintf(&b, "Trusted applications on %q:\n\n", label)
 	for _, a := range apps {
 		marker := "✓"
 		switch a.Verdict {
@@ -397,17 +469,19 @@ func formatTrustedAppsDetail(label string, apps []classifiedTrustedApp) string {
 			marker = "✗ CATASTROPHIC"
 		case verdictUnknown:
 			marker = "? unknown"
+		case verdictExpected:
+			marker = "✓ expected"
 		}
 		fmt.Fprintf(&b, "  %s  %s — %s\n", marker, a.Label, a.Reason)
 	}
 	b.WriteString("\nAction: ")
 	switch worstTrustedAppVerdict(apps) {
 	case verdictCatastrophic:
-		b.WriteString("entries marked CATASTROPHIC must be removed immediately. Open Keychain Access → identity → expand cert → right-click private key → Get Info → Access Control → highlight the offending row → click `−` → Save Changes. Consider regenerating the identity entirely if you don't trust the current state.")
+		b.WriteString("entries marked CATASTROPHIC must be removed immediately. Open Keychain Access → find the entry → right-click → Get Info → Access Control → highlight the offending row → click `−` → Save Changes. Consider regenerating the affected credential entirely if you don't trust the current state.")
 	case verdictUnknown:
 		b.WriteString("the unknown entries should be inspected manually in Keychain Access. If they're Apple system services with paths under /System or /usr, probably benign; otherwise treat with suspicion. Add them to internal/security/check_charon.go's classification lists once verified.")
 	default:
-		b.WriteString("all entries are recognized Apple defaults from key generation; no action required for safety. Strict hygiene: remove them anyway via Keychain Access (highlight each row, click `−`, Save Changes). The audit will then pass.")
+		b.WriteString("all entries are recognized as either the expected charon writer or Apple defaults; no action required for safety. Strict hygiene: remove anything beyond `charon (expected)` via Keychain Access. The audit will then pass.")
 	}
 	return b.String()
 }

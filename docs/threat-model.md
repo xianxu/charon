@@ -649,15 +649,23 @@ Roughly decreasing value-per-effort for a single-user dev tool:
    `diskutil info` per destination — tracked in
    [#000012 item E](../workshop/issues/000012-audit-evolution.md).
 
-3. **Audit naming for `charon` keychain entries' trusted apps**
-   (B/A1 hardening). The signing-key check names trusted apps;
-   the same plumbing extends to `charon`-namespace entries to catch
-   Always-Allow drift on per-entry ACLs. Tracked in
-   [#000012 item A](../workshop/issues/000012-audit-evolution.md)
-   (broader scope than what currently landed).
+3. ~~Audit naming for `charon` keychain entries' trusted apps~~ —
+   landed 2026-04-28 ([#000012 item A](../workshop/issues/000012-audit-evolution.md)
+   broader scope). Both signing-key and per-entry checks now name
+   each trusted application and classify
+   expected/benign/unknown/catastrophic.
 
 4. **CI** (general). No CI exists today. When we add one,
    `make govulncheck` should be a required job.
+
+5. **Charon binary DR vs keychain-entry DR comparison** ([#000012
+   item F deeper](../workshop/issues/000012-audit-evolution.md)).
+   The first-pass charon-binary check verifies signing properties
+   in isolation; the deeper check would compare the installed
+   binary's DR against the DR(s) in keychain-entry ACLs and surface
+   "the binary that wrote these entries is no longer the one at
+   `~/.local/bin/charon`" drift. Mostly mechanical now that #12 A
+   broader landed.
 
 The keychain ACL boundary that #000010's test plan verifies — A1
 and A10 — is the one that's unique to charon and was the reason

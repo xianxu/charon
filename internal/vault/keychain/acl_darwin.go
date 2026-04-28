@@ -127,12 +127,13 @@ static OSStatus charon_set_generic_password(
     return rc;
 }
 
-// charon_inspect_generic_password reports two ACL signals about an
-// existing keychain item, useful for tests:
-//   *out_acl_count   — number of ACL entries on the item's SecAccess
-//   *out_app_count   — total number of trusted applications across
-//                      all ACLs (the thing that determines whether a
-//                      foreign reader prompts or is silently denied)
+// charon_inspect_generic_password reports ACL signals about an
+// existing keychain item:
+//   *out_acl_count — number of ACL entries on the item's SecAccess
+//   *out_app_count — total trusted applications across all ACLs
+//   out_drs (optional, NULL to skip) — newline-separated DR strings
+//                  for each trusted app, deduplicated. Caller must
+//                  free() the returned buffer.
 //
 // Returns 0 on success, errSecItemNotFound if no such item, or a
 // non-zero OSStatus on failure.
@@ -140,11 +141,17 @@ static OSStatus charon_set_generic_password(
 // "No ACL attached" is reported as out_acl_count=0, out_app_count=0
 // — distinguishable from "default ACL trusts only writer" (acl_count>0,
 // app_count=1) and "ACL with multiple trusted apps" (app_count>1).
+//
+// Mirrors the DR-extraction logic in charon_inspect_key_acl_by_label
+// (signing-key path); the SecACLCopyContents → SecACL contents →
+// SecTrustedApplicationCopyData → SecRequirement decode chain is
+// identical between the two item classes.
 static OSStatus charon_inspect_generic_password(
     const char *service,
     const char *account,
     int *out_acl_count,
-    int *out_app_count
+    int *out_app_count,
+    char **out_drs
 ) {
     *out_acl_count = 0;
     *out_app_count = 0;
@@ -170,21 +177,79 @@ static OSStatus charon_inspect_generic_password(
 
     *out_acl_count = (int)CFArrayGetCount(aclList);
     int app_total = 0;
+    CFMutableStringRef drBuf = (out_drs != NULL) ? CFStringCreateMutable(NULL, 0) : NULL;
+    CFMutableSetRef seenDRs = (out_drs != NULL) ? CFSetCreateMutable(NULL, 0, &kCFTypeSetCallBacks) : NULL;
+
     for (CFIndex i = 0; i < CFArrayGetCount(aclList); i++) {
         SecACLRef acl = (SecACLRef)CFArrayGetValueAtIndex(aclList, i);
         CFArrayRef apps = NULL;
         CFStringRef desc = NULL;
         SecKeychainPromptSelector ps = 0;
         OSStatus subrc = SecACLCopyContents(acl, &apps, &desc, &ps);
-        if (subrc == errSecSuccess) {
-            if (apps != NULL) {
-                app_total += (int)CFArrayGetCount(apps);
-                CFRelease(apps);
+        if (subrc != errSecSuccess) continue;
+        if (apps != NULL) {
+            app_total += (int)CFArrayGetCount(apps);
+            if (drBuf != NULL) {
+                for (CFIndex j = 0; j < CFArrayGetCount(apps); j++) {
+                    SecTrustedApplicationRef appRef = (SecTrustedApplicationRef)CFArrayGetValueAtIndex(apps, j);
+                    CFDataRef appData = NULL;
+                    if (SecTrustedApplicationCopyData(appRef, &appData) != errSecSuccess || appData == NULL) {
+                        continue;
+                    }
+                    CFStringRef appDesc = NULL;
+                    SecRequirementRef req = NULL;
+                    if (SecRequirementCreateWithData(appData, kSecCSDefaultFlags, &req) == errSecSuccess && req != NULL) {
+                        SecRequirementCopyString(req, kSecCSDefaultFlags, &appDesc);
+                        CFRelease(req);
+                    }
+                    if (appDesc == NULL) {
+                        const UInt8 *bytes = CFDataGetBytePtr(appData);
+                        CFIndex len = CFDataGetLength(appData);
+                        while (len > 0 && bytes[len-1] == 0) len--;
+                        if (len > 0) {
+                            CFStringRef path = CFStringCreateWithBytes(
+                                NULL, bytes, len, kCFStringEncodingUTF8, false);
+                            if (path != NULL) {
+                                appDesc = CFStringCreateWithFormat(
+                                    NULL, NULL, CFSTR("identifier \"%@\""), path);
+                                CFRelease(path);
+                            }
+                        }
+                    }
+                    if (appDesc != NULL) {
+                        if (!CFSetContainsValue(seenDRs, appDesc)) {
+                            CFSetAddValue(seenDRs, appDesc);
+                            if (CFStringGetLength(drBuf) > 0) {
+                                CFStringAppendCString(drBuf, "\n", kCFStringEncodingUTF8);
+                            }
+                            CFStringAppend(drBuf, appDesc);
+                        }
+                        CFRelease(appDesc);
+                    }
+                    CFRelease(appData);
+                }
             }
-            if (desc != NULL) CFRelease(desc);
+            CFRelease(apps);
         }
+        if (desc != NULL) CFRelease(desc);
     }
     *out_app_count = app_total;
+
+    if (out_drs != NULL && drBuf != NULL) {
+        CFIndex bufSize = CFStringGetMaximumSizeForEncoding(CFStringGetLength(drBuf), kCFStringEncodingUTF8) + 1;
+        char *cstr = malloc(bufSize);
+        if (cstr != NULL) {
+            if (CFStringGetCString(drBuf, cstr, bufSize, kCFStringEncodingUTF8)) {
+                *out_drs = cstr;
+            } else {
+                free(cstr);
+                *out_drs = NULL;
+            }
+        }
+        CFRelease(drBuf);
+    }
+    if (seenDRs != NULL) CFRelease(seenDRs);
+
     CFRelease(aclList);
     return errSecSuccess;
 }
@@ -460,12 +525,18 @@ import (
 // remain idempotent without callers reaching into OSStatus codes.
 const cErrSecItemNotFound = -25300
 
-// InspectACL returns ACL counts for a charon-namespaced entry in
-// this Store's service. Used by the security audit tool to verify
-// that the M4 ACL boundary actually attached. See
-// inspectGenericPasswordACL for the meaning of the returned counts.
+// InspectACL returns ACL counts for a charon-namespaced entry. See
+// InspectACLDetailed for the variant that also returns each trusted
+// application's DR string.
 func (s *Store) InspectACL(account string) (aclCount, appCount int, err error) {
-	return inspectGenericPasswordACL(s.service, account)
+	ac, app, _, err := s.InspectACLDetailed(account)
+	return ac, app, err
+}
+
+// InspectACLDetailed extends InspectACL with the per-trusted-app
+// Designated Requirement strings. Strings are deduplicated.
+func (s *Store) InspectACLDetailed(account string) (aclCount, appCount int, drs []string, err error) {
+	return inspectGenericPasswordACLDetailed(s.service, account)
 }
 
 // inspectGenericPasswordACL returns ACL signals for an existing
@@ -480,17 +551,30 @@ func (s *Store) InspectACL(account string) (aclCount, appCount int, err error) {
 //	(>0, 1)  → typical default: only one trusted app (the writer)
 //	(>0, N)  → multiple trusted apps
 func inspectGenericPasswordACL(service, account string) (aclCount, appCount int, err error) {
+	ac, app, _, err := inspectGenericPasswordACLDetailed(service, account)
+	return ac, app, err
+}
+
+func inspectGenericPasswordACLDetailed(service, account string) (aclCount, appCount int, drs []string, err error) {
 	cService := C.CString(service)
 	defer C.free(unsafe.Pointer(cService))
 	cAccount := C.CString(account)
 	defer C.free(unsafe.Pointer(cAccount))
 
 	var ac, app C.int
-	rc := C.charon_inspect_generic_password(cService, cAccount, &ac, &app)
+	var drsPtr *C.char
+	rc := C.charon_inspect_generic_password(cService, cAccount, &ac, &app, &drsPtr)
 	if rc != 0 {
-		return 0, 0, fmt.Errorf("inspect %s/%s: OSStatus %d", service, account, int(rc))
+		return 0, 0, nil, fmt.Errorf("inspect %s/%s: OSStatus %d", service, account, int(rc))
 	}
-	return int(ac), int(app), nil
+	if drsPtr != nil {
+		s := C.GoString(drsPtr)
+		C.free(unsafe.Pointer(drsPtr))
+		if s != "" {
+			drs = strings.Split(s, "\n")
+		}
+	}
+	return int(ac), int(app), drs, nil
 }
 
 // ErrSigningKeyNotFound is returned by InspectSigningKeyACL when no
