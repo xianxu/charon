@@ -121,21 +121,33 @@ func TestMarkEvaluatedIdempotent(t *testing.T) {
 	}
 }
 
-func TestReportPrintTextSortsBySeverity(t *testing.T) {
+func TestReportPrintTextHidesHygiene(t *testing.T) {
 	r := Report{Findings: []Finding{
-		{ID: "h", Severity: SevHygiene, Title: "Hygiene"},
-		{ID: "c", Severity: SevCritical, Title: "Critical"},
-		{ID: "i", Severity: SevInfo, Title: "Info"},
+		{ID: "h", Severity: SevHygiene, Title: "Hygiene-thing"},
+		{ID: "c", Severity: SevCritical, Title: "Critical-thing"},
+		{ID: "i", Severity: SevInfo, Title: "Info-thing"},
 	}}
 	var buf strings.Builder
 	r.Print(&buf, PrintOptions{NoColor: true})
 	out := buf.String()
-	// Critical should appear before Info, Info before Hygiene.
+	// Critical and Info show up in the per-finding list. Critical
+	// before Info (severity-desc sort).
 	cIdx := strings.Index(out, "[CRITICAL]")
 	iIdx := strings.Index(out, "[INFO]")
-	hIdx := strings.Index(out, "[HYGIENE]")
-	if !(cIdx >= 0 && cIdx < iIdx && iIdx < hIdx) {
-		t.Fatalf("severity sort wrong: critical@%d info@%d hygiene@%d\n%s", cIdx, iIdx, hIdx, out)
+	if !(cIdx >= 0 && cIdx < iIdx) {
+		t.Fatalf("severity sort wrong: critical@%d info@%d\n%s", cIdx, iIdx, out)
+	}
+	// Hygiene per-finding tag must NOT appear in the printed list.
+	if strings.Contains(out, "[HYGIENE]") {
+		t.Errorf("hygiene findings should be hidden from text output:\n%s", out)
+	}
+	// But the count line should still show hygiene=1.
+	if !strings.Contains(out, "hygiene=1") {
+		t.Errorf("count line should still show hygiene=1:\n%s", out)
+	}
+	// Hidden-tail line should mention how many were suppressed.
+	if !strings.Contains(out, "1 hygiene finding hidden") {
+		t.Errorf("expected hidden-count tail line:\n%s", out)
 	}
 }
 

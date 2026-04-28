@@ -368,10 +368,20 @@ func (r Report) printText(w io.Writer, noColor bool) {
 	)
 
 	// Severity-desc sort puts Critical at the top so actionable
-	// findings aren't buried after Hygiene noise. Stable secondary
-	// sort by ID for deterministic ordering across runs.
-	sorted := make([]Finding, len(r.Findings))
-	copy(sorted, r.Findings)
+	// findings aren't buried. Stable secondary sort by ID for
+	// deterministic ordering across runs. Hygiene-tier findings are
+	// suppressed from the human-readable list — they don't carry
+	// actionable signal (the situations they describe are either
+	// out of the user's hands, like third-party apps' entitlements,
+	// or already known-benign, like Apple-default trusted apps).
+	// They remain in counts above and in --json output for tooling.
+	sorted := make([]Finding, 0, len(r.Findings))
+	for _, f := range r.Findings {
+		if f.Severity == SevHygiene {
+			continue
+		}
+		sorted = append(sorted, f)
+	}
 	sort.SliceStable(sorted, func(i, j int) bool {
 		if sorted[i].Severity != sorted[j].Severity {
 			return sorted[i].Severity > sorted[j].Severity
@@ -389,4 +399,16 @@ func (r Report) printText(w io.Writer, noColor bool) {
 			fmt.Fprintf(w, "      %s\n", hint("→ details: charon-security remedy "+f.RemedyRef))
 		}
 	}
+
+	if hidden := counts[SevHygiene]; hidden > 0 {
+		fmt.Fprintf(w, "  %s\n", hint(fmt.Sprintf("(%d hygiene finding%s hidden — use --json to see them)",
+			hidden, pluralS(hidden))))
+	}
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
