@@ -225,8 +225,9 @@ func (r Report) Counts() map[Severity]int {
 
 // PrintOptions controls Report.Print output shape.
 type PrintOptions struct {
-	NoColor bool // force ANSI off (default: auto-detect TTY on stderr)
-	JSON    bool // emit JSON instead of human text
+	NoColor    bool // force ANSI off (default: auto-detect TTY on stderr)
+	ForceColor bool // force ANSI on (overrides TTY detection — for `make security`'s tempfile-redirect path)
+	JSON       bool // emit JSON instead of human text
 }
 
 // Print renders the report to w using the requested format. JSON
@@ -236,7 +237,7 @@ func (r Report) Print(w io.Writer, opts PrintOptions) error {
 	if opts.JSON {
 		return r.printJSON(w)
 	}
-	r.printText(w, opts.NoColor)
+	r.printText(w, opts)
 	return nil
 }
 
@@ -315,8 +316,9 @@ func styleFor(s Severity) lipgloss.Style {
 	}
 }
 
-func (r Report) printText(w io.Writer, noColor bool) {
-	useColor := !noColor && term.IsTerminal(int(os.Stderr.Fd()))
+func (r Report) printText(w io.Writer, opts PrintOptions) {
+	noColor := opts.NoColor
+	useColor := opts.ForceColor || (!noColor && term.IsTerminal(int(os.Stderr.Fd())))
 	render := func(s Severity, text string) string {
 		if !useColor {
 			return text

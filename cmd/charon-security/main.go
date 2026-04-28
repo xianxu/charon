@@ -14,16 +14,19 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/spf13/cobra"
 	"github.com/xianxu/charon/internal/security"
 )
 
 var (
-	flagNoTCC   bool
-	flagNoColor bool
-	flagJSON    bool
-	flagStrict  bool
-	flagYes     bool
+	flagNoTCC      bool
+	flagNoColor    bool
+	flagForceColor bool
+	flagJSON       bool
+	flagStrict     bool
+	flagYes        bool
 )
 
 func main() {
@@ -36,6 +39,8 @@ func main() {
 			"boundary intact. See docs/threat-model.md.",
 	}
 	root.PersistentFlags().BoolVar(&flagNoColor, "no-color", false, "disable colored output")
+	root.PersistentFlags().BoolVar(&flagForceColor, "force-color", false,
+		"force colored output even when stdout/stderr isn't a TTY (used by `make security` whose `open -W` indirection redirects to a tempfile)")
 	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "emit findings as JSON (overrides text output)")
 
 	root.AddCommand(checkCmd())
@@ -75,6 +80,16 @@ func remedyCmd() *cobra.Command {
 }
 
 func runCheck() error {
+	// Lipgloss/glamour decide whether to emit ANSI based on
+	// termenv's TTY detection. `make security` routes the
+	// bundle's output through a tempfile (LaunchServices doesn't
+	// pipe stdout to the calling terminal), so by default the
+	// rendered output is uncolored even though we then `cat` it
+	// back to a TTY. --force-color overrides termenv's verdict.
+	if flagForceColor {
+		lipgloss.SetColorProfile(termenv.ANSI256)
+	}
+
 	self, err := security.LoadSelfInfo()
 	if err != nil {
 		return fmt.Errorf("inspect self: %w", err)
@@ -162,8 +177,9 @@ func runCheck() error {
 		out = os.Stdout
 	}
 	if err := report.Print(out, security.PrintOptions{
-		NoColor: flagNoColor,
-		JSON:    flagJSON,
+		NoColor:    flagNoColor,
+		ForceColor: flagForceColor,
+		JSON:       flagJSON,
 	}); err != nil {
 		return err
 	}

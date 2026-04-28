@@ -169,7 +169,7 @@ security:
 	@OUT=$$(mktemp); \
 	 open -W -n "$(SECURITY_APP_DIR)" \
 	      --stdout "$$OUT" --stderr "$$OUT" \
-	      --args check --yes ; \
+	      --args check --yes --force-color ; \
 	 RC=$$? ; \
 	 cat "$$OUT" ; \
 	 rm -f "$$OUT" ; \
