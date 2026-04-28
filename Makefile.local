@@ -118,11 +118,11 @@ $(SECURITY_BUNDLE_STAMP): bin/charon-security scripts/dev/build-security-app.sh
 security-build: bin/charon-security
 	@:
 
+# Bundle: signed+notarized .app at ~/Applications, used for the audit
+# `check` subcommand (LaunchServices establishes TCC attribution).
+# CLI: plain unsigned binary at ~/.local/bin, used for no-privilege
+# subcommands like `remedy` where attribution doesn't matter.
 security-install: $(SECURITY_BUNDLE_STAMP)
-	@# CLI on PATH for no-privilege subcommands (remedy, etc.). The
-	# audit's `check` subcommand still must run via the .app bundle
-	# for TCC attribution; this CLI is for the text-printing paths
-	# our finding hints reference.
 	@mkdir -p $(HOME)/.local/bin
 	@cp bin/charon-security $(HOME)/.local/bin/charon-security
 	@echo "Charon Security.app: ready at $(SECURITY_APP_DIR)"
