@@ -434,9 +434,11 @@ Malicious code in `keybase/go-keychain`, `cobra`, charm libraries,
 or our own `internal/` packages. The signed binary legitimately satisfies
 the ACL and exfiltrates tokens.
 
-❌ Not defended. We pin via `go.sum`; we don't run dependency audit
-in CI. **`govulncheck` in CI** is the cheap mitigation (~5 min to
-add, future work).
+🟡 Partial. `make govulncheck` runs Go's official vulnerability
+scanner against the module graph and reachable code. Catches known
+CVEs in pinned dependencies; doesn't catch novel malicious packages
+or pre-disclosure issues. Currently a manual / pre-merge step (no
+CI yet). Module integrity still relies on `go.sum`.
 
 ### A9. Build-toolchain compromise
 
@@ -626,31 +628,34 @@ because its security boundary (M4 keychain ACL) routes through
   [#000012 item G](../workshop/issues/000012-audit-evolution.md).
   `make install` signs with `--options runtime` + `--timestamp`;
   no weakening entitlements declared.
+- ✅ **`govulncheck` integration** (A8; 2026-04-28). `make
+  govulncheck` runs Go's official vulnerability scanner against the
+  module graph + reachable code. Auto-installs the tool on first
+  use. Currently zero reachable CVEs.
 
 ### Open
 
 Roughly decreasing value-per-effort for a single-user dev tool:
 
-1. **`govulncheck` in CI** (A8). Cheap dependency audit; covers
-   known CVEs in our Go deps. Currently no CI; first step is a
-   `make security-deps` target.
-
-2. **OS firewall rule sample** (A2). A pf rule (or Little Snitch
+1. **OS firewall rule sample** (A2). A pf rule (or Little Snitch
    profile) blocking outbound TLS to Google API hosts unless via
    localhost. Make it opt-in; document in README.
 
-3. **FileVault + Time Machine encryption checks**. The audit
+2. **FileVault + Time Machine encryption checks**. The audit
    currently doesn't cover the at-rest paths (C1). Adding `fdesetup
    status` + `tmutil destinationinfo` to `charon-security` is
    straightforward — tracked in
    [#000012 item E](../workshop/issues/000012-audit-evolution.md).
 
-4. **Audit naming for `charon` keychain entries' trusted apps**
+3. **Audit naming for `charon` keychain entries' trusted apps**
    (B/A1 hardening). The signing-key check names trusted apps;
    the same plumbing extends to `charon`-namespace entries to catch
    Always-Allow drift on per-entry ACLs. Tracked in
    [#000012 item A](../workshop/issues/000012-audit-evolution.md)
    (broader scope than what currently landed).
+
+4. **CI** (general). No CI exists today. When we add one,
+   `make govulncheck` should be a required job.
 
 The keychain ACL boundary that #000010's test plan verifies — A1
 and A10 — is the one that's unique to charon and was the reason

@@ -2,7 +2,8 @@
 # This file is included by Makefile — add your own targets here.
 
 .PHONY: build sign test run clean signing-identity install print-sign-identity \
-        security-build security-install security security-remedy security-uninstall
+        security-build security-install security security-remedy security-uninstall \
+        govulncheck
 
 # ── Codesigning configuration ────────────────────────────────────────────────
 # CODESIGN_IDENTIFIER must stay in sync with charonCodesignIdentifier in
@@ -89,6 +90,23 @@ install: sign
 
 clean:
 	rm -rf bin/
+
+# Dependency CVE audit. Scans the Go module graph + reachable code for
+# known vulnerabilities (govulncheck reports only what the call graph
+# actually reaches, so unused vuln'd functions in dependencies don't
+# generate false positives).
+#
+# Auto-installs govulncheck on first run via `go install`, into
+# $(go env GOPATH)/bin. We invoke it by absolute path so PATH
+# manipulation isn't required.
+GOVULNCHECK := $(shell go env GOPATH)/bin/govulncheck
+
+govulncheck:
+	@if [ ! -x "$(GOVULNCHECK)" ]; then \
+		echo "Installing govulncheck → $(GOVULNCHECK)" ; \
+		go install golang.org/x/vuln/cmd/govulncheck@latest ; \
+	fi
+	$(GOVULNCHECK) ./...
 
 # Bootstrap a self-signed code-signing identity (macOS).
 # Idempotent. See scripts/dev/setup-signing-identity.sh for what this does.
