@@ -61,9 +61,10 @@ const (
 	BarTerminalScreen     BarItem = 4 // Terminal/IDE has no Screen Recording
 	BarTerminalEvents     BarItem = 5 // Terminal/IDE has no AppleEvents to credential apps
 	BarSudoCache          BarItem = 6 // Sudo cache empty when launching agents
-	BarSigningKeyACL      BarItem = 7 // Empty signing-key trusted-apps list
-	BarKeychainEntries    BarItem = 8 // Charon keychain entries have ACLs
-	BarLaunchdPersistence BarItem = 9 // No suspicious launchd persistence
+	BarSigningKeyACL      BarItem = 7  // Empty signing-key trusted-apps list
+	BarKeychainEntries    BarItem = 8  // Charon keychain entries have ACLs
+	BarLaunchdPersistence BarItem = 9  // No suspicious launchd persistence
+	BarCharonBinary       BarItem = 10 // Installed charon binary signed + hardened with expected identifier
 )
 
 // barItemLabels mirror the "reasonable bar" wording in
@@ -79,6 +80,7 @@ var barItemLabels = map[BarItem]string{
 	BarSigningKeyACL:      "Charon signing-key has no dangerous trusted apps",
 	BarKeychainEntries:    "Charon keychain entries have ACLs",
 	BarLaunchdPersistence: "No suspicious launchd persistence",
+	BarCharonBinary:       "Installed charon CLI is signed + hardened",
 }
 
 // allBarItems is the canonical ordered enumeration. Used when
@@ -86,7 +88,7 @@ var barItemLabels = map[BarItem]string{
 var allBarItems = []BarItem{
 	BarSIP, BarTerminalFDA, BarTerminalA11y, BarTerminalScreen,
 	BarTerminalEvents, BarSudoCache, BarSigningKeyACL,
-	BarKeychainEntries, BarLaunchdPersistence,
+	BarKeychainEntries, BarLaunchdPersistence, BarCharonBinary,
 }
 
 // Finding is one item the audit produced. ID is stable across runs and

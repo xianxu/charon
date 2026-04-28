@@ -219,6 +219,45 @@ The bootstrap script intentionally omits ` + "`-T /usr/bin/codesign`" + `. The l
 		SeeAlso: "`docs/threat-model.md` → **A10** (signing key abuse via codesign).",
 	},
 	{
+		Ref:   "charon-binary",
+		Title: "Installed charon CLI codesign attestation",
+		Why: `The installed charon binary at ` + "`~/.local/bin/charon`" + ` is what reads and writes your OAuth tokens and CA private key. Its codesign properties matter for two reasons:
+
+1. **Identifier + signer**: must match what the M4 keychain ACL expects (` + "`identifier \"com.charon.cli\"`" + ` plus the signer's anchor / leaf hash). A binary with a different identifier or signed by an unauthorized identity won't be able to read the entries silently — and it shouldn't be at this path either.
+2. **Hardened runtime**: blocks DYLD_INSERT_LIBRARIES injection, debugger-attach without entitlement, unsigned dylib loading. Without it, a hostile process running as your user can inject code into a running charon and read decrypted tokens from memory.
+
+The audit checks both via ` + "`codesign -dvv`" + ` on the installed binary. Findings:
+
+- ` + "`charon-binary-not-installed`" + ` — Info, just means you haven't run ` + "`make install`" + `.
+- ` + "`charon-binary-unsigned`" + ` — Critical. Anyone could replace the binary; no signature to verify.
+- ` + "`charon-binary-wrong-identifier`" + ` — Critical. Either misconfigured or impostor.
+- ` + "`charon-binary-not-hardened`" + ` — Important. Lacks hardened runtime, A5 mitigation missing.`,
+		Fix: "**The fix for almost every variant** is the same: re-run `make install` from the charon repo. That signs with the auto-detected identity, sets `Identifier=com.charon.cli`, and enables `--options runtime`.\n\n" +
+			"```bash\n" +
+			"cd /path/to/charon\n" +
+			"make install\n" +
+			"# Click Allow on the keychain dialog (single-use, never Always Allow)\n" +
+			"```\n\n" +
+			"After re-signing, restart any running charon service so it picks up the new binary:\n" +
+			"```bash\n" +
+			"launchctl kickstart -k gui/$(id -u)/com.charon.proxy\n" +
+			"# or:\n" +
+			"charon service uninstall && charon service install\n" +
+			"```\n\n" +
+			"**If `charon-binary-wrong-identifier` shows an unexpected name** — for example `Identifier=com.attacker.foo` — that's an active compromise. Treat the machine as suspect, revoke OAuth tokens at the provider, and inspect what other binaries in `~/.local/bin/` may have been replaced.\n\n" +
+			"**Verify the result**:\n" +
+			"```bash\n" +
+			"codesign -dvv ~/.local/bin/charon 2>&1 | grep -E 'Identifier|Authority|flags'\n" +
+			"```\n" +
+			"Expected:\n" +
+			"```\n" +
+			"Identifier=com.charon.cli\n" +
+			"Authority=Developer ID Application: <Name> (<TEAMID>)   # or Charon Self-Signed\n" +
+			"CodeDirectory v=... flags=0x10000(runtime) ...\n" +
+			"```",
+		SeeAlso: "`docs/threat-model.md` → Defense layers 4 & 5; **A5** (in-process injection); **A10** (signing-key abuse).",
+	},
+	{
 		Ref:   "charon-entries-acl",
 		Title: "Charon keychain entry is missing or has weak ACL",
 		Why: `Each entry in the ` + "`charon`" + ` keychain namespace should have a ` + "`SecAccess`" + ` whose trusted-applications list pins to charon's designated requirement (` + "`identifier \"com.charon.cli\" and certificate leaf = H\"<sha1>\"`" + `). An entry without that ACL is readable by any process running as your user via ` + "`security find-generic-password`" + ` — exactly the bypass M4 was supposed to eliminate.

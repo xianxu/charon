@@ -139,18 +139,26 @@ responsibilities" not currently checked. Easy adds:
 
 Both are privilege-free reads. Hygiene-tier findings if off.
 
-### F. Charon binary self-attestation
+### F. Charon binary self-attestation ✅ landed 2026-04-28 (first pass)
 
-Audit could verify charon's installed binary actually matches what
-keychain entries are pinned to. Specifically:
+`internal/security/check_charon_binary.go` scans
+`~/.local/bin/charon` via `codesign -dvv` and emits findings for:
 
-- Read `~/.local/bin/charon`'s codesign DR via `codesign -dr -`
-- Compare against the DR in any keychain entry's ACL
-- Drift = "an old binary signed entries that the current binary
-  can't read; user needs to re-auth"
+- binary not installed at expected path → Info
+- binary unsigned / signature invalid → Critical
+- binary signed but `Identifier=` is not `com.charon.cli` → Critical
+- binary signed but lacks the hardened-runtime flag → Important
 
-Surfaces the stale-daemon-overwriting-with-old-DR pattern that
-motivated `_dev` namespace splitting in [#000003](000003-code-signing-keychain-acl.md).
+This is bar item 10. Closes the most common stale-binary surface.
+
+**Still TODO under (F)** — comparing the installed binary's DR
+against the DRs stored in keychain entries' ACLs (the deeper "stale
+daemon wrote with an old DR you can no longer satisfy" case). That
+needs the per-entry ACL enumeration from (A) broader scope: get the
+trusted-app DR strings out of keychain entries, compare against the
+running binary's DR. Both pieces share infrastructure with
+`InspectSigningKeyACLDetailed`; once (A) lands for charon-namespace
+entries, the comparison is mechanical.
 
 ### G. Hardened-runtime check for charon proper ✅ landed 2026-04-28
 
@@ -199,10 +207,9 @@ Roughly decreasing value-per-effort:
    entries is the remaining bit (broader scope still open).
 2. ~~(B) Programmatic signing-key ACL inspection~~ — landed 2026-04-28.
 3. ~~(G) Hardened runtime on charon proper~~ — landed 2026-04-28.
-4. **(F)** Charon binary self-attestation — catches the stale-daemon
-   class of bug that motivated dev/prod split. Could include a
-   hardened-runtime sanity check on the installed binary as a
-   sub-bullet.
+4. ~~(F) Charon binary self-attestation~~ — first pass landed
+   2026-04-28 (identifier + hardened-runtime + signed checks). DR-vs-
+   keychain-entry comparison still open; depends on (A) broader.
 5. **(E)** FileVault + Time Machine encryption status — closes the
    user-checklist gap from threat-model open item #3.
 6. Everything else as motivation arrives.

@@ -113,8 +113,9 @@ table.
 | **7** | **Always Allow never clicked** on the charon signing-key dialog — and no `codesign` / `security` CLI in the key's trusted-applications list (Apple-default entries like Certificate Assistant, racoon, ServerManagerDaemon are tolerated) | `make security` rolls finding to Hygiene with verdict "all benign" if only Apple defaults are present, Critical if codesign / security CLI are trusted, Important if any entry is unrecognized |
 | **8** | Charon's keychain entries have ACLs | `make security` reports no `charon-entries-acl-missing-*` finding |
 | **9** | No suspicious launchd persistence | `make security` lists what's there; user reviews |
+| **10** | Installed charon CLI is signed with the expected identifier and hardened runtime | `make security` checks `~/.local/bin/charon` via `codesign -dvv` |
 
-`make security` automates all nine. Caveats: items 2–5 require Full
+`make security` automates all ten. Caveats: items 2–5 require Full
 Disk Access on the bundle (Tahoe needs Dev ID + notarization for
 that — done in #000011); item 7's classifier covers the named
 catastrophic apps (codesign, security CLI) and ~6 Apple-default

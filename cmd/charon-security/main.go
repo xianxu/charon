@@ -155,6 +155,9 @@ func runCheck() error {
 	report.Findings = append(report.Findings, security.CheckCharonSigningKeyACL()...)
 	report.MarkEvaluated(security.BarSigningKeyACL)
 
+	report.Findings = append(report.Findings, security.CheckCharonBinary()...)
+	report.MarkEvaluated(security.BarCharonBinary)
+
 	if flagNoTCC {
 		if !flagYes && security.IsInteractive() {
 			security.RunVisualWalk(os.Stderr)
