@@ -160,6 +160,32 @@ For a structured analysis of what charon defends against, what it
 doesn't, and the ranked list of known weaknesses, see
 [`docs/threat-model.md`](docs/threat-model.md).
 
+### Auditing your environment
+
+Charon's threat model assumes a few things about the surrounding Mac —
+SIP enabled, no overly broad TCC grants on your terminal/IDE, no
+suspicious launchd persistence, charon's keychain ACL boundary intact.
+The companion tool `charon-security` checks each of these and prints
+remediation when something's off:
+
+```
+make security-install   # one-time; signs and drops Charon Security.app
+                        # into ~/Applications. Click "Allow" on the
+                        # keychain prompt (single-use, never "Always
+                        # Allow"). Then drag the .app into System
+                        # Settings → Privacy & Security → Full Disk
+                        # Access and toggle on (so the audit can read
+                        # TCC.db).
+make security           # run the audit
+make security-remedy    # print the full remediation playbook
+```
+
+Findings come tagged Critical / Important / Info / Hygiene; exit code
+rolls up to 0/1/2 for CI consumption. `--json` emits structured output
+for piping to jq. See [`atlas/security-audit.md`](atlas/security-audit.md)
+for the architecture, [`docs/security-audit-test-plan.md`](docs/security-audit-test-plan.md)
+for the test plan.
+
 ## Project layout
 
 ```

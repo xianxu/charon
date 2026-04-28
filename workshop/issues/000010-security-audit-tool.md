@@ -1,6 +1,6 @@
 ---
 id: 000010
-status: working
+status: done
 deps: [000003]
 github_issue:
 created: 2026-04-27
@@ -207,10 +207,16 @@ High-level milestones:
 - [x] **M8** — Remediation prose for each finding ID. `make security-remedy`
   prints the playbook. *(Reordered ahead of M3 per user — more value
   immediately than packaging.)*
-- [ ] **M9** — Manual test plan: run on clean Mac, dirty Mac (intentionally
-  granted Terminal FDA), verify findings + auto-revoke roundtrip.
-- [ ] **M10** — README section + atlas entry. Link from `docs/threat-model.md`
-  "Prioritized future work" item #4.
+- [x] **M9** — Manual test plan in
+  [`docs/security-audit-test-plan.md`](../../docs/security-audit-test-plan.md).
+  Ten tests T1–T10 covering privilege-free checks, detection,
+  charon ACL inspection, severity-driven exit codes, visual mode,
+  TCC reads (deferred to #11 unblocking), JSON output, remedy lookups,
+  install idempotency, uninstall cleanup.
+- [x] **M10** — README section ("Auditing your environment"), new
+  [`atlas/security-audit.md`](../../atlas/security-audit.md), atlas
+  index updated, `docs/threat-model.md` "Prioritized future work" item
+  #4 now points at the tool, item #5 cross-links to #000011.
 
 ## Open questions
 

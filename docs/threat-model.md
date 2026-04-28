@@ -405,14 +405,21 @@ Roughly decreasing value-per-effort for a single-user dev tool:
    profile) blocking outbound TLS to Google API hosts unless via
    localhost. Make it opt-in; document in README.
 
-4. **User-facing security checklist** (B1, C1). One-page doc:
-   "if you use charon, also enable FileVault and encrypted Time Machine
-   backups." Not novel content; just consolidating responsibilities
-   the user owns outside charon.
+4. **User-facing security checklist** (B1, C1). ✅ Largely covered
+   by `charon-security` (`make security`) — automated audit of SIP,
+   sudo cache, terminal/IDE TCC grants, launchd persistence, charon's
+   own keychain ACLs, plus a curated remedy playbook
+   (`charon-security remedy`). FileVault and Time Machine encryption
+   remain user responsibilities not yet checked. See
+   [`security-audit-test-plan.md`](security-audit-test-plan.md) and
+   [`atlas/security-audit.md`](../atlas/security-audit.md).
 
 5. **Apple Developer ID** (long-term). Closes A5 with hardened
    runtime, gives proper revocation, enables notarization for
-   distribution beyond the user's machine.
+   distribution beyond the user's machine. Also unblocks the FDA
+   path of `charon-security` on macOS 26 (Tahoe), where self-signed
+   bundles silently fail TCC enforcement. Tracked in
+   [issue #000011](../workshop/issues/000011-apple-developer-id.md).
 
 The keychain ACL boundary the test plan verifies — A1 and A10 — is
 the one that's unique to charon and was the reason this work existed.

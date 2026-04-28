@@ -1,0 +1,99 @@
+# Charon Security Audit Tool
+
+## What
+
+`charon-security` is a Mac hygiene auditor for agentic-coding workflows.
+Verifies that the environment charon's threat model assumes — SIP
+enabled, no TCC grants on terminals/IDEs, charon's keychain ACL
+boundary intact, no suspicious launchd persistence — actually holds
+on the user's machine. Prints actionable remediation when it doesn't.
+
+Distinct from charon proper: charon is the credential proxy; charon-
+security is a separate binary in `cmd/charon-security/` that audits
+the surrounding environment. Lives in this repo because charon is the
+privacy-sensitive piece of the stack and reuses charon's keychain ACL
+inspection helpers.
+
+## Architecture
+
+```
+make security-install       → builds bin/charon-security, packages as
+                              ~/Applications/Charon Security.app, signs
+                              with Charon Self-Signed (hardened runtime).
+
+make security               → runs the bundled binary. Pure run, never
+                              re-signs (re-signing changes cdhash, which
+                              invalidates TCC grants).
+
+charon-security check       → main audit subcommand
+charon-security remedy <id> → look up remediation for one finding class
+charon-security remedy      → print full playbook (10 entries)
+```
+
+`make security` is the user-facing entry; the rest are knobs for dev
+iteration / CI / scripted use.
+
+## Why a `.app` bundle
+
+TCC keys permissions on the **responsible code**. A bare Mach-O CLI run
+from Terminal gets attributed to `com.apple.Terminal` in TCC. Granting
+Full Disk Access to "the security tool" in that scenario actually
+grants it to Terminal — and revoking would nuke Terminal's FDA. The
+`.app` bundle with its own bundle ID (`com.charon.security`) makes
+TCC see the auditor as a distinct actor.
+
+Bundle ID is intentionally distinct from `com.charon.cli`: revoking
+TCC grants for the auditor must not affect charon, and vice versa.
+
+## Check layers
+
+Three layers, evaluated in order:
+
+1. **Privilege-free** (`internal/security/check_*.go`):
+   - `csrutil status` — SIP enabled?
+   - `sudo -nv` — sudo cache active in this shell?
+   - `~/Library/LaunchAgents` enumeration — third-party persistence?
+   - `codesign -d --entitlements -` per detected app — hardened-runtime
+     weakening entitlements (A5 in threat-model)?
+   - Filesystem + `mdfind` — which terminals/editors/IDEs are installed?
+2. **TCC** (`internal/security/check_tcc.go`):
+   - User + system TCC.db read via `/usr/bin/sqlite3`. Joins rows
+     against detected apps. FDA / Accessibility on terminal=Critical;
+     Screen Recording=Important; AppleEvents to Keychain Access /
+     1Password / Bitwarden / etc.=Critical, others=Important.
+   - Requires FDA on the bundle. Macos 26 limitation deferred to
+     [#000011](../workshop/issues/000011-apple-developer-id.md).
+3. **Charon-specific** (`internal/security/check_charon.go`):
+   - Inspects keychain entries under both `charon` and `charon-dev`
+     namespaces via `keychain.Store.InspectACL`. Verifies the M4
+     SecAccess pinning is intact: `(0,0)` → Critical, `(>0,1)` →
+     healthy (silent), `(>0,N>1)` → Important.
+
+## Severity tiers and exit codes
+
+| Tier      | Exit | Meaning                                           |
+|-----------|------|---------------------------------------------------|
+| Critical  | 2    | Direct compromise of charon's threat-model.       |
+| Important | 1    | Meaningful weakening; not catastrophic alone.     |
+| Info      | 0    | Observational — user judgment.                    |
+| Hygiene   | 0    | General macOS-app-hygiene; not charon-specific.   |
+
+`--strict` promotes every tier up one before rollup (Hygiene→Info,
+Info→Important, Important→Critical) for stricter CI gating.
+
+## Remedy text
+
+`internal/security/remedy.go` curates 10 RemedyEntry records, each
+with Why / Fix / SeeAlso sections in markdown. Rendered via
+charmbracelet/glamour for terminal output (colored headings, fenced
+code blocks, ordered lists). `--no-color` falls back to ASCII style.
+
+Every check that emits a `RemedyRef` has a matching entry; tests
+enforce this (`TestFindingRefsHaveRemedies`).
+
+## See also
+
+- [`docs/threat-model.md`](../docs/threat-model.md) — why each check exists
+- [`docs/security-audit-test-plan.md`](../docs/security-audit-test-plan.md) — manual verification steps
+- [`workshop/issues/000010-security-audit-tool.md`](../workshop/issues/000010-security-audit-tool.md) — design + log
+- [`workshop/issues/000011-apple-developer-id.md`](../workshop/issues/000011-apple-developer-id.md) — the blocker for Tahoe TCC + auto-revoke (M6)
