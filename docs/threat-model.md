@@ -11,6 +11,137 @@ this doc is the canonical place to record the decision and reasoning.
 
 ---
 
+## Posture in one page
+
+### What charon protects, and what it explicitly doesn't
+
+Charon protects **credentials**, not **user content**.
+
+| Protected | Not protected |
+|---|---|
+| OAuth refresh tokens stored in keychain | Files in your home directory |
+| The proxy CA private key | Your shell history, browser cookies, mail stores |
+| The signing key that mints charon-trusted binaries | Outbound network traffic the agent makes (from non-credentialed paths) |
+
+**Why this asymmetry**: an AI agent running on your Mac runs as your
+user. By Unix convention, that already gives it read/write access to
+your home directory, the ability to spawn processes, and the ability
+to make network requests. Trying to "protect" your files from a
+process running as you is a category error — it can read them by any
+of a hundred paths. Charon doesn't try.
+
+What charon does try to do: prevent the agent from **escalating its
+blast radius via stolen credentials**. Without your OAuth tokens or
+the proxy CA, the agent's reach is bounded to "what an unprivileged
+user-level program can do with no access to your accounts." With
+them, the agent can act as you against every API you've authorized —
+read your inbox, send mail in your name, delete files in your Drive,
+etc. — and a leaked refresh token persists for months. Closing that
+escalation path is charon's job.
+
+### The defense in depth, in three conceptual layers
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Layer 3 — Audit hygiene (`charon-security`)                     │
+│   Verifies layers 1 and 2 are intact and the surrounding        │
+│   environment doesn't undermine them.                           │
+└─────────────────────────────────────────────────────────────────┘
+            ▲ confirms ▲
+┌─────────────────────────────────────────────────────────────────┐
+│ Layer 2 — Single-use signing key                                │
+│   Signing key has an empty trusted-applications list. Every     │
+│   `make install` requires a human keychain-Allow click. An      │
+│   agent can't silently sign a binary as charon.                 │
+└─────────────────────────────────────────────────────────────────┘
+            ▲ guards ▲
+┌─────────────────────────────────────────────────────────────────┐
+│ Layer 1 — DR-pinned keychain ACL                                │
+│   Charon's keychain entries are pinned to charon's Designated   │
+│   Requirement (Apple-anchored, team-id, identifier). Only a     │
+│   binary that satisfies the DR can read silently. Anything else │
+│   triggers an Allow/Deny dialog naming the calling process.     │
+└─────────────────────────────────────────────────────────────────┘
+            ▲ holds ▲
+        Credentials in macOS Keychain
+```
+
+**Layer 1 — DR-pinned keychain ACL.** Each charon-managed keychain
+entry has a `SecAccess` whose trusted-applications list contains
+charon's Designated Requirement (`anchor apple generic and certificate
+leaf[subject.OU] = "<TEAMID>" and identifier "com.charon.cli"`).
+Whichever process calls `SecItemCopyMatching` is evaluated against
+that DR. Charon (signed via `make install`) satisfies it, reads
+silently. Any other process — `/usr/bin/security`, an agent's custom
+binary, a stolen-cert imposter — fails the DR and macOS pops a dialog
+naming the calling process. The user's job at that prompt: deny.
+
+**Layer 2 — Single-use signing key.** To produce a binary that
+satisfies layer 1's DR, you need to sign with charon's identity. That
+identity's private key in your login keychain has an **empty
+trusted-applications list** by intent. Every `codesign` invocation —
+i.e., every `make install` — pops a keychain Allow/Deny dialog. The
+agent can't bypass this without a human keystroke. The user's job at
+that prompt: click **Allow**, never **Always Allow**.
+
+**Layer 3 — Audit hygiene** (the `charon-security` tool, in
+[atlas/security-audit.md](../atlas/security-audit.md)). Layers 1 and 2
+hold *if* the user follows the discipline (don't click Always Allow,
+don't grant terminals dangerous TCC permissions, etc.). Layer 3 is the
+recurring check that those properties haven't drifted: SIP enabled,
+no terminal/IDE has FDA or Accessibility, charon's keychain entries
+still have ACLs, the signing key's trusted-apps list is still empty,
+no suspicious launchd persistence. Run via `make security`. Findings
+come tagged Critical / Important / Info / Hygiene.
+
+### User best practices — the reasonable bar
+
+Running an AI agent as your user is reasonable iff **all** of these
+hold. Most are macOS hygiene; one is a discipline charon specifically
+relies on.
+
+| Property | How to check |
+|---|---|
+| SIP enabled | `csrutil status` says `enabled` |
+| Terminal/IDE has no Full Disk Access grant | System Settings → Privacy & Security → Full Disk Access pane has no entry for Terminal, iTerm, Ghostty, VS Code, Cursor, etc. |
+| Terminal/IDE has no Accessibility grant | …same pane, Accessibility section. (Window managers like Rectangle / Hammerspoon are fine; they don't run shells.) |
+| Terminal/IDE has no Screen Recording grant | …same pane, Screen Recording section |
+| Terminal/IDE has no Automation grant to credential apps (Keychain Access, 1Password, Bitwarden, etc.) | …same pane, Automation section |
+| Sudo cache empty when launching agents | `sudo -k` before, fresh terminal afterwards |
+| **Always Allow never clicked** on the charon signing-key dialog | Keychain Access → "Charon Self-Signed" / "Developer ID Application: …" private key → Get Info → Access Control → trusted-apps list is empty |
+| Charon's keychain entries have ACLs | `make security` reports no `charon-entries-acl-missing-*` Critical findings |
+| No suspicious launchd persistence | `make security` lists what's there; user reviews |
+
+`make security` automates 7 of these 9. The remaining two — sudo
+cache state and the signing-key trusted-apps list — are still manual;
+[#000012](../workshop/issues/000012-audit-evolution.md) item B
+tracks moving the signing-key check into the audit.
+
+The single most overlooked item is **Accessibility on a terminal**.
+A process with Accessibility can synthesize keystrokes and clicks,
+which means it can click through layer 1's Allow/Deny dialog itself.
+Layer 1 collapses entirely. Audit it.
+
+### What still leaks even with everything above
+
+Even with all defenses healthy, a hostile agent running as your user
+can still:
+
+- Read all files in your home directory (anything not behind FDA).
+- Make outbound network requests (unless you add OS-level firewall
+  rules; see future-work item #3).
+- Install a launchd persistence beachhead under `~/Library/LaunchAgents/`
+  (audited but not blocked; A7).
+- Call any API the user can call — *minus* anything that requires
+  charon's credentials, which is the credential-bound subset charon
+  is designed to protect.
+
+Charon shrinks the agent's blast radius from "everything you've ever
+authorized" to "what an unprivileged user-level program can do." That
+gap is the value proposition. The defenses above hold that gap.
+
+---
+
 ## Scope
 
 Charon is a personal-machine credential proxy. The threat model assumes:
