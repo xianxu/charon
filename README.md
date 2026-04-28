@@ -133,6 +133,16 @@ charon service install/uninstall/...    # macOS launchd integration
 
 ## Security model
 
+**Charon protects credentials, not user content.** An AI agent running
+on your Mac runs as your user; it can already read your home dir,
+spawn processes, and make network requests. Trying to keep your files
+safe from a process running as you is a category error. If you need
+that, run the agent in a sandbox (Apple's sandbox framework, a
+container runtime, a VM, a restricted user account, etc.) — charon
+doesn't try. What charon *does* try: prevent the agent from
+escalating its blast radius via stolen OAuth tokens or the proxy CA.
+Closing that escalation path is its job.
+
 - **Tokens at rest**: macOS Keychain generic password under service name
   `charon` (or `charon-dev` for unsigned dev binaries; see below).
   Account key is `<provider>:<email>`. Linux secret service support is

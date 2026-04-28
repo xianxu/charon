@@ -3,6 +3,9 @@
 ## What
 Single Go binary that acts as a fully transparent HTTPS forward proxy. AI agents route traffic through it via `HTTPS_PROXY`, and Charon transparently injects credentials into requests. The agent never sees the token, uses real API URLs, requires no code changes.
 
+## Scope (what's protected, what isn't)
+Charon protects **credentials** (OAuth tokens, the proxy CA private key, the signing key), not **user content**. An agent running as your user can read your home directory and spawn processes by default — Unix said yes. If you need content protection, run the agent in a sandbox (Apple's sandbox framework, a container runtime, a VM). Charon's job is narrower: stop credential exfiltration that would let the agent act as you against every API you've authorized. See [`../docs/threat-model.md`](../docs/threat-model.md) for the full posture.
+
 ## Architecture
 ```
 charon serve          → starts HTTPS proxy on localhost:8230

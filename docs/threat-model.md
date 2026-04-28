@@ -28,7 +28,7 @@ user. By Unix convention, that already gives it read/write access to
 your home directory, the ability to spawn processes, and the ability
 to make network requests. Trying to "protect" your files from a
 process running as you is a category error — it can read them by any
-of a hundred paths. Charon doesn't try.
+of a hundred paths. Charon doesn't try. Use a sandbox. 
 
 What charon does try to do: prevent the agent from **escalating its
 blast radius via stolen credentials**. Without your OAuth tokens or
