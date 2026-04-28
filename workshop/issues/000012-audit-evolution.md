@@ -210,8 +210,8 @@ Roughly decreasing value-per-effort:
 4. ~~(F) Charon binary self-attestation~~ — first pass landed
    2026-04-28 (identifier + hardened-runtime + signed checks). DR-vs-
    keychain-entry comparison still open; depends on (A) broader.
-5. **(E)** FileVault + Time Machine encryption status — closes the
-   user-checklist gap from threat-model open item #3.
+5. ~~(E) FileVault~~ — landed 2026-04-28. Time Machine
+   per-destination encryption check still open under (E).
 6. Everything else as motivation arrives.
 
 ## Notes

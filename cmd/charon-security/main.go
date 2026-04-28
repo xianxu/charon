@@ -158,6 +158,9 @@ func runCheck() error {
 	report.Findings = append(report.Findings, security.CheckCharonBinary()...)
 	report.MarkEvaluated(security.BarCharonBinary)
 
+	report.Findings = append(report.Findings, security.CheckFileVault()...)
+	report.MarkEvaluated(security.BarFileVault)
+
 	if flagNoTCC {
 		if !flagYes && security.IsInteractive() {
 			security.RunVisualWalk(os.Stderr)

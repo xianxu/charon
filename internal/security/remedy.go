@@ -258,6 +258,31 @@ The audit checks both via ` + "`codesign -dvv`" + ` on the installed binary. Fin
 		SeeAlso: "`docs/threat-model.md` → Defense layers 4 & 5; **A5** (in-process injection); **A10** (signing-key abuse).",
 	},
 	{
+		Ref:   "filevault",
+		Title: "FileVault enabled (disk encryption at rest)",
+		Why: `Charon's M4 keychain ACL gates **live API access** to your tokens — but it doesn't encrypt the on-disk keychain database itself. An attacker with physical access to your Mac (stolen laptop, border seizure, "evil maid" attack, repair shop with bad faith) can:
+
+1. Boot from another Mac with the disk attached as external storage.
+2. Read ` + "`~/Library/Keychains/login.keychain-db`" + ` directly — it's just a file.
+3. Attempt offline brute-force of the keychain master key.
+
+FileVault closes this path by encrypting the entire boot volume with a key derived from your account password. Without the password (or the recovery key), the disk's bytes are unreadable noise. This is the primary defense for **adversary C1** (stolen device / unencrypted backup) in the threat model.`,
+		Fix: "**Enable FileVault**:\n\n" +
+			"1. System Settings → Privacy & Security → FileVault\n" +
+			"2. Click **Turn On**, authenticate with your account password.\n" +
+			"3. Choose recovery option:\n" +
+			"   - **iCloud account** — Apple stores your recovery key (convenient; tied to Apple ID security).\n" +
+			"   - **Local recovery key** — printed for you; **store it somewhere safe** (1Password, paper in a safe, etc.). Without it, password loss = data loss.\n" +
+			"4. Initial encryption runs in the background; you can keep using the Mac. Takes minutes to hours depending on disk size.\n\n" +
+			"**Verify** at any time:\n" +
+			"```bash\n" +
+			"fdesetup status\n" +
+			"# Expected: FileVault is On.\n" +
+			"```\n\n" +
+			"**Don't forget Time Machine**: Time Machine backups inherit encryption only if the destination volume is encrypted. For external drives: Disk Utility → select volume → Erase as APFS Encrypted. For network destinations: configure encrypted backups in System Settings → Time Machine → Options → \"Encrypt backups\".",
+		SeeAlso: "`docs/threat-model.md` → **Adversary C1** (stolen device / unencrypted backup).",
+	},
+	{
 		Ref:   "charon-entries-acl",
 		Title: "Charon keychain entry is missing or has weak ACL",
 		Why: `Each entry in the ` + "`charon`" + ` keychain namespace should have a ` + "`SecAccess`" + ` whose trusted-applications list pins to charon's designated requirement (` + "`identifier \"com.charon.cli\" and certificate leaf = H\"<sha1>\"`" + `). An entry without that ACL is readable by any process running as your user via ` + "`security find-generic-password`" + ` — exactly the bypass M4 was supposed to eliminate.

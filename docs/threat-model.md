@@ -114,8 +114,9 @@ table.
 | **8** | Charon's keychain entries have ACLs | `make security` reports no `charon-entries-acl-missing-*` finding |
 | **9** | No suspicious launchd persistence | `make security` lists what's there; user reviews |
 | **10** | Installed charon CLI is signed with the expected identifier and hardened runtime | `make security` checks `~/.local/bin/charon` via `codesign -dvv` |
+| **11** | FileVault enabled (boot volume encrypted at rest) | `make security` parses `diskutil info /` for `FileVault: Yes` |
 
-`make security` automates all ten. Caveats: items 2–5 require Full
+`make security` automates all eleven. Caveats: items 2–5 require Full
 Disk Access on the bundle (Tahoe needs Dev ID + notarization for
 that — done in #000011); item 7's classifier covers the named
 catastrophic apps (codesign, security CLI) and ~6 Apple-default
@@ -642,10 +643,10 @@ Roughly decreasing value-per-effort for a single-user dev tool:
    profile) blocking outbound TLS to Google API hosts unless via
    localhost. Make it opt-in; document in README.
 
-2. **FileVault + Time Machine encryption checks**. The audit
-   currently doesn't cover the at-rest paths (C1). Adding `fdesetup
-   status` + `tmutil destinationinfo` to `charon-security` is
-   straightforward — tracked in
+2. **Time Machine per-destination encryption check**. FileVault
+   landed (bar 11); Time Machine destination encryption is still
+   open. Per-destination logic via `tmutil destinationinfo -X` +
+   `diskutil info` per destination — tracked in
    [#000012 item E](../workshop/issues/000012-audit-evolution.md).
 
 3. **Audit naming for `charon` keychain entries' trusted apps**
