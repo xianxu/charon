@@ -25,10 +25,22 @@ flag.
 
 ## Backlog
 
-### A. Enumerate trusted applications by name in keychain entries
+### A. Enumerate trusted applications by name in keychain entries ✅ landed 2026-04-28 (signing-key + charon-entries)
 
-`internal/security/check_charon.go` currently returns
-`(aclCount, appCount)` per entry and flags `(>0, N>1)` as Important
+Both the signing-key check and the charon-namespace entry check
+now extract per-trusted-app DR strings via the CGo path
+(`charon_inspect_key_acl_by_label` / `charon_inspect_generic_password`,
+both with optional `out_drs` parameter). Go-side classifier verdicts
+each DR as expected/benign/unknown/catastrophic; severity rolls up
+from the worst entry. See `classifyTrustedAppsForEntry` and
+`classifyOneFor` in `internal/security/check_charon.go`.
+
+---
+
+(historical context for posterity:)
+
+`internal/security/check_charon.go` originally returned
+`(aclCount, appCount)` per entry and flagged `(>0, N>1)` as Important
 without naming the extra apps. The user has to open Keychain Access
 manually to see what's in the trusted list.
 
