@@ -149,10 +149,17 @@ security:
 		echo "  [!] Running the OLD bundle..." ; \
 		echo "" ; \
 	fi
-	@open -W -n "$(SECURITY_APP_DIR)" \
-	       --stdout /dev/stdout \
-	       --stderr /dev/stderr \
-	       --args check --yes
+	@# Pipe the bundle's stdout/stderr to a temp file we can tail.
+	@# `open --stdout/--stderr` with /dev/stdout fails -10810 on Tahoe;
+	@# a real path works.
+	@OUT=$$(mktemp); \
+	 open -W -n "$(SECURITY_APP_DIR)" \
+	      --stdout "$$OUT" --stderr "$$OUT" \
+	      --args check --yes ; \
+	 RC=$$? ; \
+	 cat "$$OUT" ; \
+	 rm -f "$$OUT" ; \
+	 exit $$RC
 
 # Print the remediation playbook (no privileged access required, so
 # we don't need to route through the .app bundle).
