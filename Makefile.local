@@ -123,9 +123,19 @@ security-install: $(SECURITY_BUNDLE_STAMP)
 # (the toggle in System Settings stays on, but reads fail). So we
 # DO NOT touch signing here.
 #
-# If the bundle is missing → tells you to install. If your source is
-# newer than the bundle → warns you (you'll see stale behavior until
-# you explicitly re-install, which means re-granting FDA).
+# Launches via `open -W` rather than running the binary directly:
+# macOS TCC walks an attribution chain and treats the user-launched
+# ancestor (the terminal app — Terminal, iTerm, cmux, etc.) as the
+# "responsible" process for any child it spawned. TCC then keys
+# FDA policy on THAT bundle ID, not on com.charon.security — so our
+# grant gets ignored. Launching via `open` puts LaunchServices on
+# top of the chain instead, and com.charon.security becomes its own
+# responsible process. The grant we want gets honored.
+#
+# `--stdout` / `--stderr` route the audit's output to this terminal
+# despite the LaunchServices indirection. `-n` forces a new instance
+# so we don't reuse a backgrounded prior run. `-W` waits for exit so
+# Make sees the audit's exit code (preserved as 0/1/2 per severity).
 security:
 	@if [ ! -x "$(SECURITY_APP_DIR)/Contents/MacOS/charon-security" ]; then \
 		echo "Charon Security.app not found at $(SECURITY_APP_DIR)" ; \
@@ -139,7 +149,10 @@ security:
 		echo "  [!] Running the OLD bundle..." ; \
 		echo "" ; \
 	fi
-	@"$(SECURITY_APP_DIR)/Contents/MacOS/charon-security" check
+	@open -W -n "$(SECURITY_APP_DIR)" \
+	       --stdout /dev/stdout \
+	       --stderr /dev/stderr \
+	       --args check
 
 # Print the remediation playbook (no privileged access required, so
 # we don't need to route through the .app bundle).
