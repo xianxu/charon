@@ -98,7 +98,10 @@ security-build: bin/charon-security
 	@:
 
 security-install: $(SECURITY_BUNDLE_STAMP)
-	@:
+	@echo "Charon Security.app: ready at $(SECURITY_APP_DIR)"
+	@codesign -dv "$(SECURITY_APP_DIR)" 2>&1 \
+	    | grep -E '^(Identifier|TeamIdentifier|Authority|CDHash)=' \
+	    | sed 's/^/  /'
 
 # Run the audit. Pure run — no rebuild, no re-sign, no codesign
 # prompt. macOS TCC binds FDA grants to the bundle's cdhash; every
