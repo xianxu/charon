@@ -128,16 +128,25 @@ so the user sees the whole pairwise relationship, not just the
 flagged subset. Probably over-noisy at full enumeration; gate
 behind `--verbose` or a separate `audit-automation` subcommand.
 
-### E. FileVault + encrypted Time Machine status
+### E. FileVault + encrypted Time Machine status ✅ landed 2026-04-28 (FileVault portion); TM still TODO
 
-The threat-model's future-work item #4 calls these out as "user
-responsibilities" not currently checked. Easy adds:
+`internal/security/check_filevault.go` parses `diskutil info /` and
+emits an Important finding when FileVault is off. Bar item 11.
 
-- `fdesetup status` → FileVault on/off
-- `tmutil destinationinfo` + `tmutil hasbackupfor /` parsed for
-  encryption metadata → Time Machine encrypted
+Implementation note: switched from `fdesetup status` to `diskutil
+info /` because Tahoe's fdesetup errors with "Unknown volume or
+device specifier: '/'" — Apple appears to have changed the tool.
+diskutil's per-volume info has been stable across versions.
 
-Both are privilege-free reads. Hygiene-tier findings if off.
+**Time Machine encryption check still open.** Per-destination check
+needs:
+
+- `tmutil destinationinfo -X` to enumerate configured destinations
+- `diskutil info <path>` per destination to check Encrypted: Yes/No
+- Network destinations (TM-over-SMB) need a different code path
+
+Defer until motivation; FileVault alone covers the most-common C1
+attack path (theft of the laptop itself).
 
 ### F. Charon binary self-attestation ✅ landed 2026-04-28 (first pass)
 
