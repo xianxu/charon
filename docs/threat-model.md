@@ -269,34 +269,60 @@ silently drops `kSecAttrAccess` on macOS file-based keychains. ACL
 inspection is verified by integration tests
 (`TestACL_ActuallyAttachesACL`).
 
-### 4. Codesign requirement format = identifier + leaf-cert hash
+### 4. Codesign requirement format = identifier + signer
 
-The ACL predicate is `identifier "com.charon.cli" and certificate
-leaf = H"<sha1>"`, where the SHA-1 is the leaf cert's DER hash.
-Implication: re-installs of charon (different cdhash, same identifier
-and same cert) read silently. Anything else prompts.
+The ACL predicate is set automatically by
+`SecTrustedApplicationCreateFromPath(NULL, ...)` at write time —
+whatever DR the running charon binary has gets baked into the entry's
+SecAccess. After [#000011](../workshop/issues/000011-apple-developer-id.md)
+that's the team-id-anchored Apple form:
+
+```
+anchor apple generic and certificate leaf[subject.OU] = "<TEAMID>" and
+    identifier "com.charon.cli"
+```
+
+For machines still on self-signed (no Dev ID enrolled), it's the
+older `identifier "com.charon.cli" and certificate leaf = H"<sha1>"`
+variant. Both are stable across `make install` re-runs (cdhash
+changes; identifier + signer don't), and the team-id form is also
+stable across the ~5-year Apple cert renewal window.
 
 Defeats: an agent that builds its own Go binary with
 `--identifier com.charon.cli` but isn't signed by the user's
-`Charon Self-Signed` cert.
+authorized signer.
 
-Status: ✅ Implemented. Apple Dev ID transition (future) swaps the
-predicate to a team-anchored variant; same code path, different
-predicate string.
+Status: ✅ Implemented. The Makefile auto-detects which signing
+identity is available (`make print-sign-identity`) and signs
+accordingly; the M4 ACL captures whichever DR the resulting binary
+has.
 
 ### 5. Signing key requires user click for each use
 
-The user's `Charon Self-Signed` private key has an empty trusted-
-applications list. Every `make install` triggers an Allow dialog from
-codesign. The user must explicitly approve, single-use (NOT "Always
-Allow" — that re-adds codesign to the trust list).
+The user's signing private key — `Charon Self-Signed` (legacy) or
+`Developer ID Application: <Name> (<TEAMID>)` (current) — should have
+no codesign-class apps in its trusted-applications list. Every
+`make install` then triggers an Allow dialog from codesign. The user
+must explicitly approve, single-use (NOT "Always Allow" — that
+re-adds codesign to the trust list).
 
 Defeats: agents that try to bypass the M4 ACL by signing their own
 binary with the user's signing identity (i.e., disguising as charon).
 Without a user click, codesign cannot use the key.
 
-Status: ✅ Bootstrap script omits `-T /usr/bin/codesign`; user is
-warned in three places against clicking "Always Allow."
+Status: ✅ Bootstrap script omits `-T /usr/bin/codesign`; users
+warned in three places against clicking "Always Allow." `charon-security`
+([#000012B](../workshop/issues/000012-audit-evolution.md)) now
+programmatically audits the trusted-apps list, names each app, and
+classifies catastrophic vs benign vs unknown — so drift surfaces in
+every `make security` run rather than waiting for a manual visual
+check.
+
+For Dev ID-issued keys, Apple's Certificate Assistant adds itself
+(plus a few vestigial daemons like `racoon`, `ServerManagerDaemon`)
+to the trusted-apps list at key generation. These are recognized as
+benign by the audit. The catastrophic case is `/usr/bin/codesign` or
+`/usr/bin/security` ending up in the list — flagged Critical.
 
 ### 6. Runtime self-signature self-check
 
@@ -367,10 +393,16 @@ this isn't a risk.
 attach. Once injected, the attacker code runs as charon — DR matches,
 ACL trivially satisfied.
 
-⏸ Deferred. Apple's hardened runtime (`codesign --options runtime` +
-a minimal entitlements plist) blocks `DYLD_INSERT_LIBRARIES`,
-requires entitlements for debugger attach, blocks library hijacking.
-We don't enforce it today; planned alongside Apple Dev ID transition.
+🟡 Partial. `Charon Security.app` (the audit bundle) signs with
+`--options runtime` and ships zero weakening entitlements — that
+bundle is hardened. **`charon` proper (the credential-proxy CLI at
+`~/.local/bin/charon`) is signed but does NOT enable hardened
+runtime**, so injection mitigations there are still TODO. Tracked
+in [#000012](../workshop/issues/000012-audit-evolution.md) item G.
+Now that Apple Developer ID is in place ([#000011](../workshop/issues/000011-apple-developer-id.md)),
+flipping the runtime flag on `make install` is straightforward
+(notarization optional for charon since it's a single Mach-O without
+TCC dependencies).
 
 ### A6. Refresh token blast radius
 
@@ -412,14 +444,23 @@ implicated.
 ### A10. Signing key abuse via codesign
 
 Agent shells out to `codesign --sign "Charon Self-Signed"
-/tmp/agent-charon-impostor` and gets a Mach-O whose DR matches the
-M4 predicate.
+/tmp/agent-charon-impostor` (or the Dev ID variant) and gets a
+Mach-O whose DR matches the M4 predicate.
 
-✅ Defended (since 2026-04-27 — see [#000003 Log
-entry](../workshop/issues/000003-code-signing-keychain-acl.md#log)).
-Bootstrap script omits `-T /usr/bin/codesign`; the signing key has
-no trusted-applications list; every codesign use prompts the user.
-Click Allow (single-use), not Always Allow.
+✅ Defended (since 2026-04-27). Two layers:
+
+1. **Static**: bootstrap script omits `-T /usr/bin/codesign`; signing
+   key created with no codesign-class apps in trusted-applications
+   list; every codesign use prompts. Click Allow (single-use), not
+   Always Allow.
+2. **Dynamic**: `charon-security` programmatically inspects the
+   trusted-apps list ([#000012 items B and A](../workshop/issues/000012-audit-evolution.md))
+   on every `make security` run. Catastrophic entries (codesign,
+   security CLI) → Critical finding; unrecognized entries →
+   Important; benign Apple defaults → silent.
+
+The combination means the user is told to be careful AND verified
+to have stayed careful, rather than relying on memory.
 
 ### A11. Charon's own bugs
 
@@ -443,7 +484,16 @@ Out of scope as a primary defense target. Macros:
 - Adjacent secrets (mail, Messages, browser cookies) leak — but those
   aren't charon's responsibility.
 
-⛔ Out of scope.
+⛔ Out of scope as a defense.
+
+🟡 Partially **detected** by `charon-security` from the other side:
+the audit reads system TCC.db and surfaces any terminal/IDE that
+holds FDA / Accessibility / Screen Recording / AppleEvents grants
+(bar items 2–5). So while charon doesn't *prevent* an FDA-granted
+hostile app from existing, it tells the user when their environment
+contains the precondition. This is the most common practical path
+to B1 — the user accidentally granted FDA to their terminal once
+and forgot.
 
 ### C1. Stolen device or unencrypted backup
 
@@ -500,40 +550,85 @@ test plan.
 
 ✅ Stable across rebuilds.
 
-### Self-signed cert rotation
+### Signing identity rotation
 
-The bootstrap script generates a 10-year cert. Cert expiration, manual
-deletion, or moving to a new Mac (different `Charon Self-Signed`
-identity → different SHA-1 → different DR) breaks the ACL on existing
-entries.
+Any signing-identity change — self-signed cert regeneration, machine
+move, or one-way self-signed → Dev ID transition — produces a new
+DR and breaks the ACL on existing entries written by the old binary.
 
-Recovery: revoke + re-auth. The keychain-namespace owner field
-in entries written by the old cert won't validate against the new
-binary's DR; reads prompt or fail. Documented as the user-facing
-recovery path.
+Recovery: delete the old entries (`security delete-generic-password
+-s charon -a <account>`) and re-auth. The CA cert/key are
+auto-regenerated on next `charon serve` start. The migration runbook
+for the self-signed → Dev ID case is in
+[#000011](../workshop/issues/000011-apple-developer-id.md).
 
-### Apple Developer ID transition
+### Apple Developer ID (current state)
 
-Future state. Predicate becomes
-`anchor apple generic and certificate leaf[subject.OU] = "<TEAMID>"`.
+Done in [#000011](../workshop/issues/000011-apple-developer-id.md).
+Predicate is now
+`anchor apple generic and certificate leaf[subject.OU] = "<TEAMID>" and identifier "com.charon.cli"`.
+
 - Cert renewals (Apple issues new certs every ~5 years) don't break
   the predicate as long as the team ID stays stable.
-- Hardened runtime + notarization become straightforward to enable.
-- Revocation: Apple can revoke the Dev ID cert, breaking the signature
-  chain for all binaries signed with it. No equivalent for self-signed.
+- Hardened runtime + notarization become straightforward to enable
+  per-binary. `Charon Security.app` already uses both (required on
+  macOS 26+ for TCC). `charon` proper signs with Dev ID but doesn't
+  yet enable hardened runtime — see A5 / future-work item #1.
+- Revocation: Apple can revoke the Dev ID cert, breaking the
+  signature chain for all binaries signed with it. No equivalent for
+  self-signed.
+- The Makefile auto-detects identity: prefers
+  `Developer ID Application: ...` if present in the login keychain,
+  falls back to `Charon Self-Signed`.
 
-Migration plan exists in
-[#000003's plan doc](../workshop/plans/000003-code-signing-keychain-acl-plan.md#apple-dev-id-upgrade-future-not-this-issue).
+### macOS version baseline
+
+The audit (`charon-security`) and TCC behavior depend on macOS
+version:
+
+- **macOS ≤ 25 (Sequoia and earlier)**: TCC honors FDA grants for
+  Dev ID-signed bundles regardless of notarization. Self-signed
+  bundles can also receive FDA after manual `spctl --add`.
+- **macOS 26 (Tahoe)**: TCC enforcement tied to `spctl --assess`.
+  Self-signed bundles fail spctl ("Unnotarized Developer ID" or
+  "Rejected"); TCC silently denies FDA even if the System Settings
+  toggle is on. The audit's TCC-read path needs a notarized
+  Developer ID-signed `Charon Security.app` — provided by
+  `make security-install` post-#000011. Without notarization,
+  fall back to `make security ARGS=--no-tcc` (visual System
+  Settings walk).
+
+charon proper (`make install`) is unaffected by Tahoe's TCC tightening
+because its security boundary (M4 keychain ACL) routes through
+`securityd`, not `tccd`.
 
 ---
 
 ## Prioritized future work
 
+### Done
+
+- ✅ **Apple Developer ID** (2026-04-28).
+  [#000011](../workshop/issues/000011-apple-developer-id.md).
+  Team-id-anchored DR, notarized `Charon Security.app`, M4 ACL
+  predicate stable across cert renewals.
+- ✅ **User-facing security audit + remedy playbook**
+  ([#000010](../workshop/issues/000010-security-audit-tool.md),
+  [#000012 items B and A for the signing key](../workshop/issues/000012-audit-evolution.md)).
+  `make security` walks the 9-item bar (SIP, terminal/IDE TCC,
+  sudo cache, signing-key trust list, charon keychain ACLs, launchd
+  persistence) with severity-tiered output and JSON support.
+
+### Open
+
 Roughly decreasing value-per-effort for a single-user dev tool:
 
-1. **Hardened runtime + entitlements** (A5). Apple's blanket fix for
-   the in-process injection class. Best paired with Apple Dev ID
-   transition, but possible standalone.
+1. **Hardened runtime + entitlements on `charon` proper** (A5).
+   Apple's blanket fix for the in-process injection class. Now that
+   #000011 gave us a Dev ID, this is a one-flag change in the
+   Makefile — `--options runtime` + minimal entitlements plist on
+   `make install`. Tracked in
+   [#000012 item G](../workshop/issues/000012-audit-evolution.md).
 
 2. **`govulncheck` in CI** (A8). Cheap dependency audit; covers
    known CVEs in our Go deps.
@@ -542,26 +637,21 @@ Roughly decreasing value-per-effort for a single-user dev tool:
    profile) blocking outbound TLS to Google API hosts unless via
    localhost. Make it opt-in; document in README.
 
-4. **User-facing security checklist** (B1, C1). ✅ Largely covered
-   by `charon-security` (`make security`) — automated audit of SIP,
-   sudo cache, terminal/IDE TCC grants, launchd persistence, charon's
-   own keychain ACLs, plus a curated remedy playbook
-   (`charon-security remedy`). FileVault and Time Machine encryption
-   remain user responsibilities not yet checked. See
-   [`security-audit-test-plan.md`](security-audit-test-plan.md) and
-   [`atlas/security-audit.md`](../atlas/security-audit.md).
+4. **FileVault + Time Machine encryption checks**. The audit
+   currently doesn't cover the at-rest paths (C1). Adding `fdesetup
+   status` + `tmutil destinationinfo` to `charon-security` is
+   straightforward — tracked in
+   [#000012 item E](../workshop/issues/000012-audit-evolution.md).
 
-5. **Apple Developer ID** (done as of 2026-04-28). Closes A5 with
-   hardened runtime, gives proper revocation, enables notarization
-   for distribution beyond the user's machine. Required on macOS 26
-   (Tahoe) for `charon-security` to read TCC.db: Tahoe gates TCC on
-   `spctl --assess`, which rejects unnotarized bundles. Charon proper
-   (`make install`) doesn't need notarization — its M4 keychain ACL
-   doesn't go through TCC, and as a single Mach-O there's nowhere to
-   staple a ticket. Migration runbook + analysis in
-   [issue #000011](../workshop/issues/000011-apple-developer-id.md).
+5. **Audit naming for `charon` keychain entries' trusted apps**
+   (B/A1 hardening). The signing-key check now names trusted apps;
+   the same plumbing extends to `charon`-namespace entries to catch
+   Always-Allow drift on per-entry ACLs. Tracked in
+   [#000012 item A](../workshop/issues/000012-audit-evolution.md)
+   (broader scope than what currently landed).
 
-The keychain ACL boundary the test plan verifies — A1 and A10 — is
-the one that's unique to charon and was the reason this work existed.
-Items 1–5 above are general macOS-application-hygiene items that
-charon can adopt but doesn't differentiate on.
+The keychain ACL boundary that #000010's test plan verifies — A1
+and A10 — is the one that's unique to charon and was the reason
+this work existed. The open items above are general
+macOS-application-hygiene improvements that charon can adopt but
+doesn't differentiate on.
