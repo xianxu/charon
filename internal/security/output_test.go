@@ -1,6 +1,9 @@
 package security
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestReportExitCode(t *testing.T) {
 	cases := []struct {
@@ -22,6 +25,49 @@ func TestReportExitCode(t *testing.T) {
 				t.Fatalf("ExitCode() = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestReportPrintJSON(t *testing.T) {
+	r := Report{Findings: []Finding{
+		{ID: "f1", Severity: SevCritical, Title: "T1", RemedyRef: "ref"},
+		{ID: "f2", Severity: SevHygiene, Title: "T2"},
+	}}
+	var buf strings.Builder
+	if err := r.Print(&buf, PrintOptions{JSON: true}); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		`"total": 2`,
+		`"exit_code": 2`,
+		`"critical": 1`,
+		`"hygiene": 1`,
+		`"severity": "CRITICAL"`,
+		`"severity": "HYGIENE"`,
+		`"remedy_ref": "ref"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("JSON output missing %q\n%s", want, out)
+		}
+	}
+}
+
+func TestReportPrintTextSortsBySeverity(t *testing.T) {
+	r := Report{Findings: []Finding{
+		{ID: "h", Severity: SevHygiene, Title: "Hygiene"},
+		{ID: "c", Severity: SevCritical, Title: "Critical"},
+		{ID: "i", Severity: SevInfo, Title: "Info"},
+	}}
+	var buf strings.Builder
+	r.Print(&buf, PrintOptions{NoColor: true})
+	out := buf.String()
+	// Critical should appear before Info, Info before Hygiene.
+	cIdx := strings.Index(out, "[CRITICAL]")
+	iIdx := strings.Index(out, "[INFO]")
+	hIdx := strings.Index(out, "[HYGIENE]")
+	if !(cIdx >= 0 && cIdx < iIdx && iIdx < hIdx) {
+		t.Fatalf("severity sort wrong: critical@%d info@%d hygiene@%d\n%s", cIdx, iIdx, hIdx, out)
 	}
 }
 

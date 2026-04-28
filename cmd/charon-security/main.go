@@ -129,8 +129,6 @@ func runCheck() error {
 		}
 	}
 
-	printSummary(report)
-
 	if flagStrict {
 		// Promote every finding's severity by one before rollup.
 		for i := range report.Findings {
@@ -139,6 +137,18 @@ func runCheck() error {
 			}
 		}
 	}
+
+	out := os.Stderr
+	if flagJSON {
+		out = os.Stdout
+	}
+	if err := report.Print(out, security.PrintOptions{
+		NoColor: flagNoColor,
+		JSON:    flagJSON,
+	}); err != nil {
+		return err
+	}
+
 	os.Exit(report.ExitCode())
 	return nil
 }
@@ -198,19 +208,3 @@ func runRemedy(args []string) error {
 	return nil
 }
 
-func printSummary(r security.Report) {
-	counts := r.Counts()
-	fmt.Fprintf(os.Stderr, "\nAudit summary: %d findings  ", len(r.Findings))
-	fmt.Fprintf(os.Stderr, "(critical=%d  important=%d  info=%d  hygiene=%d)\n",
-		counts[security.SevCritical], counts[security.SevImportant],
-		counts[security.SevInfo], counts[security.SevHygiene])
-	for _, f := range r.Findings {
-		fmt.Fprintf(os.Stderr, "  [%s] %s — %s\n", f.Severity, f.ID, f.Title)
-		for _, a := range f.Affects {
-			fmt.Fprintf(os.Stderr, "      %s\n", a)
-		}
-		if f.RemedyRef != "" {
-			fmt.Fprintf(os.Stderr, "      → details: charon-security remedy %s\n", f.RemedyRef)
-		}
-	}
-}
