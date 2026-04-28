@@ -104,6 +104,7 @@ func inspectCharonNamespace(service string) ([]Finding, int) {
 				Detail:    "Entry has no SecAccess attached — readable by any process running as you via `security find-generic-password`. The M4 boundary that this entry should enforce is absent. Common cause: a stale `charon serve` daemon wrote it before M4 landed (or after a regression). Re-write the entry through the current charon binary to attach the ACL.",
 				RemedyRef: "charon-entries-acl",
 				Affects:   []string{label},
+				BarItem:   BarKeychainEntries,
 			})
 		case ac > 0 && app > 1:
 			findings = append(findings, Finding{
@@ -113,6 +114,7 @@ func inspectCharonNamespace(service string) ([]Finding, int) {
 				Detail:    "Multiple apps in the trusted-applications list. Expected state is one entry: charon's own DR. Verify each via Keychain Access → Get Info → Access Control.",
 				RemedyRef: "charon-entries-acl",
 				Affects:   []string{label},
+				BarItem:   BarKeychainEntries,
 			})
 			// (>0, 0) and (>0, 1) — healthy. No finding.
 		}
@@ -219,6 +221,7 @@ func CheckCharonSigningKeyACL() []Finding {
 				Detail:    "Private key has no access controls. Inspect via Keychain Access; consider regenerating the identity.",
 				RemedyRef: "charon-signing-acl",
 				Affects:   []string{label},
+				BarItem:   BarSigningKeyACL,
 			})
 		case app > 0:
 			findings = append(findings, Finding{
@@ -245,6 +248,7 @@ func CheckCharonSigningKeyACL() []Finding {
 					app, label),
 				RemedyRef: "charon-signing-acl",
 				Affects:   []string{label},
+				BarItem:   BarSigningKeyACL,
 			})
 			// Healthy state (ac > 0 && app == 0) — silent.
 		}

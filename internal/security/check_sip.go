@@ -21,6 +21,7 @@ func CheckSIP() []Finding {
 			Detail: fmt.Sprintf("`csrutil status` failed: %v\n\n"+
 				"Output: %s", err, string(out)),
 			RemedyRef: "sip",
+			BarItem:   BarSIP,
 		}}
 	}
 	return parseSIPStatus(string(out))
@@ -41,6 +42,7 @@ func parseSIPStatus(output string) []Finding {
 			Title:     "System Integrity Protection is DISABLED",
 			Detail:    "SIP being off invalidates charon's threat model entirely. Re-enable from Recovery: `csrutil enable`, then reboot.",
 			RemedyRef: "sip",
+			BarItem:   BarSIP,
 		}}
 	default:
 		return []Finding{{
@@ -49,6 +51,7 @@ func parseSIPStatus(output string) []Finding {
 			Title:     "SIP status is non-standard (custom configuration)",
 			Detail:    "csrutil reported a non-enabled/non-disabled status — likely a partial SIP override (e.g. `csrutil enable --without debug`). Investigate.\n\nOutput:\n" + strings.TrimSpace(output),
 			RemedyRef: "sip",
+			BarItem:   BarSIP,
 		}}
 	}
 }

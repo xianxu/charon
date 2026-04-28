@@ -23,6 +23,7 @@ func CheckSudoCache() []Finding {
 			Title:     "sudo credential cache is active in this shell",
 			Detail:    "A subprocess in this session can call `sudo -n <anything>` without prompting. If you're about to launch an agent, run `sudo -k` first to invalidate.",
 			RemedyRef: "sudo",
+			BarItem:   BarSudoCache,
 		}}
 	}
 	// Any error (including ExitError with nonzero code, or "sudo not

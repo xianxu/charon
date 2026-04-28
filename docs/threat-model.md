@@ -98,26 +98,29 @@ come tagged Critical / Important / Info / Hygiene.
 
 Running an AI agent as your user is reasonable iff **all** of these
 hold. Most are macOS hygiene; one is a discipline charon specifically
-relies on.
+relies on. The list is numbered, and `make security` walks the same
+numbers — its top-of-output bar-status summary maps directly to this
+table.
 
-| Property | How to check |
-|---|---|
-| SIP enabled | `csrutil status` says `enabled` |
-| Terminal/IDE has no Full Disk Access grant | System Settings → Privacy & Security → Full Disk Access pane has no entry for Terminal, iTerm, Ghostty, VS Code, Cursor, etc. |
-| Terminal/IDE has no Accessibility grant | …same pane, Accessibility section. (Window managers like Rectangle / Hammerspoon are fine; they don't run shells.) |
-| Terminal/IDE has no Screen Recording grant | …same pane, Screen Recording section |
-| Terminal/IDE has no Automation grant to credential apps (Keychain Access, 1Password, Bitwarden, etc.) | …same pane, Automation section |
-| Sudo cache empty when launching agents | `sudo -k` before, fresh terminal afterwards |
-| **Always Allow never clicked** on the charon signing-key dialog | Keychain Access → "Charon Self-Signed" / "Developer ID Application: …" private key → Get Info → Access Control → trusted-apps list is empty |
-| Charon's keychain entries have ACLs | `make security` reports no `charon-entries-acl-missing-*` Critical findings |
-| No suspicious launchd persistence | `make security` lists what's there; user reviews |
+| # | Property | How to check |
+|---|---|---|
+| **1** | SIP enabled | `csrutil status` says `enabled` |
+| **2** | Terminal/IDE has no Full Disk Access grant | System Settings → Privacy & Security → Full Disk Access pane has no entry for Terminal, iTerm, Ghostty, VS Code, Cursor, etc. |
+| **3** | Terminal/IDE has no Accessibility grant | …same pane, Accessibility section. (Window managers like Rectangle / Hammerspoon are fine; they don't run shells.) |
+| **4** | Terminal/IDE has no Screen Recording grant | …same pane, Screen Recording section |
+| **5** | Terminal/IDE has no Automation grant to credential apps (Keychain Access, 1Password, Bitwarden, etc.) | …same pane, Automation section |
+| **6** | Sudo cache empty when launching agents | `sudo -k` before, fresh terminal afterwards |
+| **7** | **Always Allow never clicked** on the charon signing-key dialog — trusted-apps list is empty | `make security` reports no `charon-signing-acl-*` finding (with caveat: counts only, doesn't yet name the trusted apps); or Keychain Access → identity → Get Info → Access Control |
+| **8** | Charon's keychain entries have ACLs | `make security` reports no `charon-entries-acl-missing-*` finding |
+| **9** | No suspicious launchd persistence | `make security` lists what's there; user reviews |
 
-`make security` automates 7 of these 9. The remaining two — sudo
-cache state and the signing-key trusted-apps list — are still manual;
-[#000012](../workshop/issues/000012-audit-evolution.md) item B
-tracks moving the signing-key check into the audit.
+`make security` automates all nine. Caveats: items 2–5 require Full
+Disk Access on the bundle (Tahoe needs Dev ID + notarization for
+that — done in #000011); item 7 currently counts trusted apps
+without naming them (depth improvement tracked in
+[#000012](../workshop/issues/000012-audit-evolution.md) item A).
 
-The single most overlooked item is **Accessibility on a terminal**.
+The single most overlooked item is **#3, Accessibility on a terminal**.
 A process with Accessibility can synthesize keystrokes and clicks,
 which means it can click through layer 1's Allow/Deny dialog itself.
 Layer 1 collapses entirely. Audit it.

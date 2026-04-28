@@ -43,9 +43,56 @@ func (s Severity) MarshalJSON() ([]byte, error) {
 	return json.Marshal(s.String())
 }
 
+// BarItem is the numbered "reasonable bar" item from
+// docs/threat-model.md (the user-best-practices checklist). Each
+// check tags its findings with the bar item it covers; the audit
+// renders a per-bar-item status summary at the top of the output so
+// the user can see at-a-glance which items pass / fail / skipped.
+//
+// Numbering is the canonical reference between threat model and
+// audit. Stable; new items append at the end.
+type BarItem int
+
+const (
+	BarNone               BarItem = 0 // finding doesn't map to a numbered bar item
+	BarSIP                BarItem = 1 // SIP enabled
+	BarTerminalFDA        BarItem = 2 // Terminal/IDE has no FDA
+	BarTerminalA11y       BarItem = 3 // Terminal/IDE has no Accessibility
+	BarTerminalScreen     BarItem = 4 // Terminal/IDE has no Screen Recording
+	BarTerminalEvents     BarItem = 5 // Terminal/IDE has no AppleEvents to credential apps
+	BarSudoCache          BarItem = 6 // Sudo cache empty when launching agents
+	BarSigningKeyACL      BarItem = 7 // Empty signing-key trusted-apps list
+	BarKeychainEntries    BarItem = 8 // Charon keychain entries have ACLs
+	BarLaunchdPersistence BarItem = 9 // No suspicious launchd persistence
+)
+
+// barItemLabels mirror the "reasonable bar" wording in
+// docs/threat-model.md. Keep them in sync — the bar-status table is
+// the user's at-a-glance map between audit output and threat model.
+var barItemLabels = map[BarItem]string{
+	BarSIP:                "SIP enabled",
+	BarTerminalFDA:        "Terminal/IDE has no Full Disk Access",
+	BarTerminalA11y:       "Terminal/IDE has no Accessibility",
+	BarTerminalScreen:     "Terminal/IDE has no Screen Recording",
+	BarTerminalEvents:     "Terminal/IDE has no AppleEvents to credential apps",
+	BarSudoCache:          "Sudo cache empty in this shell",
+	BarSigningKeyACL:      "Charon signing-key trusted-apps list is empty",
+	BarKeychainEntries:    "Charon keychain entries have ACLs",
+	BarLaunchdPersistence: "No suspicious launchd persistence",
+}
+
+// allBarItems is the canonical ordered enumeration. Used when
+// rendering the per-bar-item status table.
+var allBarItems = []BarItem{
+	BarSIP, BarTerminalFDA, BarTerminalA11y, BarTerminalScreen,
+	BarTerminalEvents, BarSudoCache, BarSigningKeyACL,
+	BarKeychainEntries, BarLaunchdPersistence,
+}
+
 // Finding is one item the audit produced. ID is stable across runs and
 // is the key into remedy text. Affects holds app names / paths the
-// finding pertains to (may be empty).
+// finding pertains to (may be empty). BarItem links the finding back
+// to a numbered "reasonable bar" item (0 = doesn't map).
 type Finding struct {
 	ID        string   `json:"id"`
 	Severity  Severity `json:"severity"`
@@ -53,11 +100,96 @@ type Finding struct {
 	Detail    string   `json:"detail,omitempty"`
 	RemedyRef string   `json:"remedy_ref,omitempty"`
 	Affects   []string `json:"affects,omitempty"`
+	BarItem   BarItem  `json:"bar_item,omitempty"`
 }
 
 // Report aggregates findings and produces the rollup exit code.
+//
+// Evaluated lists the bar items this run actually checked. Items
+// not present here are reported as "skipped" in the bar-status
+// table — important for distinguishing "passed because no problem
+// found" from "passed by accident because we couldn't check"
+// (e.g. when --no-tcc is set, items 2–5 are skipped; when FDA
+// isn't granted, the TCC checks emit findings AND the items are
+// still skipped).
 type Report struct {
-	Findings []Finding
+	Findings  []Finding
+	Evaluated []BarItem
+}
+
+// MarkEvaluated records that a bar item was checked in this run.
+// Idempotent.
+func (r *Report) MarkEvaluated(items ...BarItem) {
+	seen := map[BarItem]bool{}
+	for _, b := range r.Evaluated {
+		seen[b] = true
+	}
+	for _, b := range items {
+		if !seen[b] {
+			r.Evaluated = append(r.Evaluated, b)
+			seen[b] = true
+		}
+	}
+}
+
+// BarStatus is the rolled-up state for one numbered bar item, used
+// by the summary table at the top of audit output.
+type BarStatus int
+
+const (
+	BarPass    BarStatus = iota // evaluated, no findings (or only Hygiene)
+	BarReview                   // evaluated, has Info findings the user should look at
+	BarFail                     // evaluated, has Important or Critical findings
+	BarSkipped                  // not evaluated this run (e.g. --no-tcc skips items 2–5)
+)
+
+func (s BarStatus) String() string {
+	switch s {
+	case BarPass:
+		return "pass"
+	case BarReview:
+		return "review"
+	case BarFail:
+		return "FAIL"
+	case BarSkipped:
+		return "skipped"
+	default:
+		return "unknown"
+	}
+}
+
+// barStatuses computes per-bar-item rollups from r.Evaluated +
+// r.Findings.
+func (r Report) barStatuses() map[BarItem]BarStatus {
+	out := make(map[BarItem]BarStatus, len(allBarItems))
+	evaluated := map[BarItem]bool{}
+	for _, b := range r.Evaluated {
+		evaluated[b] = true
+	}
+	worstByBar := map[BarItem]Severity{}
+	for _, f := range r.Findings {
+		if f.BarItem == BarNone {
+			continue
+		}
+		if f.Severity > worstByBar[f.BarItem] {
+			worstByBar[f.BarItem] = f.Severity
+		}
+	}
+	for _, b := range allBarItems {
+		if !evaluated[b] {
+			out[b] = BarSkipped
+			continue
+		}
+		switch worstByBar[b] {
+		case SevCritical, SevImportant:
+			out[b] = BarFail
+		case SevInfo:
+			out[b] = BarReview
+		default:
+			out[b] = BarPass
+		}
+	}
+	return out
 }
 
 // ExitCode maps the worst finding's severity to a process exit code.
@@ -113,6 +245,7 @@ func (r Report) Print(w io.Writer, opts PrintOptions) error {
 // (Severity-keyed maps don't serialize cleanly).
 type reportJSON struct {
 	Summary  reportSummaryJSON `json:"summary"`
+	Bar      []barRowJSON      `json:"bar"`
 	Findings []Finding         `json:"findings"`
 }
 
@@ -122,8 +255,23 @@ type reportSummaryJSON struct {
 	ExitCode   int            `json:"exit_code"`
 }
 
+type barRowJSON struct {
+	Number int    `json:"number"`
+	Label  string `json:"label"`
+	Status string `json:"status"`
+}
+
 func (r Report) printJSON(w io.Writer) error {
 	counts := r.Counts()
+	statuses := r.barStatuses()
+	bar := make([]barRowJSON, 0, len(allBarItems))
+	for _, b := range allBarItems {
+		bar = append(bar, barRowJSON{
+			Number: int(b),
+			Label:  barItemLabels[b],
+			Status: statuses[b].String(),
+		})
+	}
 	out := reportJSON{
 		Summary: reportSummaryJSON{
 			Total:    len(r.Findings),
@@ -135,6 +283,7 @@ func (r Report) printJSON(w io.Writer) error {
 				"hygiene":   counts[SevHygiene],
 			},
 		},
+		Bar:      bar,
 		Findings: r.Findings,
 	}
 	enc := json.NewEncoder(w)
@@ -180,9 +329,37 @@ func (r Report) printText(w io.Writer, noColor bool) {
 		}
 		return styleHint.Render(text)
 	}
+	statusStyle := func(s BarStatus, text string) string {
+		if !useColor {
+			return text
+		}
+		switch s {
+		case BarFail:
+			return styleCritical.Render(text)
+		case BarReview:
+			return styleInfo.Render(text)
+		case BarSkipped:
+			return styleHygiene.Render(text)
+		}
+		return text // pass: no styling
+	}
+
+	statuses := r.barStatuses()
+	fmt.Fprintf(w, "\nBest-practices status (see docs/threat-model.md):\n")
+	for _, b := range allBarItems {
+		s := statuses[b]
+		marker := map[BarStatus]string{
+			BarPass:    "✓",
+			BarReview:  "•",
+			BarFail:    "✗",
+			BarSkipped: "—",
+		}[s]
+		fmt.Fprintf(w, "  [%d] %-55s %s %s\n",
+			int(b), barItemLabels[b], statusStyle(s, marker), statusStyle(s, s.String()))
+	}
 
 	counts := r.Counts()
-	fmt.Fprintf(w, "\nAudit summary: %d findings  (%s=%d  %s=%d  %s=%d  %s=%d)\n",
+	fmt.Fprintf(w, "\nFinding counts: %d total  (%s=%d  %s=%d  %s=%d  %s=%d)\n",
 		len(r.Findings),
 		render(SevCritical, "critical"), counts[SevCritical],
 		render(SevImportant, "important"), counts[SevImportant],

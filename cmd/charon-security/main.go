@@ -100,8 +100,13 @@ func runCheck() error {
 
 	report := security.Report{}
 	report.Findings = append(report.Findings, security.CheckSIP()...)
+	report.MarkEvaluated(security.BarSIP)
+
 	report.Findings = append(report.Findings, security.CheckSudoCache()...)
+	report.MarkEvaluated(security.BarSudoCache)
+
 	report.Findings = append(report.Findings, security.CheckLaunchdAgents()...)
+	report.MarkEvaluated(security.BarLaunchdPersistence)
 
 	apps := security.DetectInstalledApps()
 	fmt.Fprintf(os.Stderr, "\nDetected %d known terminals/editors/IDEs:\n", len(apps))
@@ -113,14 +118,27 @@ func runCheck() error {
 	if !flagNoTCC {
 		tccFindings := security.CheckTCC(apps)
 		report.Findings = append(report.Findings, tccFindings...)
-		// If we couldn't read TCC.db because of missing FDA, offer to
-		// open the System Settings pane right now — saves the user
-		// digging for instructions in the remedy.
+		// Mark items 2–5 evaluated only if TCC.db was actually
+		// readable. The "tcc-no-fda-*" finding signals the read
+		// failed and we couldn't see the state; in that case we
+		// leave 2–5 as Skipped so the user knows the audit is
+		// incomplete.
+		if !sawNoFDA(tccFindings) {
+			report.MarkEvaluated(
+				security.BarTerminalFDA,
+				security.BarTerminalA11y,
+				security.BarTerminalScreen,
+				security.BarTerminalEvents,
+			)
+		}
 		offerFDAGrantIfNeeded(tccFindings, self)
 	}
 
 	report.Findings = append(report.Findings, security.CheckCharonKeychainACLs()...)
+	report.MarkEvaluated(security.BarKeychainEntries)
+
 	report.Findings = append(report.Findings, security.CheckCharonSigningKeyACL()...)
+	report.MarkEvaluated(security.BarSigningKeyACL)
 
 	if flagNoTCC {
 		if !flagYes && security.IsInteractive() {
@@ -152,6 +170,18 @@ func runCheck() error {
 
 	os.Exit(report.ExitCode())
 	return nil
+}
+
+// sawNoFDA reports whether the TCC check returned a "couldn't read
+// TCC.db" signal. Used to decide whether bar items 2–5 should be
+// marked Evaluated or left as Skipped.
+func sawNoFDA(findings []security.Finding) bool {
+	for _, f := range findings {
+		if strings.HasPrefix(f.ID, "tcc-no-fda-") {
+			return true
+		}
+	}
+	return false
 }
 
 // offerFDAGrantIfNeeded looks for the tcc-no-fda-* findings produced

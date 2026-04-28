@@ -55,6 +55,7 @@ func CheckLaunchdAgents() []Finding {
 			"`rm`.\n\n" + strings.Join(thirdParty, "\n"),
 		RemedyRef: "launchd",
 		Affects:   thirdParty,
+		BarItem:   BarLaunchdPersistence,
 	}}
 }
 

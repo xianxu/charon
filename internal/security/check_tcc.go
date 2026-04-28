@@ -212,16 +212,19 @@ func evaluateTCCRows(rows []TCCRow, byBundle map[string]DetectedApp, scope strin
 			f.Severity = SevCritical
 			f.Title = fmt.Sprintf("%s has Full Disk Access", app.Name)
 			f.RemedyRef = "tcc-fda"
+			f.BarItem = BarTerminalFDA
 		case tccA11y:
 			f.ID = "tcc-a11y-" + r.Client
 			f.Severity = SevCritical
 			f.Title = fmt.Sprintf("%s has Accessibility", app.Name)
 			f.RemedyRef = "tcc-a11y"
+			f.BarItem = BarTerminalA11y
 		case tccScreen:
 			f.ID = "tcc-screen-" + r.Client
 			f.Severity = SevImportant
 			f.Title = fmt.Sprintf("%s has Screen Recording", app.Name)
 			f.RemedyRef = "tcc-screen"
+			f.BarItem = BarTerminalScreen
 		case tccEvents:
 			target := r.IndirectObjectIdentifier
 			if target == "" {
@@ -236,6 +239,7 @@ func evaluateTCCRows(rows []TCCRow, byBundle map[string]DetectedApp, scope strin
 			}
 			f.Title = fmt.Sprintf("%s can drive %s via AppleEvents", app.Name, targetLabel)
 			f.RemedyRef = "tcc-events"
+			f.BarItem = BarTerminalEvents
 		default:
 			continue // service we don't audit
 		}
