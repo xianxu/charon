@@ -119,10 +119,17 @@ security-build: bin/charon-security
 	@:
 
 security-install: $(SECURITY_BUNDLE_STAMP)
+	@# CLI on PATH for no-privilege subcommands (remedy, etc.). The
+	# audit's `check` subcommand still must run via the .app bundle
+	# for TCC attribution; this CLI is for the text-printing paths
+	# our finding hints reference.
+	@mkdir -p $(HOME)/.local/bin
+	@cp bin/charon-security $(HOME)/.local/bin/charon-security
 	@echo "Charon Security.app: ready at $(SECURITY_APP_DIR)"
 	@codesign -dv "$(SECURITY_APP_DIR)" 2>&1 \
 	    | grep -E '^(Identifier|TeamIdentifier|Authority|CDHash)=' \
 	    | sed 's/^/  /'
+	@echo "charon-security CLI: ready at $(HOME)/.local/bin/charon-security"
 
 # Run the audit. Pure run — no rebuild, no re-sign, no codesign
 # prompt. macOS TCC binds FDA grants to the bundle's cdhash; every
@@ -179,6 +186,10 @@ security-uninstall:
 		echo "Removed $(SECURITY_APP_DIR)" ; \
 	fi
 	@rm -f $(SECURITY_BUNDLE_STAMP)
+	@if [ -f "$(HOME)/.local/bin/charon-security" ]; then \
+		rm -f $(HOME)/.local/bin/charon-security ; \
+		echo "Removed $(HOME)/.local/bin/charon-security" ; \
+	fi
 	@tccutil reset SystemPolicyAllFiles "$(SECURITY_BUNDLE_ID)" 2>/dev/null || true
 	@tccutil reset Accessibility       "$(SECURITY_BUNDLE_ID)" 2>/dev/null || true
 	@tccutil reset ScreenCapture       "$(SECURITY_BUNDLE_ID)" 2>/dev/null || true
