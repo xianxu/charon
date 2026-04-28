@@ -74,11 +74,17 @@ mkdir -p "$APP_DIR/Contents/MacOS"
 # a no-op rebuild.
 existing_bin="$APP_DIR/Contents/MacOS/charon-security"
 if [ -f "$existing_bin" ] && cmp -s "$BINARY" "$existing_bin"; then
-    if codesign --verify "$APP_DIR" 2>/dev/null; then
-        ok "bundle unchanged and signature valid — skipping re-sign"
+    sig_authority=$(codesign -dvv "$APP_DIR" 2>&1 | awk -F'=' '/^Authority=/{print $2; exit}')
+    is_stapled=0
+    codesign -dvv "$APP_DIR" 2>&1 | grep -q "Notarization Ticket=stapled" && is_stapled=1
+
+    if [ "$sig_authority" = "$SIGN_IDENTITY" ] \
+        && codesign --verify "$APP_DIR" 2>/dev/null \
+        && { [ -z "${NOTARIZE_PROFILE:-}" ] || [ $is_stapled -eq 1 ]; }; then
+        ok "bundle unchanged, signed by '$SIGN_IDENTITY', notarization=$([ $is_stapled -eq 1 ] && echo stapled || echo skipped) — skipping re-sign"
         exit 0
     fi
-    ok "binary unchanged but signature invalid — re-signing in place"
+    ok "binary unchanged but signature/notarization stale — re-applying"
 else
     cp "$BINARY" "$APP_DIR/Contents/MacOS/charon-security"
     ok "binary copied"
@@ -126,9 +132,51 @@ codesign --force \
     --sign "$SIGN_IDENTITY" \
     --identifier "$BUNDLE_ID" \
     --options runtime \
+    --timestamp \
     "$APP_DIR"
 codesign --verify --verbose=1 "$APP_DIR" 2>&1 | sed 's/^/    /'
 ok "signed and verified"
+
+# ── Notarize ─────────────────────────────────────────────────────────────────
+# On macOS 26 (Tahoe), TCC won't honor FDA grants for a Dev ID-signed
+# but unnotarized bundle — `spctl --assess` rejects with
+# `source=Unnotarized Developer ID` and TCC keys off that.
+#
+# Skipped when:
+#   - NOTARIZE_PROFILE is empty (dev iteration, or self-signed identity
+#     where notarization isn't possible)
+#   - The signing identity is "Charon Self-Signed" (Apple won't notarize
+#     a non-Apple-issued cert chain)
+#
+# To enable: store credentials once with
+#   xcrun notarytool store-credentials charon-notary \
+#     --apple-id <email> --team-id <TEAMID> --password <app-specific-pw>
+# then run `make security-install` with NOTARIZE_PROFILE=charon-notary
+# (the default).
+case "$SIGN_IDENTITY" in
+    "Charon Self-Signed"|"")
+        warn "self-signed identity — skipping notarization (Apple won't accept)"
+        ;;
+    *)
+        if [ -n "${NOTARIZE_PROFILE:-}" ]; then
+            info "Notarizing with profile '$NOTARIZE_PROFILE' (1–5 min upload + Apple review)"
+            ZIP="$(mktemp -u)-${BUNDLE_ID}.zip"
+            ditto -c -k --keepParent "$APP_DIR" "$ZIP"
+            if ! xcrun notarytool submit "$ZIP" \
+                    --keychain-profile "$NOTARIZE_PROFILE" --wait \
+                    2>&1 | sed 's/^/    /'; then
+                rm -f "$ZIP"
+                die "notarytool submit failed (check the profile is set up — see script comments)"
+            fi
+            rm -f "$ZIP"
+            xcrun stapler staple "$APP_DIR" 2>&1 | sed 's/^/    /'
+            ok "notarized and stapled"
+        else
+            warn "NOTARIZE_PROFILE unset — skipping notarization. Tahoe TCC will deny FDA."
+            warn "To enable: NOTARIZE_PROFILE=charon-notary make security-install"
+        fi
+        ;;
+esac
 
 # ── Confirmation ─────────────────────────────────────────────────────────────
 info "Bundle layout:"

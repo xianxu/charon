@@ -414,11 +414,14 @@ Roughly decreasing value-per-effort for a single-user dev tool:
    [`security-audit-test-plan.md`](security-audit-test-plan.md) and
    [`atlas/security-audit.md`](../atlas/security-audit.md).
 
-5. **Apple Developer ID** (long-term). Closes A5 with hardened
-   runtime, gives proper revocation, enables notarization for
-   distribution beyond the user's machine. Also unblocks the FDA
-   path of `charon-security` on macOS 26 (Tahoe), where self-signed
-   bundles silently fail TCC enforcement. Tracked in
+5. **Apple Developer ID** (done as of 2026-04-28). Closes A5 with
+   hardened runtime, gives proper revocation, enables notarization
+   for distribution beyond the user's machine. Required on macOS 26
+   (Tahoe) for `charon-security` to read TCC.db: Tahoe gates TCC on
+   `spctl --assess`, which rejects unnotarized bundles. Charon proper
+   (`make install`) doesn't need notarization — its M4 keychain ACL
+   doesn't go through TCC, and as a single Mach-O there's nowhere to
+   staple a ticket. Migration runbook + analysis in
    [issue #000011](../workshop/issues/000011-apple-developer-id.md).
 
 The keychain ACL boundary the test plan verifies — A1 and A10 — is

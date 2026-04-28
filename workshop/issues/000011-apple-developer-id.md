@@ -1,6 +1,6 @@
 ---
 id: 000011
-status: working
+status: done
 deps: [000003, 000010]
 github_issue:
 created: 2026-04-28
@@ -114,6 +114,59 @@ Sketch (detailed plan when prerequisites in hand):
   change needed: the ACL captures the running binary's DR via
   `SecTrustedApplicationCreateFromPath` at write time, so subsequent
   `make install` runs automatically write entries pinned to the new DR.
+- 2026-04-28: **Tahoe TCC working.** Captured tccd's actual deny reason
+  via `log show --predicate 'subsystem == "com.apple.TCC"'` while a
+  failing audit ran. The `AttributionChain` told us the *real* problem:
+
+  ```
+  responsible = {com.cmuxterm.app, /Applications/cmux.app/...}
+  accessing   = {com.charon.security, ...}
+  Auth Right: Denied (Service Policy)
+  ```
+
+  TCC's responsibility chain attributed the access request to the
+  user-launched ancestor (cmux), not to `com.charon.security`. Our FDA
+  grant on `com.charon.security` was being ignored entirely; TCC was
+  evaluating cmux's policy instead.
+
+  Two-part fix:
+
+  1. **Notarization** — required by Tahoe spctl for Dev ID-signed
+     bundles to be trusted at all. Wired into
+     `scripts/dev/build-security-app.sh` behind `NOTARIZE_PROFILE`
+     env var. Default profile name `charon-notary`; user runs
+     `xcrun notarytool store-credentials charon-notary ...` once.
+  2. **LaunchServices attribution** — `make security` now invokes
+     `open -W -n` instead of running the binary directly. `open`
+     hands the launch to LaunchServices, which establishes the .app
+     itself as its own responsible process. The terminal drops out
+     of the responsibility chain; TCC then evaluates
+     `com.charon.security`'s policy as expected.
+
+  Verified end-to-end: `make security` from inside cmux now reads
+  TCC.db successfully; zero `tcc-no-fda-*` findings.
+
+  **Notarization vs attribution — which mattered?** Both were real
+  bugs, but attribution was the structural one. The TCC log showed
+  the immediate denial reason was attribution mismatch (Service
+  Policy denial keyed to cmux); that bug existed regardless of
+  notarization. Notarization is a Tahoe prerequisite that makes
+  TCC's grant lookup take effect at all — without notarization,
+  Tahoe spctl rejection cascades to TCC. So in practice both are
+  required on macOS 26+; on older macOS, just the attribution fix
+  would likely have been enough.
+
+- 2026-04-28: Charon proper (`make install`) **not** notarized. Its
+  security boundary is the M4 keychain ACL, which evaluates the
+  running process's DR (now Apple-anchored under Dev ID). That
+  doesn't go through TCC, so Tahoe's TCC-via-spctl gate doesn't
+  apply. Charon CLI is also a single Mach-O, not a `.app` bundle,
+  so there's nowhere to staple a notarization ticket. Notarization
+  remains optional for charon proper — relevant only if we
+  distribute beyond personal use.
+
+- 2026-04-28: M6 (auto-revoke) marked wontfix in #000010 — see that
+  issue's milestone log for rationale.
 
 ## Migration runbook
 

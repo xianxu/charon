@@ -85,6 +85,12 @@ SECURITY_APP_NAME     ?= Charon Security
 SECURITY_APP_DIR      ?= $(HOME)/Applications/$(SECURITY_APP_NAME).app
 SECURITY_BUNDLE_STAMP := bin/.security-bundle.stamp
 
+# Apple notary keychain profile name. Default `charon-notary` matches the
+# setup instructions in the issue runbook. Set to empty to skip
+# notarization entirely (e.g. self-signed builds, or first-time setup
+# before `notarytool store-credentials` has been run).
+NOTARIZE_PROFILE      ?= charon-notary
+
 # Track Go sources affecting charon-security so Make rebuilds the
 # binary only when something it cares about changed. Ran at makefile
 # parse time — cheap (~30 files).
@@ -104,6 +110,7 @@ $(SECURITY_BUNDLE_STAMP): bin/charon-security scripts/dev/build-security-app.sh
 	 APP_NAME="$(SECURITY_APP_NAME)" \
 	 APP_DIR="$(SECURITY_APP_DIR)" \
 	 SIGN_IDENTITY="$(SIGN_IDENTITY)" \
+	 NOTARIZE_PROFILE="$(NOTARIZE_PROFILE)" \
 	 BINARY=bin/charon-security \
 	 scripts/dev/build-security-app.sh
 	@touch $@

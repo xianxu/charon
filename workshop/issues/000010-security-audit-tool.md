@@ -199,10 +199,16 @@ High-level milestones:
   non-empty with proper DR. *(Signing-key ACL inspection deferred —
   requires CGo to walk a non-charon-namespace cert/key item; manual
   Keychain Access verification covered by the remedy text instead.)*
-- [ ] **M6** — Auto-revoke flow with `tccutil reset` + verification.
-  *(Blocked on [#000011](000011-apple-developer-id.md): Tahoe TCC
-  won't grant FDA to self-signed bundles, so there's nothing to
-  revoke. Resume after Apple Developer ID transition.)*
+- ⛔ **M6** — *wontfix.* Originally framed as "auto-revoke FDA after
+  each audit to minimize attack surface". After #000011 unblocked
+  TCC on Tahoe (Dev ID + notarization + LaunchServices attribution),
+  persistent FDA on `com.charon.security` is acceptable: the audit
+  binary only runs when explicitly invoked, runs as the user anyway,
+  and has a tightly bounded threat model (audit, exit). The marginal
+  risk reduction from auto-revoke isn't worth the friction of
+  re-granting FDA every run. Users who want zero-FDA-at-rest can
+  manually toggle off in System Settings; `make security-uninstall`
+  also runs `tccutil reset` for a clean slate.
 - [x] **M7** — Severity tiers, exit codes, `--json` output, colorization.
 - [x] **M8** — Remediation prose for each finding ID. `make security-remedy`
   prints the playbook. *(Reordered ahead of M3 per user — more value
