@@ -102,7 +102,7 @@ func ReadTCC(dbPath string) ([]TCCRow, error) {
 	probe, openErr := os.Open(dbPath)
 	if openErr != nil {
 		if os.IsPermission(openErr) {
-			return nil, ErrNoFDA
+			return nil, fmt.Errorf("%w (os.Open: %v)", ErrNoFDA, openErr)
 		}
 		return nil, openErr
 	}
@@ -170,8 +170,8 @@ func CheckTCC(apps []DetectedApp) []Finding {
 			findings = append(findings, Finding{
 				ID:        "tcc-no-fda-" + scope,
 				Severity:  SevInfo,
-				Title:     fmt.Sprintf("Cannot read %s-scope TCC.db (Full Disk Access required)", scope),
-				Detail:    fmt.Sprintf("Grant Full Disk Access to com.charon.security via System Settings → Privacy & Security → Full Disk Access, then re-run. M6's auto-revoke prompt at end-of-run cleans up afterward.\n\nAlternatively run with --no-tcc to skip this check and use the visual System Settings walk."),
+				Title:     fmt.Sprintf("Cannot read %s-scope TCC.db: %v", scope, err),
+				Detail:    fmt.Sprintf("Underlying error: %v\n\nGrant Full Disk Access to com.charon.security via System Settings → Privacy & Security → Full Disk Access, then re-run. Alternatively run with --no-tcc to skip this check and use the visual System Settings walk.", err),
 				RemedyRef: "tcc-fda",
 				Affects:   []string{path},
 			})
