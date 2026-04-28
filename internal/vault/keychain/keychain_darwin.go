@@ -38,6 +38,14 @@ func New() *Store {
 	return &Store{service: ResolveServiceName()}
 }
 
+// NewWithService builds a Store bound to an explicit service
+// namespace. Used by the security audit tool to inspect both
+// `charon` and `charon-dev` namespaces from outside the running
+// charon binary's own identity.
+func NewWithService(service string) *Store {
+	return &Store{service: service}
+}
+
 func (s *Store) Get(provider, account string) (*vault.Credential, error) {
 	key := keyName(provider, account)
 	data, err := gokeychain.GetGenericPassword(s.service, key, "", "")

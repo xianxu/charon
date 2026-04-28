@@ -81,10 +81,10 @@ func runCheck() error {
 	}
 
 	opts := security.PreflightOptions{
-		// Toggled on as M5 / M6 land. Keeping these honest now is the
+		// Toggled on as M6 lands. Keeping these honest now is the
 		// difference between a transparency block and a fairy tale.
 		WillReadTCC:      !flagNoTCC,
-		WillCheckCharon:  false,
+		WillCheckCharon:  true,
 		WillPromptRevoke: false,
 	}
 	security.PrintPreflight(os.Stderr, self, opts)
@@ -119,7 +119,7 @@ func runCheck() error {
 		offerFDAGrantIfNeeded(tccFindings, self)
 	}
 
-	// M5 plugs charon-specific keychain ACL checks here.
+	report.Findings = append(report.Findings, security.CheckCharonKeychainACLs()...)
 
 	if flagNoTCC {
 		if !flagYes && security.IsInteractive() {

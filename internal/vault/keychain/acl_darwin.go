@@ -267,6 +267,14 @@ import (
 // remain idempotent without callers reaching into OSStatus codes.
 const cErrSecItemNotFound = -25300
 
+// InspectACL returns ACL counts for a charon-namespaced entry in
+// this Store's service. Used by the security audit tool to verify
+// that the M4 ACL boundary actually attached. See
+// inspectGenericPasswordACL for the meaning of the returned counts.
+func (s *Store) InspectACL(account string) (aclCount, appCount int, err error) {
+	return inspectGenericPasswordACL(s.service, account)
+}
+
 // inspectGenericPasswordACL returns ACL signals for an existing
 // keychain item. Used by integration tests to verify our SecAccess
 // actually attached. Production code doesn't need it.

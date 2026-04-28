@@ -24,8 +24,21 @@ type Store struct {
 	service string
 }
 
+// InspectACL is unimplemented on the non-CGo fallback path. The
+// `security` CLI does not expose ACLs in a parseable form; the audit
+// tool requires the darwin+cgo build to inspect ACLs.
+func (s *Store) InspectACL(account string) (aclCount, appCount int, err error) {
+	return 0, 0, fmt.Errorf("InspectACL requires darwin+cgo")
+}
+
 func New() *Store {
 	return &Store{service: ResolveServiceName()}
+}
+
+// NewWithService builds a Store bound to an explicit service
+// namespace. Used by the security audit tool.
+func NewWithService(service string) *Store {
+	return &Store{service: service}
 }
 
 func (s *Store) Get(provider, account string) (*vault.Credential, error) {

@@ -195,9 +195,10 @@ High-level milestones:
   `make security-uninstall`. Signed with `Charon Self-Signed`.
 - [x] **M4** — TCC.db reader (sqlite, parse `access` table). Per-app
   grant report scoped to known-terminals list.
-- [ ] **M5** — Charon-specific checks: signing-key ACL inspection
-  (trusted-apps list empty), charon keychain entries' ACL non-empty
-  with proper DR.
+- [x] **M5** — Charon-specific checks: charon keychain entries' ACL
+  non-empty with proper DR. *(Signing-key ACL inspection deferred —
+  requires CGo to walk a non-charon-namespace cert/key item; manual
+  Keychain Access verification covered by the remedy text instead.)*
 - [ ] **M6** — Auto-revoke flow with `tccutil reset` + verification.
 - [ ] **M7** — Severity tiers, exit codes, `--json` output, colorization.
 - [x] **M8** — Remediation prose for each finding ID. `make security-remedy`
@@ -291,3 +292,24 @@ High-level milestones:
   pointing at the remedy + visual-mode fallback rather than failing.
   Curated CredentialApps map (Keychain Access, 1Password, Bitwarden,
   Dashlane, LastPass) drives the AppleEvents severity bump.
+- 2026-04-28: **macOS 26 (Tahoe) limitation discovered.** Self-signed
+  bundles fail `spctl --assess` and TCC silently denies FDA grants
+  even with the System Settings toggle ON. `os.Open(TCC.db)` returns
+  `operation not permitted` regardless of toggle state. `sudo spctl
+  --add` may help but unverified. **Punted.** Proper fix is the
+  Apple Developer ID transition (threat-model future-work item #5).
+  Until then, on macOS 26+, users should run with `--no-tcc` for the
+  visual System Settings walk. M4 is functional and tested; the
+  blocker is environmental, not code-level.
+- 2026-04-28: M5 landed. `internal/security/check_charon.go` reuses
+  the existing CGo helper `inspectGenericPasswordACL` (added a public
+  wrapper `Store.InspectACL`). Inspects BOTH `charon` and
+  `charon-dev` namespaces — the audit tool's own bundle ID
+  (`com.charon.security`) doesn't satisfy ResolveServiceName's
+  prod-DR predicate, so it would default to the wrong namespace
+  otherwise. Added `keychain.NewWithService(service)` constructor for
+  this. Severity matrix per entry: (0,0)=Critical, (>0,1)=healthy,
+  (>0,N>1)=Important. Live run on author's machine: 0 findings under
+  `charon` (entries healthy), 0 under `charon-dev` (empty). Signing-
+  key ACL check deferred to a future iteration; remedy text already
+  walks users through manual Keychain Access verification.
