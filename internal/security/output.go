@@ -66,6 +66,7 @@ const (
 	BarLaunchdPersistence BarItem = 9  // No suspicious launchd persistence
 	BarCharonBinary       BarItem = 10 // Installed charon binary signed + hardened with expected identifier
 	BarFileVault          BarItem = 11 // FileVault enabled (at-rest disk encryption)
+	BarTimeMachine        BarItem = 12 // Time Machine destinations are encrypted
 )
 
 // barItemLabels mirror the "reasonable bar" wording in
@@ -83,6 +84,7 @@ var barItemLabels = map[BarItem]string{
 	BarLaunchdPersistence: "No suspicious launchd persistence",
 	BarCharonBinary:       "Installed charon CLI is signed + hardened",
 	BarFileVault:          "FileVault enabled (at-rest disk encryption)",
+	BarTimeMachine:        "Time Machine destinations are encrypted",
 }
 
 // allBarItems is the canonical ordered enumeration. Used when
@@ -91,7 +93,7 @@ var allBarItems = []BarItem{
 	BarSIP, BarTerminalFDA, BarTerminalA11y, BarTerminalScreen,
 	BarTerminalEvents, BarSudoCache, BarSigningKeyACL,
 	BarKeychainEntries, BarLaunchdPersistence, BarCharonBinary,
-	BarFileVault,
+	BarFileVault, BarTimeMachine,
 }
 
 // Finding is one item the audit produced. ID is stable across runs and

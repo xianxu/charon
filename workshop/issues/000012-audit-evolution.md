@@ -141,25 +141,25 @@ so the user sees the whole pairwise relationship, not just the
 flagged subset. Probably over-noisy at full enumeration; gate
 behind `--verbose` or a separate `audit-automation` subcommand.
 
-### E. FileVault + encrypted Time Machine status ✅ landed 2026-04-28 (FileVault portion); TM still TODO
+### E. FileVault + encrypted Time Machine status ✅ landed 2026-04-28 (both)
 
 `internal/security/check_filevault.go` parses `diskutil info /` and
 emits an Important finding when FileVault is off. Bar item 11.
+Switched from `fdesetup status` to `diskutil info /` because Tahoe's
+fdesetup errors with "Unknown volume or device specifier: '/'".
 
-Implementation note: switched from `fdesetup status` to `diskutil
-info /` because Tahoe's fdesetup errors with "Unknown volume or
-device specifier: '/'" — Apple appears to have changed the tool.
-diskutil's per-volume info has been stable across versions.
+`internal/security/check_timemachine.go` parses `tmutil
+destinationinfo`, then for each Local destination calls
+`diskutil info <mountPoint>` to check `Encrypted: Yes` / `FileVault:
+Yes`. Bar item 12. Severity matrix:
 
-**Time Machine encryption check still open.** Per-destination check
-needs:
-
-- `tmutil destinationinfo -X` to enumerate configured destinations
-- `diskutil info <path>` per destination to check Encrypted: Yes/No
-- Network destinations (TM-over-SMB) need a different code path
-
-Defer until motivation; FileVault alone covers the most-common C1
-attack path (theft of the laptop itself).
+- No TM destinations configured → silent (you don't have a TM
+  backup to worry about; bar passes).
+- Local destination, encrypted → silent.
+- Local destination, unencrypted → Important (C1 backup angle).
+- Local destination, encryption status unknown → Info.
+- Network destination (AFP/SMB) → Info ("verify manually; remote
+  encryption isn't programmatically observable").
 
 ### F. Charon binary self-attestation ✅ landed 2026-04-28 (first pass + DR-vs-entry path comparison)
 
@@ -239,8 +239,7 @@ Roughly decreasing value-per-effort:
    2026-04-28 (identifier + hardened-runtime + signed checks);
    path-form DR-vs-keychain-entry drift check landed same day.
    Predicate-form comparison still open but rare in practice.
-5. ~~(E) FileVault~~ — landed 2026-04-28. Time Machine
-   per-destination encryption check still open under (E).
+5. ~~(E) FileVault + encrypted Time Machine~~ — both landed 2026-04-28.
 6. Everything else as motivation arrives.
 
 ## Notes
