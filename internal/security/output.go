@@ -73,10 +73,10 @@ const (
 // the user's at-a-glance map between audit output and threat model.
 var barItemLabels = map[BarItem]string{
 	BarSIP:                "SIP enabled",
-	BarTerminalFDA:        "Terminal/IDE has no Full Disk Access",
-	BarTerminalA11y:       "Terminal/IDE has no Accessibility",
-	BarTerminalScreen:     "Terminal/IDE has no Screen Recording",
-	BarTerminalEvents:     "Terminal/IDE has no AppleEvents to credential apps",
+	BarTerminalFDA:        "No terminal/IDE or dangerous path has Full Disk Access",
+	BarTerminalA11y:       "No terminal/IDE or dangerous path has Accessibility",
+	BarTerminalScreen:     "No terminal/IDE or dangerous path has Screen Recording",
+	BarTerminalEvents:     "No terminal/IDE or dangerous path has AppleEvents to credential apps",
 	BarSudoCache:          "Sudo cache empty in this shell",
 	BarSigningKeyACL:      "Charon signing-key has no dangerous trusted apps",
 	BarKeychainEntries:    "Charon keychain entries have ACLs",

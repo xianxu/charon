@@ -135,6 +135,42 @@ func TestEvaluateTCCRows_SeverityMatrix(t *testing.T) {
 	}
 }
 
+func TestEvaluateTCCRows_PathBased(t *testing.T) {
+	apps := map[string]DetectedApp{} // not relevant for path-based rows
+	rows := []TCCRow{
+		// Critical: /usr/bin/security with FDA — universally bad
+		{Service: tccFDA, Client: "/usr/bin/security", ClientType: 1, AuthValue: 2},
+		// Critical: /usr/bin/codesign with anything (here: A11y)
+		{Service: tccA11y, Client: "/usr/bin/codesign", ClientType: 1, AuthValue: 2},
+		// Critical: dangerous shell with FDA
+		{Service: tccFDA, Client: "/bin/bash", ClientType: 1, AuthValue: 2},
+		// Important: dangerous shell with Screen Recording
+		{Service: tccScreen, Client: "/bin/zsh", ClientType: 1, AuthValue: 2},
+		// Important: suspicious-prefix path with FDA
+		{Service: tccFDA, Client: "/private/tmp/foo", ClientType: 1, AuthValue: 2},
+		// Silent: legitimate path not on either list
+		{Service: tccFDA, Client: "/usr/local/bin/git", ClientType: 1, AuthValue: 2},
+		// Silent: denied auth_value
+		{Service: tccFDA, Client: "/usr/bin/security", ClientType: 1, AuthValue: 0},
+	}
+	findings := evaluateTCCRows(rows, apps, "user")
+	wantSeverity := []Severity{
+		SevCritical,  // security FDA
+		SevCritical,  // codesign A11y (bumped from Important)
+		SevCritical,  // bash FDA
+		SevImportant, // zsh ScreenCapture
+		SevImportant, // /private/tmp/foo FDA (suspicious prefix)
+	}
+	if len(findings) != len(wantSeverity) {
+		t.Fatalf("got %d findings, want %d:\n%+v", len(findings), len(wantSeverity), findings)
+	}
+	for i, want := range wantSeverity {
+		if findings[i].Severity != want {
+			t.Errorf("[%d] severity = %v, want %v (%s)", i, findings[i].Severity, want, findings[i].Title)
+		}
+	}
+}
+
 func TestEvaluateTCCRows_LimitedAuthValueAllowed(t *testing.T) {
 	// auth_value=3 is "limited" (e.g. Documents only). For our coarse
 	// audit, any non-denied grant on a terminal still surfaces.

@@ -32,6 +32,39 @@ var CredentialApps = map[string]string{
 	"com.lastpass.LastPass":      "LastPass",
 }
 
+// DangerousTCCPaths are absolute paths that should not appear as TCC
+// clients (client_type=1). If any of these holds FDA, Accessibility,
+// Screen Recording, or AppleEvents grants, the TCC boundary is
+// effectively bypassed for that service: any process running as the
+// user can shell out to the path and inherit the granted permission.
+//
+// Curated list — narrow to obvious silent-bypass paths. Common-but-
+// noisy entries (git, code, etc.) deliberately excluded.
+var DangerousTCCPaths = map[string]string{
+	"/usr/bin/security":   "any process can read keychain entries via the `security` CLI",
+	"/usr/bin/codesign":   "any process can produce charon-signed Mach-O binaries silently",
+	"/bin/sh":             "any process can shell out and inherit broad permissions",
+	"/bin/bash":           "any process can shell out and inherit broad permissions",
+	"/bin/zsh":            "any process can shell out and inherit broad permissions",
+	"/usr/bin/osascript":  "AppleScript with TCC grants is essentially universal automation",
+	"/usr/bin/python3":    "any Python script can use the granted permission",
+	"/usr/bin/perl":       "any Perl script can use the granted permission",
+	"/usr/bin/ruby":       "any Ruby script can use the granted permission",
+	"/opt/homebrew/bin/sh":   "any process can shell out and inherit broad permissions",
+	"/opt/homebrew/bin/bash": "any process can shell out and inherit broad permissions",
+	"/opt/homebrew/bin/zsh":  "any process can shell out and inherit broad permissions",
+}
+
+// suspiciousPathPrefixes are paths under which a TCC client is
+// almost certainly user-downloaded or build-output content rather
+// than a legitimate installed app. Important-tier flag (not Critical
+// — could be a development binary the user trusts).
+var suspiciousPathPrefixes = []string{
+	"/private/tmp/",
+	"/tmp/",
+	"/private/var/folders/", // macOS user-temp directories
+}
+
 // TCCRow is one row from the access table. Only the columns we
 // consume are pulled — the schema has churned across macOS versions
 // and a wide SELECT * would break on older or newer hosts.
@@ -193,11 +226,26 @@ func CheckTCC(apps []DetectedApp) []Finding {
 
 // evaluateTCCRows is the pure function — ZERO syscalls — that turns
 // rows + known-app set into findings. Tests target this directly.
+//
+// Two client types are evaluated:
+//   client_type=0 (bundle ID) — joined against KnownApps; flagged
+//                                only if the bundle ID is in the
+//                                curated terminal/editor/IDE list.
+//   client_type=1 (absolute path) — joined against DangerousTCCPaths
+//                                    (Critical) or suspiciousPathPrefixes
+//                                    (Important). Other paths silent.
 func evaluateTCCRows(rows []TCCRow, byBundle map[string]DetectedApp, scope string) []Finding {
 	var findings []Finding
 	for _, r := range rows {
-		if !r.IsAllowed() || r.ClientType != 0 {
+		if !r.IsAllowed() {
 			continue
+		}
+		if r.ClientType == 1 {
+			findings = append(findings, evaluatePathBasedRow(r, scope)...)
+			continue
+		}
+		if r.ClientType != 0 {
+			continue // unknown client type
 		}
 		app, known := byBundle[r.Client]
 		if !known {
@@ -247,4 +295,121 @@ func evaluateTCCRows(rows []TCCRow, byBundle map[string]DetectedApp, scope strin
 		findings = append(findings, f)
 	}
 	return findings
+}
+
+// evaluatePathBasedRow handles client_type=1 (absolute-path TCC
+// clients) — anything in DangerousTCCPaths gets a Critical finding
+// (with the bar item matching the service); paths under
+// suspiciousPathPrefixes get Important. All other paths are silent
+// to avoid noise from legitimate user installs.
+//
+// A TCC grant on /usr/bin/security with FDA, for example, means any
+// process running as the user can `security find-generic-password
+// -s charon -a ... -g` and silently read tokens — entirely bypassing
+// charon's M4 keychain ACL. Same severity tier as the bundle-ID
+// case; tagged to the same bar item.
+func evaluatePathBasedRow(r TCCRow, scope string) []Finding {
+	bar, sev, idPrefix := tccServiceMeta(r.Service)
+	if bar == BarNone {
+		return nil // service we don't audit
+	}
+
+	// Dangerous paths: surface as the same severity as the bundle-ID
+	// case (Critical for FDA/A11y, Important for Screen/Events) but
+	// always at minimum Critical for `/usr/bin/security` and
+	// `/usr/bin/codesign` regardless of service — they're A1/A10
+	// silent-bypass shaped.
+	if reason, ok := DangerousTCCPaths[r.Client]; ok {
+		// Bump to Critical for the universally-bad paths.
+		switch r.Client {
+		case "/usr/bin/security", "/usr/bin/codesign":
+			sev = SevCritical
+		}
+		return []Finding{{
+			ID:       idPrefix + "-path-" + sanitizePathID(r.Client),
+			Severity: sev,
+			Title:    fmt.Sprintf("%s has %s — %s", r.Client, tccServiceName(r.Service), reason),
+			Detail: fmt.Sprintf(
+				"Service: %s\nScope: %s-scope TCC.db\nClient: %s (path)\n\n%s",
+				r.Service, scope, r.Client, reason),
+			Affects:   []string{r.Client},
+			RemedyRef: tccServiceRemedy(r.Service),
+			BarItem:   bar,
+		}}
+	}
+
+	// Suspicious-prefix paths: Important regardless of service
+	// (downgraded from Critical because legitimate dev binaries
+	// can land under /private/var/folders briefly).
+	for _, prefix := range suspiciousPathPrefixes {
+		if strings.HasPrefix(r.Client, prefix) {
+			return []Finding{{
+				ID:       idPrefix + "-suspath-" + sanitizePathID(r.Client),
+				Severity: SevImportant,
+				Title:    fmt.Sprintf("%s has %s — path is in a suspicious location", r.Client, tccServiceName(r.Service)),
+				Detail: fmt.Sprintf(
+					"Service: %s\nScope: %s-scope TCC.db\nClient: %s (path)\n\n"+
+						"This path is under %s, which is normally only used for transient files. "+
+						"A TCC grant here suggests a downloaded binary asked for permissions and the user accepted. "+
+						"Verify that this binary should hold the grant; remove via System Settings if not.",
+					r.Service, scope, r.Client, prefix),
+				Affects:   []string{r.Client},
+				RemedyRef: tccServiceRemedy(r.Service),
+				BarItem:   bar,
+			}}
+		}
+	}
+	return nil
+}
+
+// tccServiceMeta returns the bar item, default severity, and ID prefix
+// for a TCC service — shared between bundle and path code paths.
+func tccServiceMeta(service string) (BarItem, Severity, string) {
+	switch service {
+	case tccFDA:
+		return BarTerminalFDA, SevCritical, "tcc-fda"
+	case tccA11y:
+		return BarTerminalA11y, SevCritical, "tcc-a11y"
+	case tccScreen:
+		return BarTerminalScreen, SevImportant, "tcc-screen"
+	case tccEvents:
+		return BarTerminalEvents, SevImportant, "tcc-events"
+	}
+	return BarNone, SevHygiene, ""
+}
+
+func tccServiceName(service string) string {
+	switch service {
+	case tccFDA:
+		return "Full Disk Access"
+	case tccA11y:
+		return "Accessibility"
+	case tccScreen:
+		return "Screen Recording"
+	case tccEvents:
+		return "AppleEvents"
+	}
+	return service
+}
+
+func tccServiceRemedy(service string) string {
+	switch service {
+	case tccFDA:
+		return "tcc-fda"
+	case tccA11y:
+		return "tcc-a11y"
+	case tccScreen:
+		return "tcc-screen"
+	case tccEvents:
+		return "tcc-events"
+	}
+	return ""
+}
+
+// sanitizePathID turns an absolute path into a Finding-ID-safe suffix
+// (no slashes / spaces / special chars). Reversible: the path lives
+// in Affects.
+func sanitizePathID(path string) string {
+	r := strings.NewReplacer("/", "-", " ", "_", ".", "_")
+	return strings.TrimPrefix(r.Replace(path), "-")
 }

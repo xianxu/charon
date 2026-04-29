@@ -105,23 +105,24 @@ Keychain Access to determine whether the trusted apps include
 codesign (catastrophic) or only Apple system services (probably
 benign).
 
-### C. Path-based TCC grants
+### C. Path-based TCC grants ✅ landed 2026-04-28
 
-`evaluateTCCRows` currently filters out `client_type == 1` (path-
-based grants) entirely. Most legitimate path-based grants are for
-`/usr/bin/git`, `/usr/local/bin/zoom`, etc. — not what we audit.
+`evaluateTCCRows` previously skipped `client_type == 1` entirely.
+Now path-based rows route through `evaluatePathBasedRow`:
 
-But certain paths *are* worth flagging:
+- **DangerousTCCPaths** (curated map: `/usr/bin/security`,
+  `/usr/bin/codesign`, shells, interpreters, `osascript`,
+  Homebrew shell variants) → Critical for FDA/A11y/Events,
+  always Critical for `security` and `codesign` regardless of
+  service. Findings tag the appropriate bar (2/3/4/5).
+- **suspiciousPathPrefixes** (`/private/tmp/`, `/tmp/`,
+  `/private/var/folders/`) → Important. Catches downloaded /
+  build-output binaries that asked for permissions.
+- **Other paths** silent — `/usr/bin/git`, `/usr/local/bin/zoom`,
+  etc. are noisy and legitimate.
 
-- `/usr/bin/security` with FDA/Accessibility → should be impossible
-  but worth confirming
-- `/opt/homebrew/bin/<shell>` with FDA → user installed a custom
-  shell with broad permissions
-- Anything under `~/Downloads` or `/private/tmp` with TCC grants →
-  highly suspicious
-
-Curate a small allow / deny list of path patterns and surface
-findings for matches.
+Bar labels updated to "no terminal/IDE or dangerous path has X"
+to reflect the unified scope.
 
 ### D. AppleEvents pairwise grant reporting
 

@@ -105,10 +105,10 @@ table.
 | # | Property | How to check |
 |---|---|---|
 | **1** | SIP enabled | `csrutil status` says `enabled` |
-| **2** | Terminal/IDE has no Full Disk Access grant | System Settings → Privacy & Security → Full Disk Access pane has no entry for Terminal, iTerm, Ghostty, VS Code, Cursor, etc. |
-| **3** | Terminal/IDE has no Accessibility grant | …same pane, Accessibility section. (Window managers like Rectangle / Hammerspoon are fine; they don't run shells.) |
-| **4** | Terminal/IDE has no Screen Recording grant | …same pane, Screen Recording section |
-| **5** | Terminal/IDE has no Automation grant to credential apps (Keychain Access, 1Password, Bitwarden, etc.) | …same pane, Automation section |
+| **2** | No terminal/IDE or dangerous-path TCC client has Full Disk Access. *Dangerous paths*: `/usr/bin/security`, `/usr/bin/codesign`, shells (`/bin/sh`/`bash`/`zsh`), interpreters, `osascript`. | System Settings → Privacy & Security → Full Disk Access pane has no terminal/IDE/shell/interpreter listed. |
+| **3** | …same as 2, Accessibility section (window managers like Rectangle / Hammerspoon are fine; they don't run shells). | …same pane, Accessibility section |
+| **4** | …same as 2, Screen Recording. | …same pane, Screen Recording section |
+| **5** | …same as 2, AppleEvents/Automation. Plus: no terminal/IDE has automation rights to credential apps (Keychain Access, 1Password, Bitwarden, etc.). | …same pane, Automation section |
 | **6** | Sudo cache empty when launching agents | `sudo -k` before, fresh terminal afterwards |
 | **7** | **Always Allow never clicked** on the charon signing-key dialog — and no `codesign` / `security` CLI in the key's trusted-applications list (Apple-default entries like Certificate Assistant, racoon, ServerManagerDaemon are tolerated) | `make security` rolls finding to Hygiene with verdict "all benign" if only Apple defaults are present, Critical if codesign / security CLI are trusted, Important if any entry is unrecognized |
 | **8** | Charon's keychain entries have ACLs | `make security` reports no `charon-entries-acl-missing-*` finding |
