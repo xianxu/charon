@@ -658,14 +658,14 @@ Roughly decreasing value-per-effort for a single-user dev tool:
 4. **CI** (general). No CI exists today. When we add one,
    `make govulncheck` should be a required job.
 
-5. **Charon binary DR vs keychain-entry DR comparison** ([#000012
-   item F deeper](../workshop/issues/000012-audit-evolution.md)).
-   The first-pass charon-binary check verifies signing properties
-   in isolation; the deeper check would compare the installed
-   binary's DR against the DR(s) in keychain-entry ACLs and surface
-   "the binary that wrote these entries is no longer the one at
-   `~/.local/bin/charon`" drift. Mostly mechanical now that #12 A
-   broader landed.
+5. **Predicate-form DR comparison** ([#000012 item F
+   deeper](../workshop/issues/000012-audit-evolution.md), partial).
+   The path-form drift check landed: if the installed binary path
+   doesn't match what entries trust, the audit surfaces it. The
+   predicate-form case (entries trust `identifier "com.charon.cli"
+   and anchor apple generic and team = X`-style DRs rather than
+   paths) is still TODO — uncommon in practice since
+   `SecTrustedApplicationCreateFromPath(NULL, ...)` stores paths.
 
 The keychain ACL boundary that #000010's test plan verifies — A1
 and A10 — is the one that's unique to charon and was the reason

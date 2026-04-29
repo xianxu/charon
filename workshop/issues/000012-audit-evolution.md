@@ -161,7 +161,7 @@ needs:
 Defer until motivation; FileVault alone covers the most-common C1
 attack path (theft of the laptop itself).
 
-### F. Charon binary self-attestation ✅ landed 2026-04-28 (first pass)
+### F. Charon binary self-attestation ✅ landed 2026-04-28 (first pass + DR-vs-entry path comparison)
 
 `internal/security/check_charon_binary.go` scans
 `~/.local/bin/charon` via `codesign -dvv` and emits findings for:
@@ -173,14 +173,20 @@ attack path (theft of the laptop itself).
 
 This is bar item 10. Closes the most common stale-binary surface.
 
-**Still TODO under (F)** — comparing the installed binary's DR
-against the DRs stored in keychain entries' ACLs (the deeper "stale
-daemon wrote with an old DR you can no longer satisfy" case). That
-needs the per-entry ACL enumeration from (A) broader scope: get the
-trusted-app DR strings out of keychain entries, compare against the
-running binary's DR. Both pieces share infrastructure with
-`InspectSigningKeyACLDetailed`; once (A) lands for charon-namespace
-entries, the comparison is mechanical.
+**Path-form comparison landed** under #12F deeper. After (A) broader
+extracted per-entry trusted-app DRs, `driftFindings` extracts paths
+from those DRs (when they're path-shaped, which is the common
+case — Apple's `SecTrustedApplicationCreateFromPath(NULL, ...)`
+stores the path). If the installed binary's path
+(`~/.local/bin/charon`) doesn't appear in any entry's expected
+trust list, surfaces an Important drift finding naming the
+mismatched paths.
+
+**Still TODO** — predicate-form comparison (`identifier
+"com.charon.cli" and anchor apple generic and team = X`-style DRs).
+Less common in practice (path-form is what charon writes today),
+and predicate equivalence is hard to compute exactly. Defer until
+needed.
 
 ### G. Hardened-runtime check for charon proper ✅ landed 2026-04-28
 
@@ -230,8 +236,9 @@ Roughly decreasing value-per-effort:
 2. ~~(B) Programmatic signing-key ACL inspection~~ — landed 2026-04-28.
 3. ~~(G) Hardened runtime on charon proper~~ — landed 2026-04-28.
 4. ~~(F) Charon binary self-attestation~~ — first pass landed
-   2026-04-28 (identifier + hardened-runtime + signed checks). DR-vs-
-   keychain-entry comparison still open; depends on (A) broader.
+   2026-04-28 (identifier + hardened-runtime + signed checks);
+   path-form DR-vs-keychain-entry drift check landed same day.
+   Predicate-form comparison still open but rare in practice.
 5. ~~(E) FileVault~~ — landed 2026-04-28. Time Machine
    per-destination encryption check still open under (E).
 6. Everything else as motivation arrives.

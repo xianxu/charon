@@ -109,10 +109,14 @@ func inspectCharonNamespace(service string) ([]Finding, int) {
 		case app > 0:
 			classified := classifyTrustedAppsForEntry(drs)
 			worst := worstTrustedAppVerdict(classified)
+			// Always run the drift check — even if all trusted
+			// apps classify as Expected, the path they're at may
+			// not match the installed binary's path.
+			findings = append(findings, driftFindings(label, classified)...)
 			if worst == verdictExpected {
 				// All trusted apps are the legitimate charon DR.
 				// This is the healthy state for charon entries —
-				// silent.
+				// silent (modulo path drift which fired above).
 				continue
 			}
 			sev := SevHygiene
@@ -162,6 +166,69 @@ func classifyTrustedAppsForEntry(drs []string) []classifiedTrustedApp {
 		out = append(out, classifyOneFor(dr, expected...))
 	}
 	return out
+}
+
+// extractTrustedPath pulls the absolute path from a path-based DR
+// of the form `identifier "/abs/path"`. Returns "" if the DR isn't
+// path-shaped (e.g., bundle-ID DRs, hashed identifiers).
+func extractTrustedPath(dr string) string {
+	id := extractIdentifier(dr)
+	if strings.HasPrefix(id, "/") {
+		return id
+	}
+	return ""
+}
+
+// driftFindings inspects the classified trusted apps for a single
+// keychain entry and reports drift between the install path and the
+// paths the entry actually trusts. Called after per-entry
+// classification; only fires when at least one trusted app is
+// path-shaped AND the install path isn't among the trusted paths.
+//
+// This is the "F deeper" check: catches the case where keychain
+// entries trust an old install location (e.g., the user moved
+// charon to a different bin dir, or had a previous install at a
+// different path that's still trusted while the new install isn't).
+func driftFindings(label string, classified []classifiedTrustedApp) []Finding {
+	installPath := charonInstallPath
+	var trustedPaths []string
+	hasInstallPath := false
+	for _, a := range classified {
+		if a.Verdict != verdictExpected {
+			continue
+		}
+		p := extractTrustedPath(a.DR)
+		if p == "" {
+			// non-path DR (bundle-ID etc.); treat as universal —
+			// satisfies any install location.
+			return nil
+		}
+		trustedPaths = append(trustedPaths, p)
+		if p == installPath {
+			hasInstallPath = true
+		}
+	}
+	if hasInstallPath || len(trustedPaths) == 0 {
+		return nil
+	}
+	return []Finding{{
+		ID:       "charon-entry-path-drift-" + safeLabel(label),
+		Severity: SevImportant,
+		Title:    fmt.Sprintf("Keychain entry %q trusts charon at a different path than the installed binary", label),
+		Detail: fmt.Sprintf(
+			"Installed charon binary: %s\nEntry trusts: %s\n\n"+
+				"The entry's ACL was written by a charon binary at one of the trusted paths above. "+
+				"The currently-installed binary at %s won't be able to read this entry silently — "+
+				"reads will prompt with an Allow/Deny dialog, or fail with errSecAuthFailed.\n\n"+
+				"Likely cause: charon was previously installed at a different location and the entries "+
+				"weren't migrated. Fix: re-write the affected entry through the current binary "+
+				"(re-auth for OAuth tokens; delete `_ca:cert`/`_ca:key` and restart `charon serve` "+
+				"to regenerate the CA).",
+			installPath, strings.Join(trustedPaths, ", "), installPath),
+		Affects:   []string{label},
+		RemedyRef: "charon-entries-acl",
+		BarItem:   BarKeychainEntries,
+	}}
 }
 
 // errInspectUnavailable is the sentinel the keychain package returns on
