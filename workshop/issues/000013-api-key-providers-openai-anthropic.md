@@ -184,12 +184,119 @@ Sketch milestones:
   or are revoked separately. Charon can detect via failed admin
   API calls and surface a warning.
 
+## Cross-cutting concerns (since #13 is first)
+
+#13 ships before #14 and #15, which means it sets the patterns
+those follow. Three things to get right here so they're not
+re-litigated later:
+
+### 1. Agent-protocol updates
+
+[`docs/agent-protocol.md`](../../docs/agent-protocol.md) currently
+describes the `X-Charon-Account` and `X-Charon-Scope` headers
+assuming an OAuth-shaped provider model. With API-key providers:
+
+- `X-Charon-Account` semantics extend cleanly — still names a
+  charon-side credential, regardless of OAuth-vs-API-key backing.
+- `X-Charon-Scope` doesn't apply (API-key providers have no scope
+  concept). The proxy must **silently ignore** the header when set
+  on a request routed to an API-key provider — don't 407 on
+  irrelevance. Document the behavior explicitly so agent
+  implementations don't break when retargeting between provider
+  types.
+
+Action: update the doc as part of #13, before #14/#15 land. Add a
+"provider type" subsection clarifying which headers apply per
+provider type.
+
+### 2. Threat model: admin key is a new asset class
+
+The provider admin keys (OpenAI, Anthropic) are arguably the
+**highest-blast-radius credentials charon holds**:
+
+- Owning an OpenAI admin key lets the attacker mint API keys with
+  full org access, see usage data, modify rate limits, change
+  billing — anything the dashboard can do.
+- Same picture for Anthropic admin keys at the workspace level.
+
+Compare to OAuth refresh tokens (limited to granted scopes) or per-
+account API keys (limited to one project's quota). Admin keys are
+the meta-credential.
+
+M4 keychain ACL is sufficient as the storage boundary (same as
+everything else), but the threat-model **assets table** should
+gain a row before this issue lands:
+
+```
+| Provider admin keys | macOS Keychain (`charon` service, `_<provider>:admin*`) | **Highest** | Mint per-account keys with full org access; see all usage; modify rate limits |
+```
+
+And probably a separate adversary entry for "admin key abuse" as
+a sibling of A10 (signing key abuse), since the impact shape is
+the same: one credential = silent persistence.
+
+Action: amend `docs/threat-model.md` as part of #13's M2, before
+the OpenAI implementation lands.
+
+### 3. TUI scaling sketch upfront
+
+The current `charon auth` TUI is OAuth-shaped: it shows accounts
+with scopes, lets you grant/revoke individual scopes. With three
+provider types (OAuth / admin-key / catalog Tier 3), the existing
+shape doesn't compose cleanly. A short design sketch before
+implementation prevents painting into a corner.
+
+Sketch (to validate during M4):
+
+```
+charon auth
+  ┌─────────────────────────────────────────────┐
+  │  Provider                                   │
+  │    ▶ Google           OAuth (3 accounts)    │
+  │    ▶ OpenAI           Admin (1 org)         │
+  │    ▶ Anthropic        Admin (1 org)         │
+  │    ▶ Add provider…                          │
+  └─────────────────────────────────────────────┘
+
+→ pick provider, then provider-type-dispatched account list:
+
+  OAuth provider:
+    Google
+    ▶ xianxu@gmail.com  [scopes: gmail.readonly, calendar]
+    ▶ work@example.com  [scopes: gmail.readonly]
+    [add account] [revoke account]
+
+  Admin-key provider:
+    OpenAI (admin: xianxu@gmail.com / acme-inc)
+    ▶ work-project   [project: acme-prod, key: …xyz]
+    ▶ personal       [project: side-projects, key: …abc]
+    [add account] [revoke account] [rotate admin key]
+
+  Catalog (Tier 3, ships in #15):
+    Groq
+    ▶ default        [paste key]
+    [add account] [delete account]
+```
+
+Key UX decisions to lock in for #13:
+- **Account-level revoke at list level** (not nested inside
+  account) — applies to OAuth and admin-key providers alike.
+  Lift this from the current "go into account → revoke" flow.
+- **Provider-type-dispatched account flows** — the operations
+  available depend on provider type. The TUI can render this with
+  a uniform "add / revoke / type-specific" affordance per row;
+  type-specific actions (rotate admin key, etc.) appear
+  conditionally.
+- **Single global setup state** — admin keys and OAuth refresh
+  tokens both live in the same keychain namespace; the TUI just
+  presents them by provider type.
+
+Action: produce the design sketch as the first deliverable of #13's
+plan doc; validate before writing code.
+
+---
+
 ## Notes
 
-- This expands charon's threat-model assets. The admin key is
-  arguably the highest-value credential charon holds — owning it
-  lets an attacker mint keys with full org access, see usage data,
-  modify rate limits, etc. M4 ACL is sufficient (same boundary as
-  OAuth refresh tokens), but the threat model should call it out.
 - Per-account API keys are functionally similar to OAuth refresh
   tokens — long-lived, revocable upstream. Same storage path.
