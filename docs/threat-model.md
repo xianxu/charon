@@ -362,10 +362,12 @@ but combined with any leaked token (whose lifetime is bounded by Google's
 refresh-token rotation, see A6) the agent can reach upstream without
 charon's audit log seeing it.
 
-🟡 Partial. Charon doesn't enforce network policy. Mitigation requires
-OS-level firewall rules (Little Snitch, Lulu, pf custom rules,
-managed configuration profile). Charon could ship a sample pf rule
-file but doesn't today.
+🟡 Partial. Charon doesn't enforce network policy itself (it's a
+userland proxy, not a kernel module). Mitigation lives at the OS
+firewall layer. [`docs/firewall-sample.md`](firewall-sample.md)
+ships concrete configs for Lulu (free, recommended), Little Snitch
+(paid), and pf (built-in but a poor fit) — adopt one if you want
+the second net beyond charon's M4 ACL.
 
 ### A3. AI agent sends scope-confused requests
 
@@ -640,9 +642,10 @@ because its security boundary (M4 keychain ACL) routes through
 
 Roughly decreasing value-per-effort for a single-user dev tool:
 
-1. **OS firewall rule sample** (A2). A pf rule (or Little Snitch
-   profile) blocking outbound TLS to Google API hosts unless via
-   localhost. Make it opt-in; document in README.
+1. ~~OS firewall rule sample~~ (A2) — landed 2026-04-28 as
+   [`docs/firewall-sample.md`](firewall-sample.md). Lulu / Little
+   Snitch / pf concrete configs for blocking direct upstream from
+   non-charon processes. Opt-in, documented.
 
 2. ~~Time Machine per-destination encryption check~~ — landed
    2026-04-28. Bar item 12.

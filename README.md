@@ -190,6 +190,11 @@ make security           # run the audit
 make security-remedy    # print the full remediation playbook
 ```
 
+For defense-in-depth against the case where a token might leak by
+some other path, [`docs/firewall-sample.md`](docs/firewall-sample.md)
+gives concrete Lulu / Little Snitch / pf configs that block direct
+outbound to charon's upstream API hosts from non-charon processes.
+
 Findings come tagged Critical / Important / Info / Hygiene; exit code
 rolls up to 0/1/2 for CI consumption. `--json` emits structured output
 for piping to jq. See [`atlas/security-audit.md`](atlas/security-audit.md)
