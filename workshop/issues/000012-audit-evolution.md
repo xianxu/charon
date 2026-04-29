@@ -1,6 +1,6 @@
 ---
 id: 000012
-status: open
+status: done
 deps: [000010]
 github_issue:
 created: 2026-04-28
@@ -124,22 +124,14 @@ Now path-based rows route through `evaluatePathBasedRow`:
 Bar labels updated to "no terminal/IDE or dangerous path has X"
 to reflect the unified scope.
 
-### D. AppleEvents pairwise grant reporting
+### D. AppleEvents pairwise grant reporting — ⛔ wontfix
 
-M4 partially does this — flags terminals that can drive credential
-apps (Keychain Access, 1Password, etc.) — but doesn't surface the
-broader graph of "who can drive whom". A full audit would render:
-
-```
-Automation grants:
-  com.cmuxterm.app → can drive → com.apple.systemevents
-                                  com.googlecode.iterm2
-                                  ...
-```
-
-so the user sees the whole pairwise relationship, not just the
-flagged subset. Probably over-noisy at full enumeration; gate
-behind `--verbose` or a separate `audit-automation` subcommand.
+The dangerous case (terminal/IDE → credential app like Keychain
+Access / 1Password / Bitwarden) is already flagged Critical by the
+existing AppleEvents check via `CredentialApps`. A full pairwise
+graph would add visibility but no security guarantee — it'd just
+be a noisier inventory. Open a new issue if a real use case
+materializes.
 
 ### E. FileVault + encrypted Time Machine status ✅ landed 2026-04-28 (both)
 
@@ -201,28 +193,31 @@ user could have an old binary). Adding that check is a small
 follow-on under (F) — read `codesign -d ... | grep flags` on
 `~/.local/bin/charon` and warn if `runtime` is missing.
 
-### H. Per-detected-terminal entitlement details
+### H. Per-detected-terminal entitlement details — ⛔ wontfix
 
-The `codesign-weak-*` finding currently reports "weakening
-entitlements present" and lists them. But not all weakening
-entitlements are equally bad — `allow-jit` is fine for an Electron
-app but worrying for a shell-like tool. Differentiate severity by
-entitlement type, possibly with a per-app override (some apps need
-specific entitlements).
+`codesign-weak-*` findings are uniformly Hygiene today — hidden
+from the per-finding text output, available via `--json` for
+consumers who want them. Severity differentiation per entitlement
+type would be marginal: the audit already correctly de-prioritizes
+this class of finding (third-party app's entitlement choices are
+not actionable by the user beyond "pick a different app"). Reopen
+if a specific entitlement+app combination warrants a Critical
+warning.
 
-### I. Ongoing KnownApps maintenance
+### I. Ongoing KnownApps maintenance — ⛔ wontfix as a tracked item
 
-Apps in the curated list age annually-ish. New terminals appear
-(Wave, Kiln, etc.); bundle IDs occasionally change (Cursor's bundle
-ID is currently a ToDesktop-internal UUID). Periodic refresh via
-`mdfind 'kMDItemKind == "Application"'` + manual review.
+Not a one-shot. Add bundle IDs to
+`internal/security/knownapps.go` as new terminals/IDEs become
+relevant; the existing `--apps-extra` runtime override handles
+ad-hoc additions without code changes. No issue to track; merge as
+encountered.
 
-### J. Cross-machine comparison / baseline
+### J. Cross-machine comparison / baseline — ⛔ wontfix
 
-For users with multiple Macs (work/personal), a JSON export of
-audit findings + a `compare` subcommand → spot drift between
-machines. Probably out of scope for personal-use; flagged for
-completeness.
+Niche use case (multiple Macs to keep in sync). The existing
+`--json` output already supports the diff use case manually
+(`make security --json | jq` on each machine, `diff` the results).
+Reopen if motivation appears.
 
 ---
 
@@ -240,7 +235,16 @@ Roughly decreasing value-per-effort:
    path-form DR-vs-keychain-entry drift check landed same day.
    Predicate-form comparison still open but rare in practice.
 5. ~~(E) FileVault + encrypted Time Machine~~ — both landed 2026-04-28.
-6. Everything else as motivation arrives.
+6. (D), (H), (I), (J) — wontfix (see per-section notes).
+
+## Status
+
+**Done 2026-04-28.** All security-relevant items (A, B, C, E, F,
+G) landed; remaining (D, H, I, J) marked wontfix as their security
+value would be marginal over what's already in place. The audit
+covers a 12-item bar that maps directly to the threat model's
+"reasonable bar" checklist; no adversary status in the threat
+model would change with further #12 work.
 
 ## Notes
 
