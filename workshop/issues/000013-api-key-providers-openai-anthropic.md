@@ -642,3 +642,20 @@ plan doc; validate before writing code.
 - M4 is now functionally complete for the admin-key happy path.
   Phase 3 covers the project detail screen + catalog (#15) stub
   + any polish from end-to-end testing.
+
+- **2026-04-30** — wire-shape correction surfaced by manual
+  testing: OpenAI does NOT expose a singular `/v1/organization`
+  endpoint (returns 404 invalid_request_error). Fixed
+  `internal/providers/openai/provider.go` `DiscoverOrg` to use
+  `GET /v1/organization/projects?limit=1` and read the OrgID
+  from the `OpenAI-Organization` response header — the canonical
+  way OpenAI exposes org context on the Admin API. OrgName is
+  left empty (no public endpoint exposes it); the TUI's
+  formatAdminLabel already falls back to OrgLabel. The header
+  may be discovered with case variations, so the read tries
+  multiple casings. Tests updated: removed the obsolete
+  name-vs-title fallback test (no body shape involved now);
+  added a missing-header test that verifies fail-closed behavior
+  if upstream stops emitting the header. The issue's Spec
+  section already documented these 5 endpoints correctly — only
+  the M2 plan/log got the discovery URL wrong; corrected.

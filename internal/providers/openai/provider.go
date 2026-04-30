@@ -47,14 +47,6 @@ func New() *Provider {
 func (p *Provider) Name() string { return Name }
 func (p *Provider) Type() string { return vault.TypeAdminKey }
 
-// orgResponse is the shape of GET /v1/organization. We ignore fields
-// charon doesn't use (created_at, billing info, etc.).
-type orgResponse struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Title string `json:"title"` // some accounts surface a "title" instead of "name"
-}
-
 // projectResponse is the shape of a single project from GET / POST
 // /v1/organization/projects.
 type projectResponse struct {
@@ -95,25 +87,61 @@ type errorResponse struct {
 	} `json:"error"`
 }
 
-// DiscoverOrg returns the organization (id, name) for the given admin
-// key. Used at admin-key paste time to capture the OrgID for storage
-// and for the same-org-replace check.
+// DiscoverOrg returns (orgID, orgName) for the given admin key.
+//
+// OpenAI does NOT expose a singular `/v1/organization` endpoint —
+// org context comes back as the `openai-organization` HTTP response
+// header on any authenticated call. We use `GET /v1/organization/
+// projects?limit=1` as the discovery probe (proven endpoint, cheap
+// payload) and read the header for the OrgID.
+//
+// orgName is currently empty because OpenAI's Admin API doesn't
+// expose a public "fetch this org's display name by id" endpoint.
+// The TUI uses OrgLabel (user-typed mnemonic) as the display
+// fallback — see internal/tui/admin_key_list.go formatAdminLabel.
 func (p *Provider) DiscoverOrg(ctx context.Context, adminKey string) (orgID, orgName string, err error) {
 	if adminKey == "" {
 		return "", "", providers.ErrInvalidAdminKey
 	}
-	var out orgResponse
-	if err := p.do(ctx, adminKey, http.MethodGet, "/v1/organization", nil, &out); err != nil {
-		return "", "", err
+	url := p.baseURL() + "/v1/organization/projects?limit=1"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("build request: %w", err)
 	}
-	if out.ID == "" {
-		return "", "", fmt.Errorf("openai: /v1/organization returned empty id")
+	req.Header.Set("Authorization", "Bearer "+adminKey)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := p.client().Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("openai discover org: %w", err)
 	}
-	name := out.Name
-	if name == "" {
-		name = out.Title
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusUnauthorized {
+		return "", "", providers.ErrInvalidAdminKey
 	}
-	return out.ID, name, nil
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", "", parseUpstreamError(resp.StatusCode, body)
+	}
+
+	orgID = resp.Header.Get("OpenAI-Organization")
+	if orgID == "" {
+		// Header check is case-insensitive via canonical MIME header
+		// resolution, but be belt-and-suspenders: try a few common
+		// casings just in case the server emits something
+		// unconventional.
+		for _, h := range []string{"openai-organization", "Openai-Organization"} {
+			if v := resp.Header.Get(h); v != "" {
+				orgID = v
+				break
+			}
+		}
+	}
+	if orgID == "" {
+		return "", "", fmt.Errorf("openai: no openai-organization header in response — admin API may have changed")
+	}
+	return orgID, "", nil
 }
 
 // ListProjects returns all projects accessible to this admin key. M2

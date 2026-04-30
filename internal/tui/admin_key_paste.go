@@ -465,7 +465,7 @@ func adminKeyURL(provider string) string {
 func adminKeyDiscoveryEndpoint(provider string) string {
 	switch provider {
 	case "openai":
-		return "GET /v1/organization"
+		return "GET /v1/organization/projects?limit=1"
 	case "anthropic":
 		return "GET /v1/organizations/me"
 	}

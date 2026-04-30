@@ -345,8 +345,13 @@ No schema migration. No keychain layout change.
 At admin-key paste time, charon needs `OrgID` and (best-effort)
 `OrgName`. One API call per setup, results stored in `_<provider>:meta:<OrgID>`.
 
-- **OpenAI:** `GET /v1/organization` returns `{id, name, ...}`.
-  Auth: `Authorization: Bearer <admin_key>`.
+- **OpenAI:** OpenAI does NOT expose a singular `/v1/organization`
+  endpoint. Discovery is `GET /v1/organization/projects?limit=1`
+  (proven endpoint, cheap payload), reading the
+  `OpenAI-Organization` HTTP response header for the OrgID. OrgName
+  is not exposed via a public endpoint — left empty; TUI display
+  uses OrgLabel as fallback. Auth: `Authorization: Bearer
+  <admin_key>`.
 - **Anthropic:** workspaces-list response carries the org id, or a
   dedicated org endpoint if available. Confirmed in M3.
 

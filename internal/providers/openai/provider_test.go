@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -47,7 +46,6 @@ func newFakeServer(t *testing.T, adminKey string) *fakeServer {
 		revokedKeys: make(map[string]bool),
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/organization", fs.handleOrg)
 	mux.HandleFunc("/v1/organization/projects", fs.handleProjects)
 	mux.HandleFunc("/v1/organization/projects/", fs.handleProjectChild)
 	fs.srv = httptest.NewServer(mux)
@@ -66,22 +64,14 @@ func (fs *fakeServer) authOK(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-func (fs *fakeServer) handleOrg(w http.ResponseWriter, r *http.Request) {
-	if !fs.authOK(w, r) {
-		return
-	}
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	resp := orgResponse{ID: fs.orgID, Name: fs.orgName}
-	_ = json.NewEncoder(w).Encode(resp)
-}
-
 func (fs *fakeServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 	if !fs.authOK(w, r) {
 		return
 	}
+	// Mirror the real API: every authenticated response carries the
+	// org id in this header. DiscoverOrg uses this endpoint with
+	// limit=1 specifically to read the header.
+	w.Header().Set("OpenAI-Organization", fs.orgID)
 	switch r.Method {
 	case http.MethodGet:
 		out := projectsListResponse{Object: "list"}
@@ -194,14 +184,18 @@ func TestProvider_NameType(t *testing.T) {
 func TestProvider_DiscoverOrg_HappyPath(t *testing.T) {
 	p, fs := newTestProvider(t, "sk-admin-good")
 	fs.orgID = "org-aB3cD4eF5"
-	fs.orgName = "acme-inc"
 
 	id, name, err := p.DiscoverOrg(context.Background(), "sk-admin-good")
 	if err != nil {
 		t.Fatalf("DiscoverOrg: %v", err)
 	}
-	if id != "org-aB3cD4eF5" || name != "acme-inc" {
-		t.Errorf("got %q/%q", id, name)
+	if id != "org-aB3cD4eF5" {
+		t.Errorf("orgID = %q, want org-aB3cD4eF5", id)
+	}
+	// OpenAI doesn't expose an org-name endpoint; OrgName is always
+	// empty from DiscoverOrg. The TUI uses OrgLabel as fallback.
+	if name != "" {
+		t.Errorf("orgName = %q, want empty (no org-name endpoint exposed)", name)
 	}
 }
 
@@ -222,24 +216,23 @@ func TestProvider_DiscoverOrg_EmptyKey(t *testing.T) {
 	}
 }
 
-func TestProvider_DiscoverOrg_FallsBackToTitle(t *testing.T) {
-	// Some org responses surface "title" instead of "name". DiscoverOrg
-	// should accept either.
-	p, _ := newTestProvider(t, "sk-admin")
-	// Override the handler for this test by serving from a fresh mux.
+// DiscoverOrg fails closed if the upstream stops emitting the
+// OpenAI-Organization header — surfaces a clear "API may have
+// changed" error rather than silently storing an empty OrgID.
+func TestProvider_DiscoverOrg_MissingHeader(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
-		_, _ = w.Write([]byte(`{"id":"org-x","title":"title-org"}`))
+		// No OpenAI-Organization header set.
+		_ = json.NewEncoder(w).Encode(projectsListResponse{Object: "list"})
 	}))
 	defer srv.Close()
-	p.BaseURL = srv.URL
+	p := &Provider{BaseURL: srv.URL, HTTP: srv.Client()}
 
-	id, name, err := p.DiscoverOrg(context.Background(), "sk-admin")
-	if err != nil {
-		t.Fatalf("DiscoverOrg: %v", err)
+	_, _, err := p.DiscoverOrg(context.Background(), "sk-admin")
+	if err == nil {
+		t.Fatal("DiscoverOrg should error when openai-organization header is missing")
 	}
-	if id != "org-x" || name != "title-org" {
-		t.Errorf("title fallback failed: id=%q name=%q", id, name)
+	if !strings.Contains(err.Error(), "no openai-organization header") {
+		t.Errorf("error should mention missing header, got %v", err)
 	}
 }
 
