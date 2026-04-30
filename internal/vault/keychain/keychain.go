@@ -65,6 +65,9 @@ func NewWithService(service string) *Store {
 }
 
 func (s *Store) Get(provider, account string) (*vault.Credential, error) {
+	if s.service == ServiceDev {
+		return devVaultGet(provider, account)
+	}
 	key := keyName(provider, account)
 	out, err := exec.Command("security", "find-generic-password",
 		"-s", s.service,
@@ -83,6 +86,9 @@ func (s *Store) Get(provider, account string) (*vault.Credential, error) {
 }
 
 func (s *Store) Set(cred *vault.Credential) error {
+	if s.service == ServiceDev {
+		return devVaultSet(cred)
+	}
 	data, err := json.Marshal(fromCredential(cred))
 	if err != nil {
 		return err
@@ -105,6 +111,9 @@ func (s *Store) Set(cred *vault.Credential) error {
 }
 
 func (s *Store) Delete(provider, account string) error {
+	if s.service == ServiceDev {
+		return devVaultDelete(provider, account)
+	}
 	key := keyName(provider, account)
 	return exec.Command("security", "delete-generic-password",
 		"-s", s.service,
@@ -118,6 +127,9 @@ func (s *Store) Delete(provider, account string) error {
 // Catalog without an extra Get. Entries that fail to load are
 // skipped silently.
 func (s *Store) List() ([]*vault.Credential, error) {
+	if s.service == ServiceDev {
+		return devVaultList()
+	}
 	out, err := exec.Command("security", "dump-keychain").Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to dump keychain: %w", err)

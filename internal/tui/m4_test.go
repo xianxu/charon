@@ -1,11 +1,15 @@
 package tui
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/xianxu/charon/internal/providers"
 	"github.com/xianxu/charon/internal/vault"
+	"github.com/xianxu/charon/internal/vault/memory"
 )
 
 // untoggleGmailReadonly returns a model with cursor on the gmail.readonly
@@ -352,5 +356,77 @@ func TestRevokeAccount_FromPicker_ReturnsToList(t *testing.T) {
 	// Status note communicates the outcome.
 	if !strings.Contains(mm.picker.statusMsg, "a@gmail.com") {
 		t.Errorf("picker statusMsg should name the revoked account, got %q", mm.picker.statusMsg)
+	}
+}
+
+// Chunk-2 review #5: cursor stays at the same row index after a
+// picker rebuild rather than jumping back to 0. Removing an item
+// before the cursor's row clamps; removing the cursored row leaves
+// the cursor on the next account at the same index.
+func TestRevokeAccount_FromPicker_PreservesCursor(t *testing.T) {
+	v := vaultWithBase("a@gmail.com")
+	v.Set(&vault.Credential{Provider: "google", Account: "b@gmail.com", RefreshToken: "rt-b"})
+	v.Set(&vault.Credential{Provider: "google", Account: "c@gmail.com", RefreshToken: "rt-c"})
+
+	auth := &stubAuth{}
+	m, _ := newModel(v, "", WithAuthenticator(auth))
+	updated, _ := m.Update(providerSelectedMsg{name: "google", provType: vault.TypeOAuth})
+	mm := updated.(model)
+	// items: a, b, c, +new — cursor starts at 0.
+	mm.picker.cursor = 1 // park on b@gmail.com
+
+	updated, _ = mm.Update(revokeAccountMsg{account: "a@gmail.com"})
+	mm = updated.(model)
+	// New items: b, c, +new — the cursor stayed at index 1, which now
+	// points at c@gmail.com (was b@gmail.com before).
+	if mm.picker.cursor != 1 {
+		t.Errorf("after revoke: cursor = %d, want 1 (preserved)", mm.picker.cursor)
+	}
+
+	// Now revoke c via cursor-on-tail edge: cursor at 2 (+new) when
+	// items shrink — clamp back to len-1.
+	mm.picker.cursor = 2 // currently +new (with 3 items: b, c, +new)
+	updated, _ = mm.Update(revokeAccountMsg{account: "b@gmail.com"})
+	mm = updated.(model)
+	// Items: c, +new — cursor 2 clamps to 1 (+new now at index 1).
+	if mm.picker.cursor >= len(mm.picker.items) {
+		t.Errorf("after revoke: cursor = %d, len = %d (should be clamped)",
+			mm.picker.cursor, len(mm.picker.items))
+	}
+}
+
+// Chunk-2 review #1: refreshAdminKeyList must flush the proxy
+// token+account cache so a recently-revoked admin-key cred isn't
+// served stale by the proxy on the next request.
+func TestRefreshAdminKeyList_FlushesProxyCache(t *testing.T) {
+	// Set up a fake proxy that records cache-clear hits.
+	clearHits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/cache/clear" && r.Method == http.MethodPost {
+			clearHits++
+		}
+	}))
+	defer srv.Close()
+
+	v := memory.New()
+	store := fakeAdminStore(t, "openai", true, "me@example.com")
+	fake := providers.NewFake().WithName("openai")
+
+	m := model{
+		vault:               v,
+		adminProviders:      map[string]providers.Provider{"openai": fake},
+		adminStores:         map[string]*providers.AdminKeyStore{"openai": store},
+		activeAdminProvider: "openai",
+		proxyAddr:           strings.TrimPrefix(srv.URL, "http://"),
+	}
+
+	// Trigger a refresh — same path mint/revoke/paste-done all use.
+	updated, _ := m.refreshAdminKeyList()
+	mm := updated.(model)
+	if mm.current != screenAdminKeyList {
+		t.Errorf("expected screenAdminKeyList, got %v", mm.current)
+	}
+	if clearHits != 1 {
+		t.Errorf("expected /cache/clear to be hit once, got %d", clearHits)
 	}
 }

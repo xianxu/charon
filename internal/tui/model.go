@@ -378,11 +378,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Rebuild the OAuth picker so the revoked account is gone.
+		// Preserve the cursor position (clamped to new bounds) per
+		// chunk-2 review finding #5 — stay at the same row index;
+		// the row may now show a different account.
+		prevCursor := m.picker.cursor
 		newPicker, err := newPickerModel(m.vault)
 		if err != nil {
 			m.err = err
 			return m, tea.Quit
 		}
+		if prevCursor >= len(newPicker.items) {
+			prevCursor = len(newPicker.items) - 1
+		}
+		if prevCursor < 0 {
+			prevCursor = 0
+		}
+		newPicker.cursor = prevCursor
 		newPicker.statusMsg = note
 		m.picker = newPicker
 		m.current = screenPicker
@@ -571,8 +582,17 @@ func (m model) openAdminRevoke(req adminRevokeRequestMsg) (tea.Model, tea.Cmd) {
 
 // refreshAdminKeyList rebuilds the admin entity list for the active
 // admin provider after a state change (admin key set / replaced /
-// cascade-deleted) and routes the screen.
+// cascade-deleted, mint, revoke) and routes the screen.
+//
+// All admin-key mutations route through here, so this is also the
+// chokepoint for flushing the running proxy's token + account caches
+// — those caches hold the now-revoked or now-replaced KeyMaterial
+// keyed by `provider:account`, and without an explicit flush the
+// proxy will keep injecting dead bytes until upstream 401 evicts
+// them. See chunk-2 review finding #1.
 func (m model) refreshAdminKeyList() (tea.Model, tea.Cmd) {
+	m.notifyProxyCacheClear()
+
 	if m.activeAdminProvider == "" {
 		// No active admin provider — fall back to provider picker.
 		// Defensive: shouldn't happen since the paste flow is only
@@ -580,11 +600,23 @@ func (m model) refreshAdminKeyList() (tea.Model, tea.Cmd) {
 		return m.refreshProviderPicker()
 	}
 	store := m.adminStores[m.activeAdminProvider]
+	prevCursor := m.adminList.cursor
 	l, err := newAdminKeyListModel(m.activeAdminProvider, m.vault, store)
 	if err != nil {
 		m.err = err
 		return m, tea.Quit
 	}
+	// Preserve cursor position across rebuild — clamp to new bounds.
+	// "Stay at the same row index" is the conventional behavior; a
+	// row may now show a different key, but the cursor doesn't jump
+	// to the top. See chunk-2 review finding #5.
+	if prevCursor >= len(l.rows) {
+		prevCursor = len(l.rows) - 1
+	}
+	if prevCursor < 0 {
+		prevCursor = 0
+	}
+	l.cursor = prevCursor
 	m.adminList = l
 	m.current = screenAdminKeyList
 	return m, nil

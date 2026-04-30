@@ -215,7 +215,9 @@ Progress:
 - [x] **M5 — proxy per-host routing** — landed 2026-04-30
 - [x] **M6 — account-level rm refactor** — landed 2026-04-30
 - [x] **M7 — docs** — landed 2026-04-30
-- [ ] code review chunk 2 (after M4+M5+M6+M7)
+- [x] **Code review chunk 2 (M4+M5+M6+M7)** — completed 2026-04-30.
+  Important findings #1, #2, #5 addressed; #3, #4, #6 (and all
+  Minor) deferred to follow-up issues (see Log).
 
 Sketch milestones:
 
@@ -770,6 +772,57 @@ plan doc; validate before writing code.
     documents the dev-vault trade-off (filesystem perms vs
     keychain encryption) and the explicit "never paste prod
     admin keys into unsigned binary" warning.
+
+- **2026-04-30** — Chunk 2 code review (M4+M5+M6+M7) completed via
+  superpowers-code-reviewer subagent against `168a102..95bbf64`
+  (17 commits, ~6.2k LOC). No Critical findings. Important
+  findings triaged + addressed:
+  - **Important #1 (FIXED)**: Proxy `tokenCache` not invalidated
+    on admin-key vault mutations (mint/revoke/paste). Real
+    runtime bug — TUI says revoked while proxy keeps injecting
+    stale `KeyMaterial` keyed by `provider:account` until
+    upstream 401 evicts. Fix: `refreshAdminKeyList` (which all
+    three admin-key done-message handlers route through) now
+    calls `notifyProxyCacheClear()` first thing. New regression
+    test `TestRefreshAdminKeyList_FlushesProxyCache` uses an
+    httptest server to count `/cache/clear` hits.
+  - **Important #2 (FIXED)**: ServiceDev → dev-vault routing
+    only existed on darwin+cgo. CLI fallback (kv.go +
+    keychain.go, used on darwin without cgo and on Linux/CI)
+    still hit the keychain CLI. Fix: routed all four primitives
+    (Get/Set/Delete + raw Get/Set/Delete) through devVault*
+    when service == ServiceDev. Now CGO_ENABLED=0 builds and
+    non-darwin builds use the file vault as the threat-model
+    doc claims.
+  - **Important #5 (FIXED)**: Picker rebuild on revoke jumped
+    cursor back to 0. UX paper-cut. Fix: capture cursor before
+    rebuild, clamp to new bounds, restore in
+    `revokeAccountMsg` handler (OAuth picker) and
+    `refreshAdminKeyList` (admin-key entity list). New
+    regression test `TestRevokeAccount_FromPicker_PreservesCursor`.
+  - **Important #6 (RESOLVED BY #1)**: `accountCache` interaction
+    with admin-key reads after vault mutation. The same
+    `notifyProxyCacheClear()` call that fixes #1 also flushes
+    the account cache; resolved transitively.
+  - **Deferred to follow-up issues**:
+    - **#3** dev-vault flock for multi-process safety —
+      single-process today, two `charon` instances would race
+      on writes. ~5 LOC fix; not blocking #13 close.
+    - **#4** `adminMintCancelMsg` partial-failure status — when
+      CreateProject succeeds and MintKey fails, user sees the
+      orphan project with no context. Cosmetic; should thread
+      a status note through the cancel msg.
+    - **All Minor (7-14)**: docstring polish, OrgID display in
+      replace-confirm modal, dead-code in test predicates,
+      synthetic-message hack in admin_revoke.
+  - Strengths called out: single revoke implementation across
+    entry points; cross-backend List() contract correctly
+    honored; cascade-delete cross-provider isolation tested;
+    admin-key short-circuit shape is right (type-check, payload
+    nil-check, fail-closed); AdminKeyStore.Set half-failure
+    semantics defensive.
+  - Verdict: **ready to close #13** with the three Important
+    fixes landed in the same review cycle.
 
 - **2026-04-30** — wire-shape correction surfaced by manual
   testing: OpenAI does NOT expose a singular `/v1/organization`

@@ -12,8 +12,14 @@ import (
 // (e.g., for storing CA certs). CLI fallback path; the darwin+cgo
 // counterpart lives in kv_darwin.go.
 
-// GetRaw reads a raw string value from the keychain.
+// GetRaw reads a raw string value. ServiceDev routes to the file-
+// backed dev vault (no security CLI dependency, no Keychain prompts);
+// matches the kv_darwin path's behavior so dev iteration is identical
+// across darwin+cgo, darwin without cgo, and non-darwin builds.
 func GetRaw(service, account string) (string, error) {
+	if service == ServiceDev {
+		return devVaultGetRaw(account)
+	}
 	out, err := exec.Command("security", "find-generic-password",
 		"-s", service,
 		"-a", account,
@@ -25,9 +31,15 @@ func GetRaw(service, account string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// SetRaw writes a raw string value to the keychain.
-// The -U flag on add-generic-password handles both create and update atomically.
+// SetRaw writes a raw string value. ServiceDev routes to the dev
+// file vault (see GetRaw).
+//
+// The -U flag on add-generic-password handles both create and update
+// atomically on the prod path.
 func SetRaw(service, account, value string) error {
+	if service == ServiceDev {
+		return devVaultSetRaw(account, value)
+	}
 	return exec.Command("security", "add-generic-password",
 		"-s", service,
 		"-a", account,
@@ -36,13 +48,14 @@ func SetRaw(service, account, value string) error {
 	).Run()
 }
 
-// DeleteRaw removes a raw key/value entry. Returns nil if the entry
-// doesn't exist (idempotent) — `security delete-generic-password`
-// exits with status 44 (errSecItemNotFound) when the entry is missing,
-// which we map to success. Other non-zero exits (locked keychain,
-// permission denied, malformed args) are surfaced as errors so half-
-// failed cascade deletes don't silently leave orphan entries.
+// DeleteRaw removes a raw key/value entry. ServiceDev routes to the
+// dev file vault. ServiceProd: idempotent — returns nil if the entry
+// doesn't exist (`security delete-generic-password` exits with status
+// 44 / errSecItemNotFound when missing).
 func DeleteRaw(service, account string) error {
+	if service == ServiceDev {
+		return devVaultDeleteRaw(account)
+	}
 	cmd := exec.Command("security", "delete-generic-password",
 		"-s", service,
 		"-a", account,
