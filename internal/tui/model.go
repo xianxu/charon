@@ -322,9 +322,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case revokeAccountMsg:
-		// Look up credential, call Revoke, delete from vault, then exit.
-		// Errors (vault miss, network failure) surface as applyResultMsg
-		// so the user sees them in the existing apply-error overlay.
+		// Look up credential, call Revoke, delete from vault. On success,
+		// rebuild the OAuth picker so the deleted account disappears and
+		// route the user back there (parity with admin-key revoke flow,
+		// see refreshAdminKeyList). Initial-account mode has no picker
+		// to return to — falls back to exit. Errors during revoke
+		// surface via applyResultMsg → existing apply-error overlay.
 		cred, err := m.vault.Get("google", msg.account)
 		if err != nil {
 			return m, func() tea.Msg {
@@ -334,7 +337,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Track whether Google actually revoked the token here, vs. the
 		// token being already-invalid on Google's side. Either way we
 		// proceed to delete the local entry — the user wants this
-		// account *gone* — but the exit note is honest about what
+		// account *gone* — but the status note is honest about what
 		// happened upstream.
 		alreadyRevoked := false
 		if m.auth != nil {
@@ -359,12 +362,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.notifyProxyCacheClear() // proxy must drop the now-revoked token
+
+		var note string
 		if alreadyRevoked {
-			m.exitNote = "Removed " + msg.account + " (already revoked on Google's side)"
+			note = "Removed " + msg.account + " (already revoked on Google's side)"
 		} else {
-			m.exitNote = "Revoked and removed " + msg.account
+			note = "Revoked and removed " + msg.account
 		}
-		return m, tea.Quit
+
+		// Initial-account short-circuit: there's no picker stack to
+		// return to. Preserve the original exit-on-revoke behavior.
+		if m.picker.items == nil {
+			m.exitNote = note
+			return m, tea.Quit
+		}
+
+		// Rebuild the OAuth picker so the revoked account is gone.
+		newPicker, err := newPickerModel(m.vault)
+		if err != nil {
+			m.err = err
+			return m, tea.Quit
+		}
+		newPicker.statusMsg = note
+		m.picker = newPicker
+		m.current = screenPicker
+		return m, nil
 	}
 
 	switch m.current {

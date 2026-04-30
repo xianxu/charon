@@ -33,6 +33,91 @@ func TestPickerEmpty(t *testing.T) {
 	}
 }
 
+// M6: `r` on a picker row opens a confirm modal. `y/enter` emits
+// revokeAccountMsg with the cursored account. `n/esc` cancels.
+// `r` on the "+ new account" row is a no-op.
+func TestPicker_RevokeKeyOpensConfirm(t *testing.T) {
+	v := setupVault(t,
+		&vault.Credential{Provider: "google", Account: "alice@example.com"},
+	)
+	m, err := newPickerModel(v)
+	if err != nil {
+		t.Fatalf("newPickerModel: %v", err)
+	}
+	if m.state != pickerStateNormal {
+		t.Fatalf("initial state = %d, want pickerStateNormal", m.state)
+	}
+
+	// Cursor at 0 = alice; r opens confirm.
+	updated, _ := m.Update(tea.KeyMsg{Runes: []rune{'r'}, Type: tea.KeyRunes})
+	if updated.state != pickerStateRevokeConfirm {
+		t.Errorf("after r: state = %d, want pickerStateRevokeConfirm", updated.state)
+	}
+	view := updated.View()
+	if !strings.Contains(view, "Revoke alice@example.com?") {
+		t.Errorf("confirm view missing account name:\n%s", view)
+	}
+	if !strings.Contains(view, "[y/enter] revoke") {
+		t.Errorf("confirm view missing key bindings:\n%s", view)
+	}
+
+	// y emits revokeAccountMsg.
+	final, cmd := updated.Update(tea.KeyMsg{Runes: []rune{'y'}, Type: tea.KeyRunes})
+	if cmd == nil {
+		t.Fatal("y on confirm should emit a command")
+	}
+	if final.state != pickerStateNormal {
+		t.Errorf("after y: state should reset to normal, got %d", final.state)
+	}
+	msg := cmd()
+	rm, ok := msg.(revokeAccountMsg)
+	if !ok {
+		t.Fatalf("expected revokeAccountMsg, got %T", msg)
+	}
+	if rm.account != "alice@example.com" {
+		t.Errorf("revoke account = %q, want alice@example.com", rm.account)
+	}
+}
+
+func TestPicker_RevokeCancel(t *testing.T) {
+	v := setupVault(t,
+		&vault.Credential{Provider: "google", Account: "alice@example.com"},
+	)
+	m, _ := newPickerModel(v)
+
+	// Open confirm.
+	updated, _ := m.Update(tea.KeyMsg{Runes: []rune{'r'}, Type: tea.KeyRunes})
+	if updated.state != pickerStateRevokeConfirm {
+		t.Fatalf("expected confirm state")
+	}
+	// n cancels back to normal — no command emitted.
+	final, cmd := updated.Update(tea.KeyMsg{Runes: []rune{'n'}, Type: tea.KeyRunes})
+	if cmd != nil {
+		t.Errorf("n should not emit a command, got %v", cmd)
+	}
+	if final.state != pickerStateNormal {
+		t.Errorf("after n: state should be pickerStateNormal, got %d", final.state)
+	}
+}
+
+func TestPicker_RevokeOnNewAccountRow_NoOp(t *testing.T) {
+	v := setupVault(t,
+		&vault.Credential{Provider: "google", Account: "alice@example.com"},
+	)
+	m, _ := newPickerModel(v)
+	// Move cursor to last row (+ new account).
+	for m.cursor < len(m.items)-1 {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if !m.items[m.cursor].isNew {
+		t.Fatalf("cursor not on '+ new account' row")
+	}
+	updated, _ := m.Update(tea.KeyMsg{Runes: []rune{'r'}, Type: tea.KeyRunes})
+	if updated.state != pickerStateNormal {
+		t.Errorf("r on '+ new account' should be no-op, got state %d", updated.state)
+	}
+}
+
 func TestPickerSortsAccountsAndPlacesNewLast(t *testing.T) {
 	v := setupVault(t,
 		&vault.Credential{Provider: "google", Account: "z@gmail.com", Scopes: []string{"openid"}},

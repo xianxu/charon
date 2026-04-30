@@ -293,3 +293,64 @@ func TestModelHandlesRevokeAccountMsg(t *testing.T) {
 		t.Error("expected exitNote describing the revoke")
 	}
 }
+
+// M6: revoke through the OAuth picker (not initial-account mode)
+// returns to the picker (rebuilt) rather than exiting. The deleted
+// account is gone from the picker's items; statusMsg names what
+// happened. Mirrors the admin-key revoke flow's return-to-list shape.
+func TestRevokeAccount_FromPicker_ReturnsToList(t *testing.T) {
+	v := vaultWithBase("a@gmail.com")
+	v.Set(&vault.Credential{Provider: "google", Account: "b@gmail.com", RefreshToken: "rt-b"})
+
+	auth := &stubAuth{}
+	// No initialAccount → newModel routes through the provider picker.
+	m, err := newModel(v, "", WithAuthenticator(auth))
+	if err != nil {
+		t.Fatalf("newModel: %v", err)
+	}
+	// Bring up the OAuth picker as if user had already selected Google.
+	updated, _ := m.Update(providerSelectedMsg{name: "google", provType: vault.TypeOAuth})
+	mm := updated.(model)
+	if mm.current != screenPicker {
+		t.Fatalf("expected screenPicker after google selection, got %v", mm.current)
+	}
+	if len(mm.picker.items) != 3 { // a, b, +new
+		t.Fatalf("picker.items = %d, want 3 (a + b + new), got: %+v", len(mm.picker.items), mm.picker.items)
+	}
+
+	// Drive the revoke message directly (the picker confirm modal is
+	// covered by picker_test.go).
+	updated, cmd := mm.Update(revokeAccountMsg{account: "a@gmail.com"})
+	mm = updated.(model)
+
+	// Should NOT exit. cmd is nil (no tea.Quit).
+	if cmd != nil {
+		t.Errorf("expected no tea.Quit command after picker-revoke, got %v", cmd)
+	}
+	if mm.current != screenPicker {
+		t.Errorf("expected to return to screenPicker, got %v", mm.current)
+	}
+	if mm.exitNote != "" {
+		t.Errorf("exitNote should be empty when staying in picker, got %q", mm.exitNote)
+	}
+
+	// Vault entry for a@gmail.com is gone.
+	if _, err := v.Get("google", "a@gmail.com"); err == nil {
+		t.Error("vault should have deleted a@gmail.com after revoke")
+	}
+
+	// Rebuilt picker no longer lists a@gmail.com; b@gmail.com survives.
+	if len(mm.picker.items) != 2 { // b + new
+		t.Errorf("picker.items after revoke = %d, want 2 (b + new): %+v", len(mm.picker.items), mm.picker.items)
+	}
+	for _, it := range mm.picker.items {
+		if it.email == "a@gmail.com" {
+			t.Errorf("revoked account a@gmail.com should not appear in rebuilt picker: %+v", it)
+		}
+	}
+
+	// Status note communicates the outcome.
+	if !strings.Contains(mm.picker.statusMsg, "a@gmail.com") {
+		t.Errorf("picker statusMsg should name the revoked account, got %q", mm.picker.statusMsg)
+	}
+}

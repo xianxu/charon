@@ -14,9 +14,22 @@ type pickerItem struct {
 	isNew bool
 }
 
+// pickerState captures the OAuth picker's modal state. Normal is the
+// default account-list view. RevokeConfirm overlays a confirm modal
+// for the cursored account (parity with the admin-key entity list's
+// `r` flow, see admin_key_list.go).
+type pickerState int
+
+const (
+	pickerStateNormal pickerState = iota
+	pickerStateRevokeConfirm
+)
+
 type pickerModel struct {
-	items  []pickerItem
-	cursor int
+	items     []pickerItem
+	cursor    int
+	state     pickerState
+	statusMsg string // transient hint (e.g. revoke result); cleared on nav
 }
 
 func newPickerModel(v vault.Store) (pickerModel, error) {
@@ -49,14 +62,19 @@ func (m pickerModel) Update(msg tea.Msg) (pickerModel, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	if m.state == pickerStateRevokeConfirm {
+		return m.updateRevokeConfirm(keyMsg)
+	}
 	switch keyMsg.String() {
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
+			m.statusMsg = ""
 		}
 	case "down", "j":
 		if m.cursor < len(m.items)-1 {
 			m.cursor++
+			m.statusMsg = ""
 		}
 	case "enter":
 		if m.cursor < 0 || m.cursor >= len(m.items) {
@@ -67,6 +85,18 @@ func (m pickerModel) Update(msg tea.Msg) (pickerModel, tea.Cmd) {
 			return m, func() tea.Msg { return newAccountMsg{} }
 		}
 		return m, func() tea.Msg { return accountSelectedMsg{email: item.email} }
+	case "r":
+		// Revoke from list level — parity with admin-key entity list.
+		// Only meaningful for actual account rows (not "+ new account").
+		if m.cursor < 0 || m.cursor >= len(m.items) {
+			return m, nil
+		}
+		if m.items[m.cursor].isNew {
+			return m, nil
+		}
+		m.state = pickerStateRevokeConfirm
+		m.statusMsg = ""
+		return m, nil
 	case "esc":
 		return m, func() tea.Msg { return pickerBackMsg{} }
 	case "q", "ctrl+c":
@@ -75,7 +105,29 @@ func (m pickerModel) Update(msg tea.Msg) (pickerModel, tea.Cmd) {
 	return m, nil
 }
 
+// updateRevokeConfirm handles the y/n modal that gates revocation.
+// Confirming emits revokeAccountMsg — the same message the inner
+// scope-view Ctrl+R uses, so the model's revokeAccountMsg handler
+// is the single revoke implementation across both entry points.
+func (m pickerModel) updateRevokeConfirm(k tea.KeyMsg) (pickerModel, tea.Cmd) {
+	switch k.String() {
+	case "y", "enter":
+		account := m.items[m.cursor].email
+		m.state = pickerStateNormal
+		return m, func() tea.Msg { return revokeAccountMsg{account: account} }
+	case "n", "esc":
+		m.state = pickerStateNormal
+		return m, nil
+	case "ctrl+c":
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
 func (m pickerModel) View() string {
+	if m.state == pickerStateRevokeConfirm {
+		return m.viewRevokeConfirm()
+	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Google accounts"))
 	b.WriteString("\n")
@@ -102,7 +154,28 @@ func (m pickerModel) View() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("↑/↓: navigate    enter: select    esc: back    q: quit"))
+	if m.statusMsg != "" {
+		b.WriteString(helpStyle.Render(m.statusMsg))
+		b.WriteString("\n")
+	}
+	b.WriteString(helpStyle.Render("↑↓ nav   enter open   r revoke   esc back   q quit"))
+	b.WriteString("\n")
+	return b.String()
+}
+
+func (m pickerModel) viewRevokeConfirm() string {
+	var b strings.Builder
+	account := m.items[m.cursor].email
+	b.WriteString(titleStyle.Render(fmt.Sprintf("Revoke %s?", account)))
+	b.WriteString("\n\n")
+	b.WriteString(rowDelStyle.Render("  This will revoke ALL Google scopes for this account"))
+	b.WriteString("\n")
+	b.WriteString(rowDelStyle.Render("  and remove the credential from charon's keychain."))
+	b.WriteString("\n\n")
+	b.WriteString("  Agents using this account will lose access immediately.\n")
+	b.WriteString("  You'll need to re-auth via charon auth to use it again.\n")
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("[y/enter] revoke    [n/esc] cancel"))
 	b.WriteString("\n")
 	return b.String()
 }
