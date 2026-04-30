@@ -213,9 +213,8 @@ Progress:
     - [x] **2c** (revoke at entity list — project + admin cascade)
   - [x] **Phase 3** (key detail screen + catalog stub)
 - [x] **M5 — proxy per-host routing** — landed 2026-04-30
-- [ ] M6 — account-level rm refactor
-- [ ] M7 — docs
-- [ ] code review chunk 1 (after M1+M2+M3)
+- [x] **M6 — account-level rm refactor** — landed 2026-04-30
+- [x] **M7 — docs** — landed 2026-04-30
 - [ ] code review chunk 2 (after M4+M5+M6+M7)
 
 Sketch milestones:
@@ -730,6 +729,47 @@ plan doc; validate before writing code.
   - End-to-end testable now: `charon serve` + `charon run --
     <agent>` with `X-Charon-Account: <key-name>` on requests
     routed at api.openai.com.
+
+- **2026-04-30** — M6 (account-level rm refactor) landed.
+  - `internal/tui/picker.go` — added `pickerStateRevokeConfirm`
+    modal state. `r` on an account row opens the y/n confirm;
+    `r` on the `+ new account` row is a no-op. y/enter emits
+    `revokeAccountMsg` (existing plumbing — single revoke
+    implementation across inner Ctrl+R and outer `r`). The
+    confirm view mirrors the inner-scope-view confirm copy.
+  - `internal/tui/model.go` `revokeAccountMsg` handler — on
+    success and not in initial-account mode: rebuild the OAuth
+    picker (revoked account disappears), set `picker.statusMsg`
+    with the result note, return to `screenPicker`. Initial-
+    account mode (`m.picker.items == nil`) preserves the original
+    exit-on-revoke behavior since there's no picker stack.
+  - 4 new tests cover: r → confirm modal, y → revoke message
+    with cursored account, n → cancel, r on `+ new account` row
+    no-op, end-to-end picker → revokeAccountMsg → rebuilt picker
+    minus revoked account + status note.
+
+- **2026-04-30** — M7 (docs) landed.
+  - `docs/agent-protocol.md` — new "Provider types" subsection
+    documenting OAuth vs admin-key vs catalog header semantics.
+    `X-Charon-Account` clarified for admin-key (key alias from
+    `charon auth`, not email). `X-Charon-Scope` documented as
+    silently ignored on admin-key/catalog routes per the M5
+    `HasScopes` gate. New "OpenAI" provider section with sample
+    requests (image generation) and 407 examples for
+    unknown-account.
+  - `README.md` — "What it does" block mentions admin-key
+    providers + OpenAI alongside Google. Quick-start sample
+    includes both Google (X-Charon-Account + X-Charon-Scope) and
+    OpenAI (X-Charon-Account only) requests. Two-lifecycle
+    framing (OAuth + admin-key, with catalog Tier 3 noted as
+    coming).
+  - `docs/threat-model.md` — A11 (admin key abuse) refined to
+    name the service-account-style mint path that the OpenAI
+    Admin API actually exposes. New "Dev mode: file-backed
+    vault, not keychain" subsection in the Assets section
+    documents the dev-vault trade-off (filesystem perms vs
+    keychain encryption) and the explicit "never paste prod
+    admin keys into unsigned binary" warning.
 
 - **2026-04-30** — wire-shape correction surfaced by manual
   testing: OpenAI does NOT expose a singular `/v1/organization`

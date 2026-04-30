@@ -15,18 +15,31 @@ changes, except setting two headers, one mandatory and one advisory.
 ## What it does
 
 ```
-your-agent ──HTTPS──> charon proxy ──HTTPS──> Google APIs
+your-agent ──HTTPS──> charon proxy ──HTTPS──> Google APIs / OpenAI / …
                        │
-                       ├─ injects bearer token from keychain
-                       ├─ refreshes expired tokens automatically
+                       ├─ injects bearer credential from keychain
+                       │  (OAuth access token, or admin-key-minted API key)
+                       ├─ refreshes expired OAuth tokens automatically
                        ├─ enforces declared scope set (HTTP 407 on mismatch)
                        └─ logs every request for audit
 ```
 
-The agent uses `https://gmail.googleapis.com/...` as if calling Google
-directly. Charon intercepts via TLS MITM, looks up the right account's
-token in the OS keychain, attaches `Authorization: Bearer <token>`, and
-forwards to Google. The token never appears in the agent's memory or logs.
+The agent uses `https://gmail.googleapis.com/...` or
+`https://api.openai.com/...` as if calling the provider directly. Charon
+intercepts via TLS MITM, looks up the right credential in the OS keychain,
+attaches `Authorization: Bearer <token>`, and forwards. The credential
+never appears in the agent's memory or logs.
+
+Two credential lifecycle models supported:
+
+- **OAuth** (Google) — browser-based grant flow, scope-managed, automatic
+  token refresh
+- **Admin-key** (OpenAI) — paste a one-time admin key into charon, then
+  charon mints per-account API keys via the provider's admin API and
+  manages their lifecycle
+
+A future catalog flow (#15) extends to long-tail providers (Anthropic,
+Groq, Mistral, …) with paste-only keys and best-effort revocation.
 
 ## Quick start
 
@@ -34,12 +47,18 @@ First, [install charon](#installation) (one-time: bootstraps a self-signed
 code-signing identity and produces a signed `~/.local/bin/charon`). Then:
 
 ```bash
-# 1. Authenticate (opens browser, stores tokens in macOS Keychain).
-charon auth                # interactive TUI: pick scopes, grant, revoke
+# 1. Authenticate (opens browser for Google; opens paste flow for OpenAI).
+charon auth                # interactive TUI: provider picker → flow per type
 
 # 2. Run any tool through the proxy. Charon sets HTTPS_PROXY and CA trust.
 charon run -- python my_agent.py
-charon run -- curl https://gmail.googleapis.com/gmail/v1/users/me/profile
+charon run -- curl https://gmail.googleapis.com/gmail/v1/users/me/profile \
+  -H "X-Charon-Account: user@gmail.com" \
+  -H "X-Charon-Scope: gmail.readonly"
+charon run -- curl https://api.openai.com/v1/images/generations \
+  -H "X-Charon-Account: image-gen" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-image-1","prompt":"capybara","n":1,"size":"1024x1024"}'
 ```
 
 That's it. The agent makes plain HTTPS calls; charon does the rest.

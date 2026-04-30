@@ -23,25 +23,55 @@ charon run -- your-tool ...
 through charon transparently. Your agent code uses real upstream URLs
 (`https://gmail.googleapis.com/...`); charon handles the rest.
 
+## Provider types
+
+Charon supports two credential lifecycle models, and the headers behave
+slightly differently for each:
+
+| Provider type | Examples | `X-Charon-Account` semantics | `X-Charon-Scope` semantics |
+|---|---|---|---|
+| **OAuth** | Google (Gmail, Drive, Calendar, …) | account email | scope check applies — 407 on missing |
+| **Admin-key** (#13) | OpenAI | charon-side **key alias** (the `name` field from `charon auth`) | **silently ignored** — no scope concept |
+| **Catalog** (#15, future) | Anthropic, Groq, Mistral, … | charon-side key alias | silently ignored |
+
+`X-Charon-Scope` is only consumed for OAuth-provider routes. On
+admin-key and catalog routes charon strips the header before
+forwarding (same as OAuth) but doesn't check it against the
+credential — admin-key keys aren't bound by scope grants the way
+OAuth tokens are. Setting `X-Charon-Scope` on an OpenAI request is
+harmless; the header just gets dropped.
+
 ## The two headers
 
 When making HTTP requests through charon, set:
 
-### `X-Charon-Account: <email>`
+### `X-Charon-Account: <name>`
 
 **Required when more than one credential exists for the provider.**
-Selects which account's tokens to inject. With a single account in the
-keychain charon auto-resolves and the header is optional, but always
-setting it is safer.
+Selects which credential to inject. The value is:
+
+- **OAuth providers**: the account email (e.g. `user@gmail.com`)
+- **Admin-key providers**: the charon-side key alias you set in
+  `charon auth` (e.g. `image-gen`)
+
+With a single credential in the vault charon auto-resolves and the
+header is optional, but always setting it is safer.
 
 ### `X-Charon-Scope: <comma-separated short names or full URLs>`
 
-**Strongly recommended.** Declares which OAuth scopes your call needs.
-Charon checks these against what's actually granted for the account
-before forwarding. If anything's missing, charon short-circuits with an
-**HTTP 407** that tells you exactly what's missing and the command to
-fix it. Without this header, charon can't preempt — you'll get a
-provider-specific 403 instead, with worse error messages.
+**Strongly recommended on OAuth routes.** Declares which OAuth scopes
+your call needs. Charon checks these against what's actually granted
+for the account before forwarding. If anything's missing, charon
+short-circuits with an **HTTP 407** that tells you exactly what's
+missing and the command to fix it. Without this header, charon can't
+preempt — you'll get a provider-specific 403 instead, with worse
+error messages.
+
+On **admin-key** and **catalog** routes charon silently ignores the
+header (admin-key credentials have no scope semantics — the key
+either has access at the provider's side or it doesn't). Charon
+still strips the header before forwarding so the upstream provider
+never sees it.
 
 Both short names and full URLs are accepted:
 
@@ -238,11 +268,52 @@ Google rewrites the OIDC short scope `email` to its full URL
 catalog uses the full URL for round-trip consistency. You can use either
 form in `X-Charon-Scope`.
 
+### OpenAI
+
+Admin-key provider (#13). User pastes a one-time admin key in
+`charon auth`; charon mints per-account keys via service-account
+creation against OpenAI's Admin API. The agent uses the local key
+alias (the `name` field, e.g. `image-gen`) in `X-Charon-Account`;
+charon swaps in the actual `sk-…` value before forwarding to
+`api.openai.com`. `X-Charon-Scope` is ignored.
+
+Routed host: **`api.openai.com`** (data plane). The Admin API
+(`/v1/organization/…`) shares the host but is only used by the TUI
+during mint/revoke flows; agents talk to the data-plane endpoints.
+
+#### Sample: Image generation
+
+```http
+POST /v1/images/generations HTTP/1.1
+Host: api.openai.com
+X-Charon-Account: image-gen
+Content-Type: application/json
+
+{"model":"gpt-image-1","prompt":"a smiling capybara","n":1,"size":"1024x1024"}
+```
+
+Charon forwards the request with `Authorization: Bearer sk-…`
+filled in from the keychain. The agent never sees the key.
+
+#### Sample: 407 on unknown account
+
+```http
+HTTP/1.1 407 Proxy Authentication Required
+
+charon: credential required
+```
+
+Returned when `X-Charon-Account` names a key that doesn't exist in
+charon's vault, or when no admin key is configured yet for the
+provider.
+
 ### Other providers (future)
 
-When charon adds Dropbox / Microsoft / GitHub, this document gains a
-section per provider with its scope catalog and protocol-specific notes.
-Cross-cutting protocol (headers, 407, fix command) stays the same.
+When charon adds catalog (Tier 3) providers via #15 — Anthropic,
+Groq, Mistral, etc. — this document gains a section per provider.
+Catalog providers use the same `X-Charon-Account` semantics as
+OpenAI (key-alias lookup, no scope semantics). The cross-cutting
+protocol (headers, 407, fix command) stays the same.
 
 ## Backward fallback (no `X-Charon-Scope`)
 

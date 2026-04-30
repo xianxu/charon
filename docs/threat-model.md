@@ -187,6 +187,29 @@ radius is "any host charon proxies for"; an admin key's blast radius
 is "the entire upstream organization." Neither is bounded by a
 single account.
 
+### Dev mode: file-backed vault, not keychain
+
+Unsigned charon binaries (running as `ServiceDev` — typical for
+`go run` / `make build` iteration) store credentials in a flat
+JSON file at `~/.local/share/charon/dev-vault.json` (mode `0600`)
+rather than the macOS Keychain. This sidesteps the keychain ACL
+entirely — dev iteration produces a different binary identity per
+build, and ACL-bound entries would prompt the user on every read.
+
+**Trade-off**: dev secrets are protected only by filesystem
+permissions, not keychain encryption. Same trust boundary as the
+unsigned binary itself — anyone with disk access can already
+inject code into the binary, so the marginal weakness is small.
+
+**Implication**: the file is a soft target for backups, snapshots,
+and anything that scans home directories. **Never paste production
+admin keys into an unsigned charon binary** — the dev file is for
+test secrets only. Production paths (`make install` → signed
+binary) use the M4-ACL'd keychain unchanged.
+
+`make clean` wipes the dev vault file. Mass `rm
+~/.local/share/charon/dev-vault.json` is the explicit reset.
+
 ### Admin keys: cross-org orphaning on replace
 
 Replacing a provider's admin key with one from a *different*
@@ -513,8 +536,10 @@ persistence at provider scope.
 Adversary path:
 
 1. AI agent reads `_<provider>:admin` from charon's keychain.
-2. Agent uses the admin key to mint a new project key under a
-   project name that looks legitimate.
+2. Agent uses the admin key to mint a new project key. For OpenAI:
+   `POST /v1/organization/projects/{id}/service_accounts` returns
+   a service-account API key (the only programmatic-mint path
+   OpenAI exposes — direct project-key creation is dashboard-only).
 3. Agent exfiltrates the minted key for use from a different machine.
 
 ✅ Defended by the same M4 ACL that gates OAuth refresh tokens. The
