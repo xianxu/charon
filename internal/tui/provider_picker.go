@@ -164,6 +164,21 @@ func entityTermPlural(provider string) string {
 	return "accounts"
 }
 
+// upstreamContainerLabel returns the per-provider phrase for the
+// upstream container that holds API keys. Used in mint flow Step 2
+// where naming the provider explicitly clarifies that the user is
+// picking a real OpenAI/Anthropic container, not a charon concept.
+// Falls back to "container" for unknown providers.
+func upstreamContainerLabel(provider string) string {
+	switch provider {
+	case "openai":
+		return "OpenAI project"
+	case "anthropic":
+		return "Anthropic workspace"
+	}
+	return "container"
+}
+
 func pluralize(n int, singular, plural string) string {
 	if n == 1 {
 		return fmt.Sprintf("%d %s", n, singular)

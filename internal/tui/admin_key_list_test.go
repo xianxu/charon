@@ -32,7 +32,7 @@ func TestAdminKeyList_RendersUnconfigured(t *testing.T) {
 	}
 
 	view := m.View()
-	for _, want := range []string{"Charon › OpenAI", "Projects", "Admin key", "not set", "+ new project", "admin key required"} {
+	for _, want := range []string{"Charon › OpenAI", "Keys", "Admin key", "not set", "+ new key", "admin key required"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View missing %q\n%s", want, view)
 		}
@@ -126,7 +126,10 @@ func TestAdminKeyList_AnthropicShowsWorkspaces(t *testing.T) {
 	store := fakeAdminStore(t, "anthropic", true, "me")
 	m, _ := newAdminKeyListModel("anthropic", v, store)
 	view := m.View()
-	for _, want := range []string{"Charon › Anthropic", "Workspaces", "+ new workspace"} {
+	// Anthropic-specific verbiage shows up in the *mint flow Step 2*
+	// (where the upstream-container distinction matters). The keys-list
+	// screen itself is provider-agnostic now.
+	for _, want := range []string{"Charon › Anthropic", "Keys", "+ new key"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("Anthropic view missing %q\n%s", want, view)
 		}

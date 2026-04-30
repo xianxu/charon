@@ -265,14 +265,18 @@ func TestMint_View_ContainsExpectedChrome(t *testing.T) {
 	m, _, _ := newMintFixture(t)
 
 	view := m.View()
-	for _, want := range []string{"Charon › OpenAI › new project", "Step 1/2", "X-Charon-Account"} {
+	for _, want := range []string{"Charon › OpenAI › new key", "Step 1/2", "Name>"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("account-step view missing %q\n%s", want, view)
 		}
 	}
 }
 
-func TestMint_AnthropicWordingDifferent(t *testing.T) {
+// The mint flow header is provider-agnostic ("new key"). Anthropic-
+// specific verbiage ("Anthropic workspace") only appears in Step 2,
+// where the user picks the upstream container — which is the place
+// the local term genuinely matters.
+func TestMint_AnthropicWordingInStep2(t *testing.T) {
 	v := memory.New()
 	store := fakeAdminStore(t, "anthropic", true, "me")
 	fake := providers.NewFake().WithName("anthropic")
@@ -280,9 +284,28 @@ func TestMint_AnthropicWordingDifferent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newAdminMintModel: %v", err)
 	}
-	view := m.View()
-	if !strings.Contains(view, "new workspace") {
-		t.Errorf("Anthropic mint view should say 'new workspace', got\n%s", view)
+
+	// Step 1: header is provider-agnostic.
+	step1 := m.View()
+	if !strings.Contains(step1, "Charon › Anthropic › new key") {
+		t.Errorf("Step 1 header should be 'new key', got\n%s", step1)
+	}
+
+	// Drive to Step 2.
+	m = typeMint(t, m, "test")
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated
+	pl := cmd().(adminMintProjectsLoadedMsg)
+	updated, _ = m.Update(pl)
+	m = updated
+
+	// Step 2 should reference 'Anthropic workspace' explicitly.
+	step2 := m.View()
+	if !strings.Contains(step2, "Anthropic workspace") {
+		t.Errorf("Step 2 should reference 'Anthropic workspace', got\n%s", step2)
+	}
+	if !strings.Contains(step2, "+ create new workspace") {
+		t.Errorf("Step 2 should offer 'create new workspace', got\n%s", step2)
 	}
 }
 

@@ -118,8 +118,8 @@ func newAdminMintModel(
 	}
 
 	acct := textinput.New()
-	acct.Placeholder = "work-project"
-	acct.Prompt = "  X-Charon-Account> "
+	acct.Placeholder = "work-key"
+	acct.Prompt = "  Name> "
 	acct.CharLimit = 64
 	acct.Width = 40
 	acct.Focus()
@@ -171,11 +171,11 @@ func (m adminMintModel) updateEditingAccount(msg tea.Msg) (adminMintModel, tea.C
 			if name == "" {
 				return m, nil
 			}
-			// Reject duplicate-account names early so we don't waste an
-			// upstream mint on a name that won't fit in the vault.
+			// Reject duplicate names early so we don't waste an upstream
+			// mint on a name that already exists in the vault.
 			if _, err := m.vault.Get(m.providerName, name); err == nil {
 				m.state = mintStateError
-				m.err = fmt.Errorf("account %q already exists for %s — pick a different X-Charon-Account name", name, m.providerName)
+				m.err = fmt.Errorf("key name %q already exists for %s — pick a different name", name, m.providerName)
 				return m, nil
 			}
 			m.state = mintStateLoadingProjects
@@ -397,8 +397,8 @@ func (m adminMintModel) View() string {
 
 func (m adminMintModel) header(sub string) string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(fmt.Sprintf("Charon › %s › new %s",
-		providerLabel(m.providerName), entityTerm(m.providerName))))
+	b.WriteString(titleStyle.Render(fmt.Sprintf("Charon › %s › new key",
+		providerLabel(m.providerName))))
 	b.WriteString("\n")
 	b.WriteString(mutedStyle.Render(sub))
 	b.WriteString("\n")
@@ -409,9 +409,9 @@ func (m adminMintModel) header(sub string) string {
 
 func (m adminMintModel) viewEditingAccount() string {
 	var b strings.Builder
-	b.WriteString(m.header("Step 1/2 — local name (X-Charon-Account)"))
-	b.WriteString("  Pick a short name agents will use to refer to this credential.\n")
-	b.WriteString("  Stored as the `X-Charon-Account` header value.\n\n")
+	b.WriteString(m.header("Step 1/2 — name"))
+	b.WriteString("  Give this key a short name. Agents identify which key\n")
+	b.WriteString("  to use by referencing this name.\n\n")
 	b.WriteString(m.accountInput.View())
 	b.WriteString("\n\n")
 	b.WriteString(helpStyle.Render("enter: continue   esc: cancel"))
@@ -420,9 +420,10 @@ func (m adminMintModel) viewEditingAccount() string {
 
 func (m adminMintModel) viewPickingProject() string {
 	var b strings.Builder
-	sub := fmt.Sprintf("Step 2/2 — pick a %s for the new key", entityTerm(m.providerName))
+	sub := fmt.Sprintf("Step 2/2 — pick which %s the key should live in",
+		upstreamContainerLabel(m.providerName))
 	b.WriteString(m.header(sub))
-	b.WriteString(fmt.Sprintf("  Local name: %s\n\n", strings.TrimSpace(m.accountInput.Value())))
+	b.WriteString(fmt.Sprintf("  Name: %s\n\n", strings.TrimSpace(m.accountInput.Value())))
 
 	if len(m.projects) == 0 {
 		b.WriteString(mutedStyle.Render("  (no existing " + entityTermPlural(m.providerName) + ")"))
@@ -463,7 +464,7 @@ func (m adminMintModel) viewPickingProject() string {
 func (m adminMintModel) viewEditingProjectName() string {
 	var b strings.Builder
 	b.WriteString(m.header("Step 2b — name the new " + entityTerm(m.providerName)))
-	b.WriteString(fmt.Sprintf("  Local name: %s\n\n", strings.TrimSpace(m.accountInput.Value())))
+	b.WriteString(fmt.Sprintf("  Name: %s\n\n", strings.TrimSpace(m.accountInput.Value())))
 	b.WriteString("  Upstream " + entityTerm(m.providerName) + " name:\n")
 	b.WriteString(m.projectNameInput.View())
 	b.WriteString("\n\n")

@@ -21,10 +21,11 @@ type adminKeyListRow struct {
 	adminKeySet bool
 	adminLabel  string // "xianxu@gmail.com / acme-inc" or "not set — press enter to configure"
 
-	// projectRow fields:
-	account    string // X-Charon-Account
-	projectID  string // proj_… / ws_…
-	keyHint    string // "sk-…xyz" — derived from KeyMaterial prefix+suffix
+	// keyRow fields:
+	account     string // the X-Charon-Account header value (key name)
+	projectName string // human-readable upstream project / workspace name
+	projectID   string // proj_… / ws_… — kept for revoke; not displayed primary
+	keyHint     string // "sk-…xyz" — derived from KeyMaterial prefix+suffix
 }
 
 type adminKeyRowKind int
@@ -35,13 +36,16 @@ const (
 	rowAddNew
 )
 
-// adminKeyListModel renders the entity-list for admin-key providers
-// (OpenAI projects, Anthropic workspaces). Phase 1: render +
-// navigation only. Phase 2 wires the paste/mint/revoke actions.
+// adminKeyListModel renders the keys list for admin-key providers
+// (OpenAI / Anthropic). Each row is a charon-managed key (name,
+// upstream container, key hint). The list is key-centric — projects
+// (OpenAI) / workspaces (Anthropic) are just attributes on each row,
+// not their own navigation level. Users add a project via the mint
+// flow when picking "+ create new project" in step 2.
 type adminKeyListModel struct {
 	provider     string // "openai" / "anthropic"
-	entityPlural string // "Projects" / "Workspaces"
-	entityAdd    string // "+ new project" / "+ new workspace"
+	entityPlural string // "Keys" — universal across admin-key providers
+	entityAdd    string // "+ new key" — universal
 
 	rows        []adminKeyListRow
 	cursor      int
@@ -99,8 +103,8 @@ func newAdminKeyListModel(
 ) (adminKeyListModel, error) {
 	m := adminKeyListModel{
 		provider:     provider,
-		entityPlural: titleCase(entityTermPlural(provider)),
-		entityAdd:    "+ new " + entityTerm(provider),
+		entityPlural: "Keys",
+		entityAdd:    "+ new key",
 	}
 
 	// Admin-key state row
@@ -128,27 +132,29 @@ func newAdminKeyListModel(
 	if err != nil {
 		return adminKeyListModel{}, fmt.Errorf("list credentials: %w", err)
 	}
-	type projItem struct {
-		account, projectID, hint string
+	type keyItem struct {
+		account, projectName, projectID, hint string
 	}
-	var projects []projItem
+	var keys []keyItem
 	for _, c := range creds {
 		if c.Provider != provider || c.CredType() != vault.TypeAdminKey || c.AdminKey == nil {
 			continue
 		}
-		projects = append(projects, projItem{
-			account:   c.Account,
-			projectID: c.AdminKey.ProjectID,
-			hint:      hintFromKeyMaterial(c.AdminKey.KeyMaterial),
+		keys = append(keys, keyItem{
+			account:     c.Account,
+			projectName: c.AdminKey.ProjectName,
+			projectID:   c.AdminKey.ProjectID,
+			hint:        hintFromKeyMaterial(c.AdminKey.KeyMaterial),
 		})
 	}
-	sort.Slice(projects, func(i, j int) bool { return projects[i].account < projects[j].account })
-	for _, p := range projects {
+	sort.Slice(keys, func(i, j int) bool { return keys[i].account < keys[j].account })
+	for _, k := range keys {
 		m.rows = append(m.rows, adminKeyListRow{
-			kind:      rowProject,
-			account:   p.account,
-			projectID: p.projectID,
-			keyHint:   p.hint,
+			kind:        rowProject,
+			account:     k.account,
+			projectName: k.projectName,
+			projectID:   k.projectID,
+			keyHint:     k.hint,
 		})
 	}
 
@@ -338,14 +344,21 @@ func renderAdminKeyRow(row adminKeyListRow) string {
 }
 
 func renderProjectRow(row adminKeyListRow) string {
-	// Columns: account (24) projectID (16) "key" hint
+	// Columns: name (24) project (24) keyHint. Project column shows
+	// the human-readable name; the upstream ID is available via the
+	// detail screen for revoke etc. If ProjectName is empty (older
+	// vault entries pre-#13 mint flow), fall back to a truncated ID.
 	acct := padOrTrunc(row.account, 24)
-	pid := padOrTrunc(row.projectID, 16)
+	proj := row.projectName
+	if proj == "" {
+		proj = row.projectID
+	}
+	proj = padOrTrunc(proj, 24)
 	hint := row.keyHint
 	if hint == "" {
 		hint = "(no key)"
 	}
-	return fmt.Sprintf("%s %s key %s", acct, pid, hint)
+	return fmt.Sprintf("%s %s %s", acct, proj, hint)
 }
 
 // titleCase capitalizes the first letter of a string. Used for screen
