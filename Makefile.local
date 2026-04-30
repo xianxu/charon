@@ -1,7 +1,7 @@
 # Repo-specific Makefile targets.
 # This file is included by Makefile — add your own targets here.
 
-.PHONY: build sign test run clean signing-identity install print-sign-identity \
+.PHONY: build sign test run clean signing-identity install reinstall print-sign-identity \
         security-build security-install security security-remedy security-uninstall \
         govulncheck
 
@@ -87,6 +87,21 @@ install: sign
 		   echo "" ; \
 		   echo "To make it permanent, add that line to your ~/.zshrc or ~/.bashrc" ;; \
 	esac
+
+# Rebuild + reinstall + restart the launchd service. Idiomatic
+# loop after committing a fix: bouncing the service ensures the
+# running proxy picks up the new binary's behavior.
+#
+# Service uninstall failures are tolerated (e.g. service not
+# installed yet, or already stopped) so this works on first-time
+# setup too. Uses the just-built binary at ~/.local/bin/charon
+# rather than $PATH so a stale charon elsewhere doesn't shadow.
+reinstall:
+	@echo "==> Stopping charon service (if running)..."
+	@~/.local/bin/charon service uninstall 2>/dev/null || true
+	@$(MAKE) install
+	@echo "==> Starting charon service..."
+	@~/.local/bin/charon service install
 
 # Remove all artifacts produced by `make build` plus runtime state
 # written by dev binaries:
