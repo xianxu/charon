@@ -25,11 +25,11 @@ type fakeServer struct {
 
 	orgID, orgName string
 
-	projects     map[string]projectResponse
-	mintedKeys   map[string]apiKeyMintResponse // by key id
-	revokedKeys  map[string]bool
-	createCalls  atomic.Int32
-	revokeCalls  atomic.Int32
+	projects        map[string]projectResponse
+	serviceAccounts map[string]serviceAccountResponse // by svc_acct id
+	revokedSAs      map[string]bool                   // by svc_acct id
+	createCalls     atomic.Int32
+	revokeCalls     atomic.Int32
 
 	srv *httptest.Server
 }
@@ -37,13 +37,13 @@ type fakeServer struct {
 func newFakeServer(t *testing.T, adminKey string) *fakeServer {
 	t.Helper()
 	fs := &fakeServer{
-		t:           t,
-		expectAuth:  "Bearer " + adminKey,
-		orgID:       "org-test-aB3cD4",
-		orgName:     "test-org",
-		projects:    make(map[string]projectResponse),
-		mintedKeys:  make(map[string]apiKeyMintResponse),
-		revokedKeys: make(map[string]bool),
+		t:               t,
+		expectAuth:      "Bearer " + adminKey,
+		orgID:           "org-test-aB3cD4",
+		orgName:         "test-org",
+		projects:        make(map[string]projectResponse),
+		serviceAccounts: make(map[string]serviceAccountResponse),
+		revokedSAs:      make(map[string]bool),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/organization/projects", fs.handleProjects)
@@ -101,18 +101,20 @@ func (fs *fakeServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleProjectChild handles /v1/organization/projects/{pid}/api_keys
-// and /v1/organization/projects/{pid}/api_keys/{kid}. Path-pattern
-// matching is open-coded since net/http's standard mux pre-1.22 doesn't
-// support wildcards.
+// handleProjectChild handles
+//
+//	/v1/organization/projects/{pid}/service_accounts
+//	/v1/organization/projects/{pid}/service_accounts/{sid}
+//
+// Path-pattern matching is open-coded since net/http's standard mux
+// pre-1.22 doesn't support wildcards.
 func (fs *fakeServer) handleProjectChild(w http.ResponseWriter, r *http.Request) {
 	if !fs.authOK(w, r) {
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/v1/organization/projects/")
 	parts := strings.Split(rest, "/")
-	// Expected shapes: {pid}/api_keys or {pid}/api_keys/{kid}.
-	if len(parts) < 2 || parts[1] != "api_keys" {
+	if len(parts) < 2 || parts[1] != "service_accounts" {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -123,42 +125,47 @@ func (fs *fakeServer) handleProjectChild(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if len(parts) == 2 {
-		// POST /api_keys (mint) or GET (list — not implemented)
+		// POST /service_accounts (mint).
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
 		var body map[string]string
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		k := apiKeyMintResponse{
-			ID:            fmt.Sprintf("key_%d", len(fs.mintedKeys)+1),
-			Object:        "organization.project.api_key",
-			Name:          body["name"],
-			Value:         fmt.Sprintf("sk-test-%s", body["name"]),
-			RedactedValue: "sk-test-…",
-			CreatedAt:     1714492800,
+		saID := fmt.Sprintf("svc_acct_%d", len(fs.serviceAccounts)+1)
+		sa := serviceAccountResponse{
+			ID:        saID,
+			Object:    "organization.project.service_account",
+			Name:      body["name"],
+			Role:      "member",
+			CreatedAt: 1714492800,
 		}
-		fs.mintedKeys[k.ID] = k
-		_ = json.NewEncoder(w).Encode(k)
+		sa.APIKey.ID = fmt.Sprintf("key_%d", len(fs.serviceAccounts)+1)
+		sa.APIKey.Object = "organization.project.service_account.api_key"
+		sa.APIKey.Value = fmt.Sprintf("sk-test-%s", body["name"])
+		sa.APIKey.Name = body["name"]
+		sa.APIKey.CreatedAt = 1714492800
+		fs.serviceAccounts[saID] = sa
+		_ = json.NewEncoder(w).Encode(sa)
 		return
 	}
-	// 3 parts → DELETE specific key
-	kid := parts[2]
+	// 3 parts → DELETE service_accounts/{sid}
+	sid := parts[2]
 	if r.Method != http.MethodDelete {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 	fs.revokeCalls.Add(1)
-	if fs.revokedKeys[kid] {
+	if fs.revokedSAs[sid] {
 		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"error":{"message":"key not found","type":"invalid_request_error"}}`))
+		_, _ = w.Write([]byte(`{"error":{"message":"service account not found","type":"invalid_request_error"}}`))
 		return
 	}
-	if _, ok := fs.mintedKeys[kid]; !ok {
+	if _, ok := fs.serviceAccounts[sid]; !ok {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	fs.revokedKeys[kid] = true
+	fs.revokedSAs[sid] = true
 	w.WriteHeader(http.StatusNoContent)
 }
 

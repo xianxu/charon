@@ -66,16 +66,28 @@ type projectsListResponse struct {
 	Object  string            `json:"object"`
 }
 
-// apiKeyMintResponse is the shape returned from POST
-// /v1/organization/projects/{id}/api_keys. The `value` field carries
-// the full key material — captured here, never refetched.
-type apiKeyMintResponse struct {
-	ID            string `json:"id"`
-	Object        string `json:"object"`
-	Name          string `json:"name"`
-	Value         string `json:"value"`          // full sk-… on creation only
-	RedactedValue string `json:"redacted_value"` // sk-…xyz, on retrieve
-	CreatedAt     int64  `json:"created_at"`
+// serviceAccountResponse is the shape returned from POST
+// /v1/organization/projects/{id}/service_accounts. OpenAI's Admin
+// API doesn't support direct creation of project API keys — the
+// canonical "programmatic project-scoped key" path is to create a
+// service account, which returns an embedded api_key on creation.
+//
+// The api_key.value field carries the full sk-… and is returned ONLY
+// on creation; subsequent retrievals expose only the redacted form.
+// We capture it here and persist immediately in the caller.
+type serviceAccountResponse struct {
+	ID        string `json:"id"`     // svc_acct_…  (used as KeyID for revoke via DELETE service_accounts/{id})
+	Object    string `json:"object"` // "organization.project.service_account"
+	Name      string `json:"name"`
+	Role      string `json:"role"`
+	CreatedAt int64  `json:"created_at"`
+	APIKey    struct {
+		ID        string `json:"id"`     // key_…
+		Object    string `json:"object"` // "organization.project.service_account.api_key"
+		Value     string `json:"value"`  // sk-…  (creation-only)
+		Name      string `json:"name"`
+		CreatedAt int64  `json:"created_at"`
+	} `json:"api_key"`
 }
 
 // errorResponse is OpenAI's standard error JSON wrapper.
@@ -180,28 +192,37 @@ func (p *Provider) CreateProject(ctx context.Context, adminKey, name string) (pr
 	return providers.Project{ID: out.ID, Name: out.Name}, nil
 }
 
-// MintKey creates an API key inside the given project. The returned
-// keyMaterial is captured here and MUST be persisted by the caller —
-// OpenAI does not expose the full key material on subsequent reads.
+// MintKey creates a service account in the given project; the
+// service account's auto-created api_key is returned in-band. The
+// returned keyID is the service-account id (svc_acct_…) — that's
+// what RevokeKey takes on the way back, since revoking deletes the
+// service account (which deletes its key).
+//
+// The returned keyMaterial is captured here and MUST be persisted by
+// the caller — OpenAI does not expose the full key value on
+// subsequent reads.
 func (p *Provider) MintKey(ctx context.Context, adminKey, projectID, keyName string) (keyID, keyMaterial string, err error) {
 	body := map[string]string{"name": keyName}
-	path := fmt.Sprintf("/v1/organization/projects/%s/api_keys", projectID)
-	var out apiKeyMintResponse
+	path := fmt.Sprintf("/v1/organization/projects/%s/service_accounts", projectID)
+	var out serviceAccountResponse
 	if err := p.do(ctx, adminKey, http.MethodPost, path, body, &out); err != nil {
 		return "", "", err
 	}
-	if out.ID == "" || out.Value == "" {
-		return "", "", fmt.Errorf("openai: mint returned id=%q value-empty=%v — API may have changed", out.ID, out.Value == "")
+	if out.ID == "" || out.APIKey.Value == "" {
+		return "", "", fmt.Errorf("openai: mint returned svc_acct=%q value-empty=%v — API may have changed", out.ID, out.APIKey.Value == "")
 	}
-	return out.ID, out.Value, nil
+	return out.ID, out.APIKey.Value, nil
 }
 
-// RevokeKey deletes an upstream API key. Returns
-// providers.ErrAlreadyRevoked if the upstream returns 404 — the key
-// was already gone before charon got there. Caller proceeds with
-// vault deletion regardless.
+// RevokeKey deletes the service account for this credential. Deleting
+// the service account also deletes its embedded api_key — one
+// upstream call cleans up both.
+//
+// Returns providers.ErrAlreadyRevoked if the upstream returns 404 —
+// the service account was already gone before charon got there.
+// Caller proceeds with vault deletion regardless.
 func (p *Provider) RevokeKey(ctx context.Context, adminKey, projectID, keyID string) error {
-	path := fmt.Sprintf("/v1/organization/projects/%s/api_keys/%s", projectID, keyID)
+	path := fmt.Sprintf("/v1/organization/projects/%s/service_accounts/%s", projectID, keyID)
 	return p.do(ctx, adminKey, http.MethodDelete, path, nil, nil)
 }
 
