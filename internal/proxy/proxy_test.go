@@ -133,6 +133,108 @@ func TestHTTPProxyMultiAccountRequiresHeader(t *testing.T) {
 	}
 }
 
+// Admin-key (post-#13) credentials: KeyMaterial is the token; no
+// refresh, no scopes. The proxy reads it directly out of the
+// AdminKey payload and injects as Authorization: Bearer.
+func TestHTTPProxy_AdminKeyCredential_InjectsKeyMaterial(t *testing.T) {
+	var seenAuth, seenCharonHeaders string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuth = r.Header.Get("Authorization")
+		// Internal headers must NOT leak to upstream.
+		seenCharonHeaders = r.Header.Get("X-Charon-Account") + "|" + r.Header.Get("X-Charon-Scope")
+		fmt.Fprint(w, "ok")
+	}))
+	defer upstream.Close()
+
+	upstreamURL, _ := url.Parse(upstream.URL)
+	hostname := upstreamURL.Hostname()
+	HostToProvider[hostname] = &Provider{Name: "openai-test", Auth: AuthBearer, HasScopes: false}
+	defer delete(HostToProvider, hostname)
+
+	store := memory.New()
+	_ = store.Set(&vault.Credential{
+		Type:     vault.TypeAdminKey,
+		Provider: "openai-test",
+		Account:  "image-gen",
+		AdminKey: &vault.AdminKeyData{
+			OrgID:       "org-test-001",
+			ProjectID:   "proj_X",
+			KeyID:       "svc_acct_X",
+			KeyMaterial: "sk-test-secret-bytes",
+		},
+	})
+
+	srv := &Server{Vault: store, Audit: NopAuditLog(), CA: testCA(t)}
+	proxyServer := httptest.NewServer(srv)
+	defer proxyServer.Close()
+
+	proxyURL, _ := url.Parse(proxyServer.URL)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+
+	req, _ := http.NewRequest("GET", "http://"+upstreamURL.Host+"/v1/images/generations", nil)
+	req.Header.Set("X-Charon-Account", "image-gen")
+	// X-Charon-Scope on an admin-key route should be silently ignored
+	// (not 407) per the agent-protocol contract.
+	req.Header.Set("X-Charon-Scope", "openid")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 (X-Charon-Scope should be ignored on admin-key routes)", resp.StatusCode)
+	}
+	if seenAuth != "Bearer sk-test-secret-bytes" {
+		t.Errorf("upstream Authorization = %q, want 'Bearer sk-test-secret-bytes'", seenAuth)
+	}
+	if seenCharonHeaders != "|" {
+		t.Errorf("X-Charon-* headers leaked to upstream: %q", seenCharonHeaders)
+	}
+}
+
+// resolveToken on an admin-key credential whose AdminKey payload is
+// missing/empty surfaces a clear error rather than silently injecting
+// an empty Bearer token.
+func TestHTTPProxy_AdminKeyMissingMaterial_FailsClosed(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "should not reach upstream")
+	}))
+	defer upstream.Close()
+
+	upstreamURL, _ := url.Parse(upstream.URL)
+	hostname := upstreamURL.Hostname()
+	HostToProvider[hostname] = &Provider{Name: "openai-test", Auth: AuthBearer, HasScopes: false}
+	defer delete(HostToProvider, hostname)
+
+	store := memory.New()
+	_ = store.Set(&vault.Credential{
+		Type:     vault.TypeAdminKey,
+		Provider: "openai-test",
+		Account:  "broken",
+		AdminKey: &vault.AdminKeyData{ProjectID: "proj_X", KeyID: "svc_X"}, // KeyMaterial empty
+	})
+
+	srv := &Server{Vault: store, Audit: NopAuditLog(), CA: testCA(t)}
+	proxyServer := httptest.NewServer(srv)
+	defer proxyServer.Close()
+
+	proxyURL, _ := url.Parse(proxyServer.URL)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+
+	req, _ := http.NewRequest("GET", "http://"+upstreamURL.Host+"/v1/test", nil)
+	req.Header.Set("X-Charon-Account", "broken")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusProxyAuthRequired {
+		t.Errorf("expected 407 on empty key material, got %d", resp.StatusCode)
+	}
+}
+
 func TestHTTPProxyAccountSelection(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, r.Header.Get("Authorization"))

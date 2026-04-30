@@ -284,7 +284,7 @@ func TestHTTPProxy_ScopeEnforcement(t *testing.T) {
 
 	upstreamURL, _ := url.Parse(upstream.URL)
 	hostname := upstreamURL.Hostname()
-	HostToProvider[hostname] = &Provider{Name: "test-scope", Auth: AuthBearer}
+	HostToProvider[hostname] = &Provider{Name: "test-scope", Auth: AuthBearer, HasScopes: true}
 	defer delete(HostToProvider, hostname)
 
 	store := memory.New()
@@ -390,7 +390,7 @@ func TestHTTPProxy_GoogleScopeNormalization(t *testing.T) {
 	hostname := upstreamURL.Hostname()
 	// Provider.Name = "google" so scopeNormalizer wires in
 	// oauth.ResolveGoogleScope.
-	HostToProvider[hostname] = &Provider{Name: "google", Auth: AuthBearer}
+	HostToProvider[hostname] = &Provider{Name: "google", Auth: AuthBearer, HasScopes: true}
 	defer delete(HostToProvider, hostname)
 
 	store := memory.New()
@@ -532,7 +532,7 @@ func TestHTTPProxy_MultipleRequestedScopes(t *testing.T) {
 
 	upstreamURL, _ := url.Parse(upstream.URL)
 	hostname := upstreamURL.Hostname()
-	HostToProvider[hostname] = &Provider{Name: "test-multi", Auth: AuthBearer}
+	HostToProvider[hostname] = &Provider{Name: "test-multi", Auth: AuthBearer, HasScopes: true}
 	defer delete(HostToProvider, hostname)
 
 	store := memory.New()

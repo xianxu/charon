@@ -39,6 +39,29 @@ func TestProviderForHost_GoogleSuffix(t *testing.T) {
 	}
 }
 
+func TestProviderForHost_OpenAI(t *testing.T) {
+	p := ProviderForHost("api.openai.com")
+	if p == nil {
+		t.Fatal("api.openai.com should resolve to the openai provider")
+	}
+	if p.Name != "openai" {
+		t.Errorf("Name = %q, want openai", p.Name)
+	}
+	if p.Auth != AuthBearer {
+		t.Errorf("Auth = %q, want bearer", p.Auth)
+	}
+	if p.HasScopes {
+		t.Error("openai is admin-key — HasScopes should be false")
+	}
+}
+
+func TestProviderForHost_GoogleHasScopes(t *testing.T) {
+	p := ProviderForHost("gmail.googleapis.com")
+	if p == nil || !p.HasScopes {
+		t.Error("google (OAuth) provider should have HasScopes=true")
+	}
+}
+
 func TestProviderForHost_ExactMatchOverridesSuffix(t *testing.T) {
 	// Add an exact match that overrides the suffix rule.
 	HostToProvider["special.googleapis.com"] = &Provider{Name: "special", Auth: AuthBearer}

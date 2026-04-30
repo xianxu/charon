@@ -240,8 +240,10 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Check requested scopes against granted scopes.
-		if requestedScopes != "" {
+		// Check requested scopes against granted scopes. Admin-key
+		// providers have no scope concept — silently ignore the
+		// header on their routes per the agent-protocol contract.
+		if provider.HasScopes && requestedScopes != "" {
 			requested := strings.Split(requestedScopes, ",")
 			for i := range requested {
 				requested[i] = strings.TrimSpace(requested[i])
@@ -371,8 +373,10 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Check requested scopes against granted scopes.
-		if requestedScopes != "" {
+		// Check requested scopes against granted scopes. Admin-key
+		// providers have no scope concept — silently ignore the
+		// header on their routes per the agent-protocol contract.
+		if provider.HasScopes && requestedScopes != "" {
 			requested := strings.Split(requestedScopes, ",")
 			for i := range requested {
 				requested[i] = strings.TrimSpace(requested[i])
@@ -463,6 +467,20 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 	cred, err := s.Vault.Get(providerName, account)
 	if err != nil {
 		return "", account, nil, err
+	}
+
+	// Admin-key credentials (OpenAI service-account keys, future
+	// catalog Tier 3 paste keys): KeyMaterial is the token directly.
+	// No refresh path — admin-key tokens are static until revoked.
+	// No scopes — admin-key providers don't expose scope semantics.
+	// Cache with zero expiry so the existing cache-hit branch above
+	// short-circuits subsequent reads cheaply.
+	if cred.CredType() == vault.TypeAdminKey {
+		if cred.AdminKey == nil || cred.AdminKey.KeyMaterial == "" {
+			return "", account, nil, fmt.Errorf("admin-key credential %s/%s has no key material — re-mint", providerName, account)
+		}
+		s.tokenCache.Store(cacheKey, &cachedToken{token: cred.AdminKey.KeyMaterial})
+		return cred.AdminKey.KeyMaterial, account, nil, nil
 	}
 
 	if cred.AccessToken != "" && !cred.IsExpiredAt(now) {

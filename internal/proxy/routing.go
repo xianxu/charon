@@ -15,9 +15,17 @@ const (
 )
 
 // Provider describes a credential provider and how to inject auth.
+//
+// HasScopes controls whether X-Charon-Scope is honored for routes
+// to this provider. OAuth providers (Google) have scope semantics
+// and consume the header. Admin-key providers (OpenAI) and catalog
+// providers have no scope concept — the header is silently ignored
+// on their routes per the agent-protocol contract. Charon strips
+// the header from outbound requests in either case.
 type Provider struct {
-	Name string
-	Auth AuthMethod
+	Name      string
+	Auth      AuthMethod
+	HasScopes bool
 }
 
 // InjectAuth adds the credential to the request headers.
@@ -32,7 +40,15 @@ func (p *Provider) InjectAuth(setHeader func(key, value string), token string) e
 }
 
 // HostToProvider maps exact API hosts to credential providers.
-var HostToProvider = map[string]*Provider{}
+//
+// OpenAI's data plane is api.openai.com (chat, embeddings, image
+// generation, etc.). The admin API (api.openai.com/v1/organization/…)
+// shares the host but doesn't transit through the agent's runtime
+// flow — admin calls go through internal/providers/openai during
+// the TUI mint/revoke flows, not via this proxy.
+var HostToProvider = map[string]*Provider{
+	"api.openai.com": {Name: "openai", Auth: AuthBearer, HasScopes: false},
+}
 
 // SuffixToProvider maps host suffixes (e.g. ".googleapis.com") to providers.
 // Checked when no exact match is found in HostToProvider.
@@ -45,7 +61,7 @@ type suffixRule struct {
 // SuffixToProvider maps host suffixes (e.g. ".googleapis.com") to providers.
 // Checked when no exact match is found in HostToProvider.
 var SuffixToProvider = []suffixRule{
-	{".googleapis.com", &Provider{Name: "google", Auth: AuthBearer}},
+	{".googleapis.com", &Provider{Name: "google", Auth: AuthBearer, HasScopes: true}},
 }
 
 // ProviderForHost returns the provider config for a given host, or nil if unknown.

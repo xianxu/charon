@@ -212,7 +212,7 @@ Progress:
     - [x] **2b** (`+ new key` mint flow with key-centric language)
     - [x] **2c** (revoke at entity list — project + admin cascade)
   - [x] **Phase 3** (key detail screen + catalog stub)
-- [ ] M5 — proxy per-host routing
+- [x] **M5 — proxy per-host routing** — landed 2026-04-30
 - [ ] M6 — account-level rm refactor
 - [ ] M7 — docs
 - [ ] code review chunk 1 (after M1+M2+M3)
@@ -697,6 +697,39 @@ plan doc; validate before writing code.
     → list → detail → back navigation; status-clears-on-nav.
   - This closes M4. The next milestone is M5 (proxy per-host
     routing for OpenAI/Anthropic upstreams).
+
+- **2026-04-30** — M5 (proxy per-host routing) landed. The data-
+  plane piece — agents can now actually use minted credentials
+  via the running proxy.
+  - `internal/proxy/routing.go` — `api.openai.com` added to
+    `HostToProvider` with `HasScopes: false`. New `HasScopes`
+    field on `Provider` gates the X-Charon-Scope check per the
+    plan-doc decision: OAuth (Google) consumes the header,
+    admin-key (OpenAI) silently ignores it. Header is still
+    deleted before forwarding in either case.
+  - `internal/proxy/proxy.go` `resolveToken` — admin-key
+    short-circuit returns `cred.AdminKey.KeyMaterial` directly.
+    No refresh path (admin-key tokens are static until revoked
+    via the TUI). No scopes (admin-key has no scope semantics).
+    Cached with zero expiry so subsequent calls hit the existing
+    cache-hit branch cheaply. Empty/missing KeyMaterial fails
+    closed with a clear error rather than injecting an empty
+    Bearer token.
+  - Both scope-check call sites (CONNECT path proxy.go:243 and
+    HTTP path proxy.go:376) gated on `provider.HasScopes`.
+    Anthropic was demoted out of scope before this change so no
+    routing entry is added — Anthropic will land via the catalog
+    flow in #15.
+  - Tests: 4 new — admin-key full request injects KeyMaterial
+    as Bearer with both internal headers stripped, X-Charon-Scope
+    silently ignored on admin-key routes (200, not 407),
+    fail-closed on empty KeyMaterial (407 + audit log entry),
+    and routing-test entries for `api.openai.com` (HasScopes
+    false) and Google (HasScopes true). Existing scope tests
+    updated to set `HasScopes: true` on their inline Providers.
+  - End-to-end testable now: `charon serve` + `charon run --
+    <agent>` with `X-Charon-Account: <key-name>` on requests
+    routed at api.openai.com.
 
 - **2026-04-30** — wire-shape correction surfaced by manual
   testing: OpenAI does NOT expose a singular `/v1/organization`
