@@ -5,6 +5,7 @@ deps: []
 github_issue:
 created: 2026-04-28
 updated: 2026-04-28
+estimate_hours: 45
 ---
 
 # Provider catalog + onboarding (Tier 3 generalized)
@@ -174,6 +175,34 @@ provider-defined health endpoint (e.g. `GET /v1/models` for
 OpenAI-compatible providers; provider-specific otherwise) to
 confirm the key works. Defaults off (extra latency, sometimes
 counts against quota); user opts in.
+
+## Estimate
+
+**Range: 30–64 hr (~3–6.5 working days). Best guess: ~45 hr (~4.5 days).**
+
+Produced via `brain/data/life/42shots/velocity/estimate-logic-v1.md` against `baseline-v1.md`. Method A only.
+
+This estimate **assumes #13 ships first** — `internal/providers/` interface, the keychain-storage convention, and the TUI provider-picker scaffolding are reused. The catalog flow integrates as another provider-type on top of that scaffolding. If #15 ships before #13, add ~5–10 hr for picker + basic provider abstractions.
+
+| Milestone | Primitive match | Base hr | Familiarity × | Adjusted |
+|---|---|---|---|---|
+| M1 — Catalog schema + 13-provider seed YAML (URL/auth research per provider) | Atlas/docs + schema code | 2–5 | ×1.0 | 2–5 |
+| M2 — Catalog loader + TUI fuzzy-search picker | Smaller Go module | 3–6 | ×1.0 | 3–6 |
+| M3 — Generic metadata-driven per-host router (the meat) | Greenfield Go module (single concern) | 8–14 | ×1.0 | 8–14 |
+| M4 — TUI add-account flow ([Open] buttons + paste + e2e test against 3 providers) | Greenfield Go module (TUI) | 6–12 | ×1.0 | 6–12 |
+| M5 — `--verify` flag (optional health-check post-paste) | Smaller Go module | 2–4 | ×1.0 | 2–4 |
+| M6 — Docs (README, `providers.md`, threat-model notes) | Atlas/docs ×3 | 1–3 | ×1.0 | 1–3 |
+| M7 — Onboarding polish (default to catalog for empty-state) | Smaller Go module | 1–3 | ×1.0 | 1–3 |
+| Code review × 2 chunks | Process overhead | 2–6 | ×1.0 | 2–6 |
+| **Subtotal** | | | | **25–53** |
+| **+20% unknown-unknowns buffer** | | | | **30–64** |
+
+Caveats:
+- Assumes baseline calibration (10hr/day focused, solo founder + AI, current-baseline polish; see `baseline-v1.md`).
+- Assumes #13 ships first (see above). Independent in spec, coupled in scaffolding.
+- M1's range is higher than typical "Atlas/docs maintenance" because per-provider URL/auth-shape research is real curation work, not just writing prose.
+- Open questions on user-extensible catalog and catalog-update mechanism are explicitly deferred (Notes section), so they don't add to this estimate. If pulled in, +5–10 hr for the user-config merge + ~3–5 hr for a refresh subcommand.
+- The "60-second add-provider" UX target in the Notes is a real success criterion — under-shooting M4's polish budget would miss it. The high end of M4 (12 hr) reflects polishing to that bar.
 
 ## Plan
 

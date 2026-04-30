@@ -5,6 +5,7 @@ deps: []
 github_issue:
 created: 2026-04-28
 updated: 2026-04-28
+estimate_hours: 25
 ---
 
 # Google AI providers: Gemini AI Studio + Vertex AI
@@ -103,6 +104,32 @@ Per Google account (e.g. `xianxu@gmail.com`):
   key_id metadata (NEW; only when AI Studio path is used)
 
 Vertex needs no new entries; uses the existing OAuth token.
+
+## Estimate
+
+**Range: 17–36 hr (~1.7–3.6 working days). Best guess: ~25 hr (~2.5 days).**
+
+Produced via `brain/data/life/42shots/velocity/estimate-logic-v1.md` against `baseline-v1.md`. Method A only.
+
+This estimate **assumes #13 ships first** — the keychain + mint + revoke scaffolding in `internal/providers/`, the TUI scope-picker patterns, and the threat-model admin-key asset class are all established there. If #14 lands before #13, add ~10 hr for pattern-establishing overhead.
+
+| Milestone | Primitive match | Base hr | Familiarity × | Adjusted |
+|---|---|---|---|---|
+| M1 — Add `cloud-platform` scope to Google catalog | Atlas/docs + tiny code | 0.5–1 | ×1.0 | 0.5–1 |
+| M2 — Vertex routing (per-host + OAuth bearer attach + smoke test) | Smaller Go module | 3–6 | ×1.0 | 3–6 |
+| M3 — AI Studio key mint (API Keys API client + Keychain storage + project/API-enablement detection) | Smaller Go module | 5–8 | ×1.0 | 5–8 |
+| M4 — AI Studio routing (URL-param key attach) | Smaller Go module | 2–4 | ×1.0 | 2–4 |
+| M5 — Revoke flow on `accounts rm` (API Keys DELETE) | Smaller Go module | 2–4 | ×1.0 | 2–4 |
+| M6 — Docs (README, agent-protocol, threat-model touch-up) | Atlas/docs ×3 | 1–3 | ×1.0 | 1–3 |
+| Code review × 1–2 chunks | Process overhead | 1–4 | ×1.0 | 1–4 |
+| **Subtotal** | | | | **14.5–30** |
+| **+20% unknown-unknowns buffer** | | | | **17–36** |
+
+Caveats:
+- Assumes baseline calibration (10hr/day focused, solo founder + AI, current-baseline polish; see `baseline-v1.md`).
+- Assumes #13 ships first (see above). If parallel, raise the M3 estimate by 2–4 hr (re-establishing mint/keychain shape).
+- Open question on scope granularity (`cloud-platform` is broad; narrower scopes might exist) is bounded research — ~1 hr at most, absorbed in M1 high end.
+- Region selection for Vertex: assumed to be config or per-request, not a TUI feature in v1. If full TUI support needed, add 2 hr to M2.
 
 ## Plan
 

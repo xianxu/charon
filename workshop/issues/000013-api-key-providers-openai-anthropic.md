@@ -5,6 +5,7 @@ deps: []
 github_issue:
 created: 2026-04-28
 updated: 2026-04-28
+estimate_hours: 55
 ---
 
 # API-key providers: OpenAI + Anthropic
@@ -141,6 +142,33 @@ requires entering an account to revoke it. Bubble revoke up to the
 account-list level — same affordance applies to OAuth and API-key
 accounts. Track as a sub-task here or split off; either way it's
 related UX scope.
+
+## Estimate
+
+**Range: 41–78 hr (~4–8 working days). Best guess: ~55 hr (~5.5 days).**
+
+Produced via `brain/data/life/42shots/velocity/estimate-logic-v1.md` against `baseline-v1.md`. Method A only.
+
+All-Go, all-familiar territory in a mature charon codebase — no novel stacks. The biggest single chunk is M2 (OpenAI) at 10–16 hr; M3 (Anthropic) is a near-mirror.
+
+| Milestone | Primitive match | Base hr | Familiarity × | Adjusted |
+|---|---|---|---|---|
+| TUI design sketch (cross-cutting, upfront) | Pensive | 1–2 | ×1.0 | 1–2 |
+| M1 — `internal/providers/` interface skeleton | Smaller Go module | 2–4 | ×1.0 | 2–4 |
+| M2 — OpenAI provider impl + threat-model amendment | Greenfield Go module (single concern) | 10–16 | ×1.0 | 10–16 |
+| M3 — Anthropic provider (mirror of M2) | Smaller Go module (pattern reuse) | 4–8 | ×1.0 | 4–8 |
+| M4 — TUI: provider picker + admin-key + account flows | Greenfield Go module | 8–14 | ×1.0 | 8–14 |
+| M5 — Proxy per-host routing for OpenAI/Anthropic | Smaller Go module | 4–8 | ×1.0 | 4–8 |
+| M6 — Account-level rm refactor (lift to list) | Smaller Go module | 2–4 | ×1.0 | 2–4 |
+| M7 — Docs (agent-protocol, README, threat-model) | Atlas/docs ×3 | 1–3 | ×1.0 | 1–3 |
+| Code review × 2 chunks | Process overhead | 2–6 | ×1.0 | 2–6 |
+| **Subtotal** | | | | **34–65** |
+| **+20% unknown-unknowns buffer** | | | | **41–78** |
+
+Caveats:
+- Assumes baseline calibration (10hr/day focused, solo founder + AI, current-baseline polish; see `baseline-v1.md`).
+- M3's "pattern reuse" assumption depends on M2 being clean and well-factored. If OpenAI's quirks force pattern-breaking in M2, M3 grows toward 8 hr or higher.
+- This is the first of three provider-related issues (#13, #14, #15). The TUI design sketch and threat-model amendments here set patterns that #14/#15 inherit — overhead absorbed in this estimate, savings show up in those.
 
 ## Plan
 
