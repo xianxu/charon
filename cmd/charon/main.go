@@ -158,8 +158,17 @@ Without arguments, prints the proxy environment variables for debugging.`,
 
 			// Build environment with proxy and CA trust vars.
 			env := os.Environ()
+			// Set BOTH uppercase and lowercase proxy env vars. Go
+			// net/http, curl, Python urllib/requests, and many other
+			// clients check the lowercase variant — sometimes prefer
+			// it. Setting only uppercase leaves a stale ambient
+			// `https_proxy=...` from the parent shell intact, and
+			// requests silently route to the wrong proxy with no
+			// auth injection. Belt-and-suspenders: set all four.
 			env = setEnv(env, "HTTPS_PROXY", proxyURL)
 			env = setEnv(env, "HTTP_PROXY", proxyURL)
+			env = setEnv(env, "https_proxy", proxyURL)
+			env = setEnv(env, "http_proxy", proxyURL)
 			env = setEnv(env, "SSL_CERT_FILE", bundlePath)
 			env = setEnv(env, "REQUESTS_CA_BUNDLE", bundlePath)                // Python requests
 			env = setEnv(env, "CURL_CA_BUNDLE", bundlePath)                    // curl
@@ -189,8 +198,8 @@ func printProxyInfo(cmd *cobra.Command) error {
 
 	fmt.Fprintf(out, "Proxy: %s\n", proxyURL)
 	fmt.Fprintf(out, "\nEnvironment variables set by 'charon run':\n")
-	fmt.Fprintf(out, "  HTTPS_PROXY=%s\n", proxyURL)
-	fmt.Fprintf(out, "  HTTP_PROXY=%s\n", proxyURL)
+	fmt.Fprintf(out, "  HTTPS_PROXY=%s    (also lowercase https_proxy)\n", proxyURL)
+	fmt.Fprintf(out, "  HTTP_PROXY=%s     (also lowercase http_proxy)\n", proxyURL)
 	fmt.Fprintf(out, "  SSL_CERT_FILE=<temp>/ca-bundle.pem\n")
 	fmt.Fprintf(out, "  REQUESTS_CA_BUNDLE=<temp>/ca-bundle.pem\n")
 	fmt.Fprintf(out, "  CURL_CA_BUNDLE=<temp>/ca-bundle.pem\n")

@@ -137,6 +137,63 @@ func TestRunNoArgsPrintsProxyInfo(t *testing.T) {
 	}
 }
 
+// `charon run` must override BOTH uppercase and lowercase proxy
+// env vars from the parent. Tools like Go net/http and Python
+// urllib check lowercase too — leaving an ambient `https_proxy`
+// from the parent shell intact silently routes traffic to the
+// wrong proxy with no auth injection. Regression for the
+// localhost:58767 ambient-proxy debug session.
+func TestRunSetsBothCasesOfProxyVars(t *testing.T) {
+	parent := []string{
+		"HOME=/tmp",
+		"HTTPS_PROXY=http://stale-uppercase:1111",
+		"https_proxy=http://stale-lowercase:2222",
+		"HTTP_PROXY=http://stale-uppercase-http:3333",
+		"http_proxy=http://stale-lowercase-http:4444",
+	}
+	const proxyURL = "http://127.0.0.1:8230"
+	env := setEnv(parent, "HTTPS_PROXY", proxyURL)
+	env = setEnv(env, "HTTP_PROXY", proxyURL)
+	env = setEnv(env, "https_proxy", proxyURL)
+	env = setEnv(env, "http_proxy", proxyURL)
+
+	want := map[string]string{
+		"HTTPS_PROXY":  proxyURL,
+		"https_proxy":  proxyURL,
+		"HTTP_PROXY":   proxyURL,
+		"http_proxy":   proxyURL,
+	}
+	got := map[string]string{}
+	for _, kv := range env {
+		eq := strings.Index(kv, "=")
+		if eq < 0 {
+			continue
+		}
+		got[kv[:eq]] = kv[eq+1:]
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("env[%q] = %q, want %q (ambient parent value should be overridden)", k, got[k], v)
+		}
+	}
+}
+
+func TestRunHelp_DocumentsLowercaseProxyVars(t *testing.T) {
+	addr, _ := startTestProxy(t)
+	root := buildRoot()
+	stdout, _, err := executeCmd(root, "--addr", addr, "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The 'charon run' info output should name both cases so users
+	// know to look for ambient lowercase mismatches.
+	for _, want := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("run info missing %q\n%s", want, stdout)
+		}
+	}
+}
+
 func TestRunRequiresProxy(t *testing.T) {
 	root := buildRoot()
 	_, _, err := executeCmd(root, "--addr", "127.0.0.1:19999", "run", "--", "echo", "hi")
