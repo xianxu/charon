@@ -249,12 +249,61 @@ Sketch milestones:
 
 ## Relationship to other issues
 
-- **Independent of #000013** (OpenAI/Anthropic). Those providers
-  have richer admin-API integration; they don't go through the
-  catalog. The catalog covers the static-key tail.
+- **OpenAI from #000013** stays in #000013 — programmatic mint via
+  service accounts works, full lifecycle handled there.
+- **Anthropic from #000013 was DEMOTED to this issue** (2026-04-30):
+  Anthropic's Admin API can list and deactivate keys but cannot
+  create them, so charon's mint flow doesn't apply. Anthropic uses
+  the catalog paste flow with the optional revoke endpoint
+  (`POST /v1/organizations/api_keys/{id}` with `status: inactive`)
+  for the best-effort revoke pathway. The shipped
+  `internal/providers/anthropic/` package + admin-key store
+  helpers remain available and should be re-used.
 - **Independent of #000014** (Google AI). Google's path uses OAuth.
 - **Conceptually unifies** with #000006 (multi-provider) — the
   catalog IS the multi-provider mechanism for Tier 3.
+
+## Credential-lifecycle principle (locked in #000013)
+
+> **Charon manages what it minted; charon revokes what it touched.**
+
+Catalog-pasted keys are *not* lifecycle-managed by charon — deletion
+in charon is local-only. **Exception**: the catalog declares an
+optional revoke endpoint per provider. When present, charon uses it
+on deletion (best-effort — failures don't block local deletion).
+When absent, the deletion confirmation modal tells the user "removed
+locally; please clean up at <provider URL>" with the per-provider
+console URL from the catalog.
+
+Schema (sketch):
+
+```yaml
+providers:
+  - name: anthropic
+    auth: { style: x-api-key, header: x-api-key, version_header: anthropic-version, version: "2023-06-01" }
+    revoke:
+      method: POST
+      url: https://api.anthropic.com/v1/organizations/api_keys/{key_id}
+      body: '{"status":"inactive"}'
+      key_id_source: list_endpoint  # see below
+    list_endpoint:
+      url: https://api.anthropic.com/v1/organizations/api_keys
+      key_match: partial_key_hint   # match pasted-key suffix to find key_id
+    console_url: https://console.anthropic.com/settings/admin-keys
+  - name: groq
+    auth: { style: bearer }
+    # no revoke entry → fall back to local-delete + console_url message
+    console_url: https://console.groq.com/keys
+```
+
+For Anthropic, charon needs to first call the list endpoint to find
+the `key_id` for a pasted key (matching by partial key hint), then
+call the revoke endpoint. For providers without a list+revoke
+combination, deletion is local-only with a user-facing pointer to
+the dashboard.
+
+See `atlas/charon.md` § "Credential lifecycle principle" for the
+broader rationale.
 
 ## Notes
 

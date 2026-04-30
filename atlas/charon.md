@@ -96,7 +96,44 @@ sections.
 - **Scope resolution**: Short names (e.g. `calendar.readonly`) resolve to full URLs (e.g. `https://www.googleapis.com/auth/calendar.readonly`).
 
 ## Design Decisions
+
+### Credential lifecycle principle: manage what you mint, revoke what you touched
+
+Charon distinguishes two classes of credentials it stores:
+
+1. **Minted by charon** — created via the provider's admin API (OpenAI
+   service-account keys, Google AI Studio keys, etc.). Charon has full
+   lifecycle responsibility: it created the credential, knows its
+   upstream id, and can list/revoke it via the same admin API.
+2. **Pasted into charon** — created by the user in the provider's
+   dashboard, then pasted into charon (catalog/Tier 3 long-tail
+   providers; also Anthropic, since their Admin API can list and
+   deactivate keys but cannot create them). Charon doesn't own the
+   credential's existence.
+
+**The principle**: *charon manages what it minted; charon revokes what
+it touched.*
+
+For minted credentials: full lifecycle. Mint, list, revoke — all
+through the provider's admin API. Deletion in charon propagates
+upstream.
+
+For pasted credentials: charon doesn't pretend to own them. Deletion
+in charon is local-only. **Exception**: revocation is offered
+best-effort even for pasted keys, because charon read the key
+material and is therefore on the hook if it leaks. When the
+provider exposes a deactivate / revoke endpoint (e.g. Anthropic's
+`POST /v1/organizations/api_keys/{id}` with `status: inactive`),
+charon uses it. When no such endpoint exists, charon tells the user
+"removed locally; please clean up at provider's dashboard" and
+points them at the right URL.
+
+The catalog (#15) declares per-provider revoke endpoints so this
+distinction is data-driven.
+
+### Other decisions
 - **CGo on darwin for keychain access** (was: pure Go via `security` CLI; revisited in #000003 because the CLI shell-out makes keychain ACLs meaningless — the requesting process becomes `/usr/bin/security`, not charon). Build-tag split: darwin+cgo uses Security framework directly via `github.com/keybase/go-keychain` for Get/Delete/List + direct CGo (`acl_darwin.go`) for ACL'd Set; `!cgo || !darwin` keeps the legacy CLI shell-out for hermetic CI / cross-compile.
+- **File-backed dev vault** (`internal/vault/keychain/dev_file.go`) — when the running binary is unsigned (ServiceDev), all keychain ops route to `~/.local/share/charon/dev-vault.json` instead of the macOS Keychain. Avoids the keychain-permission-prompt-per-rebuild friction and prevents training users to click "Always Allow" on every dev build. ServiceProd unchanged — production binaries still use the codesign-DR-pinned ACL on macOS Keychain.
 - **Persistent CA** — stored in `~/.config/charon/`, reused across restarts
 - **HTTP/1.1 forced upstream** — necessary for HTTP/1.1 MITM, standard practice
 - **Chunked re-encoding** — Go's transport dechunks upstream responses; proxy re-adds `Transfer-Encoding: chunked` when `ContentLength < 0` so clients know where the body ends

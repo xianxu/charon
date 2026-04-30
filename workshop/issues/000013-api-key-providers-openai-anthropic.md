@@ -643,6 +643,28 @@ plan doc; validate before writing code.
   Phase 3 covers the project detail screen + catalog (#15) stub
   + any polish from end-to-end testing.
 
+- **2026-04-30** — **scope change: Anthropic demoted to catalog
+  (#15) Tier 3 paste flow.** Real-API testing surfaced that
+  Anthropic's Admin API cannot programmatically create new API
+  keys (only list, update status, deactivate). From their docs:
+  *"new API keys can only be created through the Claude Console
+  for security reasons."* This breaks symmetry with the OpenAI
+  flow charon's admin-key model assumed.
+  - Removed Anthropic provider registration from
+    `cmd/charon/main.go`. Provider picker no longer shows
+    Anthropic until #15 lands the catalog wiring.
+  - Kept `internal/providers/anthropic/` package and tests in the
+    tree for #15 to re-purpose: Anthropic does support deactivate
+    via `POST /v1/organizations/api_keys/{id}` with
+    `status: inactive`, so the "best-effort revoke" exception to
+    the I-didn't-mint-I-don't-manage rule applies.
+  - This issue's M3 (Anthropic provider impl) is reclassified
+    "shipped, deferred from M4 wiring" — the package is sound, just
+    not the right shape for what's available upstream.
+  - Documented the credential-lifecycle principle in
+    `atlas/charon.md` § "Design Decisions / Credential lifecycle
+    principle" so #15 builds on the same foundation.
+
 - **2026-04-30** — wire-shape correction surfaced by manual
   testing: OpenAI does NOT expose a singular `/v1/organization`
   endpoint (returns 404 invalid_request_error). Fixed

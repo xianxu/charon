@@ -510,7 +510,21 @@ Decisions documented in the issue's Log:
   `name` preferred, `title` fallback for response-shape robustness.
 - ListProjects single-page only for MVP (personal-gateway scope).
 
-### M3 — Anthropic provider (mirror of M2) (4–8h) — **DONE 2026-04-30**
+### M3 — Anthropic provider (mirror of M2) (4–8h) — **DONE 2026-04-30, then DEMOTED to #15 (catalog)**
+
+**Scope change after M3 landed**: Anthropic's Admin API doesn't
+support programmatic key creation (only list / update / deactivate).
+The OpenAI service-account-style mint workaround has no Anthropic
+equivalent. So Anthropic moves to the catalog (#15) Tier 3
+paste-only flow with the *exception* that catalog catalog declares an
+optional revoke endpoint and Anthropic exposes one
+(`POST /v1/organizations/api_keys/{id}` with `status: inactive`).
+
+The shipped `internal/providers/anthropic/` package + tests remain
+in the tree for #15 to re-purpose for that revoke pathway; the
+package is just not wired into #13's TUI provider picker.
+
+
 
 Landed:
 
