@@ -173,8 +173,23 @@ Caveats:
 ## Plan
 
 Detailed plan in
-`workshop/plans/000013-api-key-providers-openai-anthropic-plan.md`
-(written after issue approval).
+[`workshop/plans/000013-api-key-providers-openai-anthropic-plan.md`](../plans/000013-api-key-providers-openai-anthropic-plan.md).
+
+Progress:
+
+- [x] **TUI design sketch** (cross-cutting) — locked 2026-04-30. See
+  plan doc § "TUI design sketch" for the three-screen flow, per-type
+  entity-list dispatch, admin-key-as-list-row pattern, multi-org
+  schema with single-org UI, and `Credential` tagged-tuple shape.
+- [ ] M1 — provider interface skeleton
+- [ ] M2 — OpenAI provider impl + threat-model amendment
+- [ ] M3 — Anthropic provider (mirror of M2)
+- [ ] M4 — TUI provider/admin-key/account flows
+- [ ] M5 — proxy per-host routing
+- [ ] M6 — account-level rm refactor
+- [ ] M7 — docs
+- [ ] code review chunk 1 (after M1+M2+M3)
+- [ ] code review chunk 2 (after M4+M5+M6+M7)
 
 Sketch milestones:
 
@@ -328,3 +343,26 @@ plan doc; validate before writing code.
 
 - Per-account API keys are functionally similar to OAuth refresh
   tokens — long-lived, revocable upstream. Same storage path.
+
+## Log
+
+- **2026-04-30** — TUI design sketch landed in
+  [`plans/000013-…-plan.md`](../plans/000013-api-key-providers-openai-anthropic-plan.md).
+  Key locks:
+  - Three-screen flow: provider picker → entity list → detail
+  - Per-provider local naming: Google/account, OpenAI/project,
+    Anthropic/workspace, catalog/account
+  - Admin-key state as a list row (red `○` / green `●`) on the
+    project/workspace screen, not a separate setup screen
+  - Single-tier revoke semantics: same delete-shell behavior at
+    entity-list `r` and detail-screen `r`
+  - `Credential` is a tagged tuple (Type discriminator + nested
+    `OAuth`/`AdminKey`/`Catalog` payload structs)
+  - Multi-org schema (N admin keys per provider keyed by `OrgID`)
+    with single-org UI invariant for MVP
+  - Same-org admin-key replace = silent rotate; different-org =
+    confirm-then-cascade-wipe
+  - Discovery: one API call at admin-key paste time to capture
+    `OrgID` + `OrgName`
+  - `OrgID`/`OrgLabel`/`OrgName` three-field shape: opaque
+    upstream id, user mnemonic, discovered display name
