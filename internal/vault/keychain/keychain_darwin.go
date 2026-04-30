@@ -69,16 +69,26 @@ func (s *Store) Set(cred *vault.Credential) error {
 	}
 	key := keyName(cred.Provider, cred.Account)
 
-	// ServiceProd entries are written with an ACL bound to the current
-	// process's designated requirement; ServiceDev entries skip the ACL
-	// (dev iteration writes from many ephemeral binaries — go test, go
-	// run — whose DRs don't match each other, so an ACL would lock dev
-	// out of its own state).
+	// Routing by namespace:
+	//   - ServiceProd: SecAccess pinned to current process's designated
+	//     requirement via setGenericPassword(withACL=true). Atomic
+	//     upsert preserves the ACL across token rotation.
+	//   - ServiceDev: shells out to `security add-generic-password -A`
+	//     (any-application access). Without -A, macOS attaches a
+	//     default SecAccess pinned to the writing binary's identity;
+	//     `go run` produces a different ephemeral binary on every
+	//     invocation, so subsequent reads from a fresh ephemeral
+	//     binary prompt. -A is documented-insecure (any app on the
+	//     user's machine can read), which is fine for ServiceDev —
+	//     dev entries hold test secrets the user pastes interactively
+	//     into an unsigned binary, never anything that ships.
 	//
-	// Both paths use SecItemUpdate-then-SecItemAdd for atomic upsert,
-	// which preserves the ACL across token rotation on the prod path.
-	withACL := s.service == ServiceProd
-	return setGenericPassword(s.service, key, data, withACL)
+	// kv_darwin.SetRaw applies the same routing for raw entries
+	// (admin key + meta) used by AdminKeyStore.
+	if s.service == ServiceProd {
+		return setGenericPassword(s.service, key, data, true)
+	}
+	return setRawPromptlessDev(s.service, key, string(data))
 }
 
 func (s *Store) Delete(provider, account string) error {
