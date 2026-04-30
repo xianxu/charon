@@ -134,7 +134,20 @@ func newAdminKeyListModel(
 		adminLabel:  m.adminLabelStr,
 	})
 
-	// Project rows: vault entries with Type==admin-key for this provider
+	// Key rows: vault entries with Type==admin-key for this provider.
+	//
+	// vault.Store.List on the production keychain backend returns
+	// lightweight skeletons (Provider+Account only, no payload) for
+	// performance — full reads would touch every entry's data. So we
+	// can't filter by Type or AdminKey directly off the List result.
+	// Instead: filter by provider name first, then Get each candidate
+	// to load the full payload. The dev file-vault returns full
+	// credentials from List, so this code path also works there.
+	//
+	// Charon reads its own keychain entries silently (M4 ACL pinned to
+	// the running binary's DR). Get failures are skipped silently —
+	// non-admin-key credentials may live under the same provider
+	// namespace and aren't a hard error here.
 	creds, err := v.List()
 	if err != nil {
 		return adminKeyListModel{}, fmt.Errorf("list credentials: %w", err)
@@ -144,14 +157,21 @@ func newAdminKeyListModel(
 	}
 	var keys []keyItem
 	for _, c := range creds {
-		if c.Provider != provider || c.CredType() != vault.TypeAdminKey || c.AdminKey == nil {
+		if c.Provider != provider {
+			continue
+		}
+		full, err := v.Get(provider, c.Account)
+		if err != nil {
+			continue
+		}
+		if full.CredType() != vault.TypeAdminKey || full.AdminKey == nil {
 			continue
 		}
 		keys = append(keys, keyItem{
-			account:     c.Account,
-			projectName: c.AdminKey.ProjectName,
-			projectID:   c.AdminKey.ProjectID,
-			hint:        hintFromKeyMaterial(c.AdminKey.KeyMaterial),
+			account:     full.Account,
+			projectName: full.AdminKey.ProjectName,
+			projectID:   full.AdminKey.ProjectID,
+			hint:        hintFromKeyMaterial(full.AdminKey.KeyMaterial),
 		})
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i].account < keys[j].account })

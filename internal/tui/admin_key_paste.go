@@ -249,6 +249,9 @@ func (m adminKeyPasteModel) updateDiscovering(msg tea.Msg) (adminKeyPasteModel, 
 	// Different OrgID — gather cascade accounts and show confirm
 	// modal. Read vault here (small) so the modal can name the
 	// affected credentials.
+	// vault.Store.List on the production keychain backend returns
+	// lightweight skeletons; need a full Get per candidate to inspect
+	// AdminKey.OrgID. See admin_key_list.go for the matching pattern.
 	creds, err := m.vault.List()
 	if err != nil {
 		m.state = pasteStateError
@@ -256,9 +259,18 @@ func (m adminKeyPasteModel) updateDiscovering(msg tea.Msg) (adminKeyPasteModel, 
 		return m, nil
 	}
 	for _, c := range creds {
-		if c.Provider == m.providerName && c.CredType() == vault.TypeAdminKey &&
-			c.AdminKey != nil && c.AdminKey.OrgID == m.existingOrgID {
-			m.cascadeAccounts = append(m.cascadeAccounts, c.Account)
+		if c.Provider != m.providerName {
+			continue
+		}
+		full, err := m.vault.Get(m.providerName, c.Account)
+		if err != nil {
+			continue
+		}
+		if full.CredType() != vault.TypeAdminKey || full.AdminKey == nil {
+			continue
+		}
+		if full.AdminKey.OrgID == m.existingOrgID {
+			m.cascadeAccounts = append(m.cascadeAccounts, full.Account)
 		}
 	}
 	m.state = pasteStateReplaceConfirm

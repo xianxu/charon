@@ -119,15 +119,27 @@ func newAdminKeyRevokeModel(
 	if err != nil {
 		return adminRevokeModel{}, fmt.Errorf("read admin key: %w", err)
 	}
+	// vault.Store.List on the production keychain backend returns
+	// lightweight skeletons; need a full Get per candidate to inspect
+	// AdminKey.OrgID. See admin_key_list.go for the matching pattern.
 	creds, err := v.List()
 	if err != nil {
 		return adminRevokeModel{}, fmt.Errorf("list vault: %w", err)
 	}
 	var cascade []string
 	for _, c := range creds {
-		if c.Provider == providerName && c.CredType() == vault.TypeAdminKey &&
-			c.AdminKey != nil && c.AdminKey.OrgID == meta.OrgID {
-			cascade = append(cascade, c.Account)
+		if c.Provider != providerName {
+			continue
+		}
+		full, err := v.Get(providerName, c.Account)
+		if err != nil {
+			continue
+		}
+		if full.CredType() != vault.TypeAdminKey || full.AdminKey == nil {
+			continue
+		}
+		if full.AdminKey.OrgID == meta.OrgID {
+			cascade = append(cascade, full.Account)
 		}
 	}
 	return adminRevokeModel{
