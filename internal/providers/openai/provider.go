@@ -19,14 +19,12 @@ import (
 	"time"
 
 	"github.com/xianxu/charon/internal/providers"
+	"github.com/xianxu/charon/internal/vault"
 )
 
-// Name + Type constants exported so the TUI can identify this
-// provider without instantiating it.
-const (
-	Name = "openai"
-	Type = "admin-key"
-)
+// Name is the stable provider id used across vault.Credential.Provider
+// values, keychain account prefixes, and the TUI's provider picker.
+const Name = "openai"
 
 // DefaultBaseURL is OpenAI's production Admin API. Tests override
 // Provider.BaseURL with an httptest server URL.
@@ -47,7 +45,7 @@ func New() *Provider {
 }
 
 func (p *Provider) Name() string { return Name }
-func (p *Provider) Type() string { return Type }
+func (p *Provider) Type() string { return vault.TypeAdminKey }
 
 // orgResponse is the shape of GET /v1/organization. We ignore fields
 // charon doesn't use (created_at, billing info, etc.).

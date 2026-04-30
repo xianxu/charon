@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/xianxu/charon/internal/providers"
 )
@@ -404,4 +405,124 @@ func TestProvider_NetworkError_Wrapped(t *testing.T) {
 	if errors.Is(err, providers.ErrInvalidAdminKey) || errors.Is(err, providers.ErrAlreadyRevoked) {
 		t.Errorf("network error should not map to a sentinel: %v", err)
 	}
+}
+
+// 429 must NOT map to a sentinel — see openai equivalent.
+func TestProvider_RateLimit_NotMappedToSentinel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"rate limit hit"}}`))
+	}))
+	defer srv.Close()
+
+	p := &Provider{BaseURL: srv.URL, HTTP: srv.Client()}
+	_, _, err := p.DiscoverOrg(context.Background(), "sk-ant")
+	if err == nil {
+		t.Fatal("expected rate-limit error")
+	}
+	if errors.Is(err, providers.ErrInvalidAdminKey) || errors.Is(err, providers.ErrAlreadyRevoked) {
+		t.Errorf("429 should not map to a sentinel, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "rate limit hit") {
+		t.Errorf("upstream message should be preserved, got %v", err)
+	}
+}
+
+// 5xx must NOT map to a sentinel — see openai equivalent.
+func TestProvider_5xx_NotMappedToSentinel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// /me discovery happens first; serve discovery so the test
+		// reaches ListProjects' real upstream call.
+		if strings.HasSuffix(r.URL.Path, "/me") {
+			_ = json.NewEncoder(w).Encode(orgResponse{ID: "org_x", Name: "n"})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"api_error","message":"upstream blew up"}}`))
+	}))
+	defer srv.Close()
+
+	p := &Provider{BaseURL: srv.URL, HTTP: srv.Client()}
+	_, err := p.ListProjects(context.Background(), "sk-ant")
+	if err == nil {
+		t.Fatal("expected upstream error")
+	}
+	if errors.Is(err, providers.ErrInvalidAdminKey) || errors.Is(err, providers.ErrAlreadyRevoked) {
+		t.Errorf("5xx should not map to a sentinel, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "upstream blew up") {
+		t.Errorf("upstream message should be preserved, got %v", err)
+	}
+}
+
+// Context cancellation propagates — see openai equivalent.
+func TestProvider_ContextCancellation_Propagates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	p := &Provider{BaseURL: srv.URL, HTTP: srv.Client()}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := p.DiscoverOrg(ctx, "sk-ant")
+		done <- err
+	}()
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("DiscoverOrg should return an error when context is cancelled")
+		}
+		if errors.Is(err, providers.ErrInvalidAdminKey) || errors.Is(err, providers.ErrAlreadyRevoked) {
+			t.Errorf("cancellation should not map to a sentinel: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("DiscoverOrg did not return after context cancel — context not propagated")
+	}
+}
+
+// InvalidateAdminKey clears a cached entry; the next call re-runs
+// discovery. Closes the loop on the M3 cache lifecycle issue raised
+// in chunk-1 review.
+func TestProvider_InvalidateAdminKey_ForcesRediscovery(t *testing.T) {
+	var meCalls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/organizations/me", func(w http.ResponseWriter, r *http.Request) {
+		meCalls.Add(1)
+		_ = json.NewEncoder(w).Encode(orgResponse{ID: "org_x", Name: "n"})
+	})
+	mux.HandleFunc("/v1/organizations/", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(workspacesListResponse{})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	p := &Provider{BaseURL: srv.URL, HTTP: srv.Client()}
+	ctx := context.Background()
+
+	if _, _, err := p.DiscoverOrg(ctx, "sk-ant"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.ListProjects(ctx, "sk-ant"); err != nil {
+		t.Fatal(err)
+	}
+	if got := meCalls.Load(); got != 1 {
+		t.Errorf("expected 1 /me call before invalidate, got %d", got)
+	}
+
+	p.InvalidateAdminKey("sk-ant")
+
+	if _, err := p.ListProjects(ctx, "sk-ant"); err != nil {
+		t.Fatal(err)
+	}
+	if got := meCalls.Load(); got != 2 {
+		t.Errorf("expected 2 /me calls after invalidate (forced rediscovery), got %d", got)
+	}
+
+	// Invalidate of an unknown key is a no-op (no panic, no extra call).
+	p.InvalidateAdminKey("sk-never-seen")
 }

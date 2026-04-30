@@ -93,11 +93,14 @@ func (s *AdminKeyStore) Get() (adminKey string, meta AdminMeta, err error) {
 	return adminKey, meta, nil
 }
 
-// Set stores the admin key + meta atomically from the caller's
-// perspective. (Two keychain writes under the hood — if the second
-// fails after the first succeeds, callers should retry; we don't try
-// to roll back since DeleteRaw on a partial write would mask a
-// pre-existing meta blob from a same-OrgID rotate.)
+// Set stores the admin key + meta. Two keychain writes under the hood;
+// not atomic. Order is meta-first then admin-key so a half-failure
+// (meta written, admin write fails) leaves the store with no admin
+// entry — Get returns ErrAdminKeyNotSet cleanly and retrying Set
+// overwrites both blobs. The inverse order would leave admin without
+// meta, which Get treats as corruption (explicit error rather than
+// ErrAdminKeyNotSet) and the user can't recover from without a manual
+// keychain edit.
 func (s *AdminKeyStore) Set(adminKey string, meta AdminMeta) error {
 	if adminKey == "" {
 		return fmt.Errorf("admin key must be non-empty")
@@ -105,15 +108,15 @@ func (s *AdminKeyStore) Set(adminKey string, meta AdminMeta) error {
 	if meta.OrgID == "" {
 		return fmt.Errorf("meta.OrgID must be non-empty")
 	}
-	if err := s.setRaw(s.service, s.adminAccount(), adminKey); err != nil {
-		return fmt.Errorf("write admin key: %w", err)
-	}
 	metaJSON, err := json.Marshal(meta)
 	if err != nil {
 		return fmt.Errorf("marshal meta: %w", err)
 	}
 	if err := s.setRaw(s.service, s.metaAccount(), string(metaJSON)); err != nil {
 		return fmt.Errorf("write meta: %w", err)
+	}
+	if err := s.setRaw(s.service, s.adminAccount(), adminKey); err != nil {
+		return fmt.Errorf("write admin key: %w", err)
 	}
 	return nil
 }

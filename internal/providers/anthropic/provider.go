@@ -28,11 +28,11 @@ import (
 	"time"
 
 	"github.com/xianxu/charon/internal/providers"
+	"github.com/xianxu/charon/internal/vault"
 )
 
 const (
 	Name = "anthropic"
-	Type = "admin-key"
 
 	DefaultBaseURL = "https://api.anthropic.com"
 	// AnthropicVersion is the long-standing API version string;
@@ -63,7 +63,7 @@ func New() *Provider {
 }
 
 func (p *Provider) Name() string { return Name }
-func (p *Provider) Type() string { return Type }
+func (p *Provider) Type() string { return vault.TypeAdminKey }
 
 // orgResponse is the shape of GET /v1/organizations/me.
 type orgResponse struct {
@@ -210,6 +210,22 @@ func (p *Provider) resolveOrgID(ctx context.Context, adminKey string) (string, e
 		return "", err
 	}
 	return orgID, nil
+}
+
+// InvalidateAdminKey drops the cached org-id entry for the given admin
+// key. The TUI MUST call this on admin-key rotation/deletion so that
+// (a) stale admin-key bytes aren't kept alive in `sync.Map` longer
+// than necessary, and (b) re-Set with a new key can't accidentally
+// short-circuit to a stale OrgID if the same key value is ever seen
+// again. No-op if the key isn't cached.
+//
+// Note: M3 still has the cache living on the Provider for simplicity.
+// A future cleanup may move OrgID resolution out to the TUI/AdminMeta
+// layer (the TUI already stores OrgID in `_<provider>:meta`),
+// eliminating the cache entirely. Until then, this is the explicit
+// invalidation seam.
+func (p *Provider) InvalidateAdminKey(adminKey string) {
+	p.orgIDCache.Delete(adminKey)
 }
 
 func (p *Provider) do(ctx context.Context, adminKey, method, path string, body any, out any) error {

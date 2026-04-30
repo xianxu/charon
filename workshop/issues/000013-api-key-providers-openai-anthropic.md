@@ -201,6 +201,8 @@ Progress:
   calls remain single-round-trip. Tests cover all the M2
   scenarios plus the version-header requirement and cache
   single-discovery / lazy-discovery semantics.
+- [x] **Code review chunk 1 (M1+M2+M3)** — completed 2026-04-30.
+  Critical + Important findings addressed (see Log).
 - [ ] M4 — TUI provider/admin-key/account flows
 - [ ] M5 — proxy per-host routing
 - [ ] M6 — account-level rm refactor
@@ -444,3 +446,48 @@ plan doc; validate before writing code.
     always emit), single-discovery cache hit, lazy-discovery on
     first non-DiscoverOrg call, upstream-error message
     preservation, and network-error wrapping.
+
+- **2026-04-30** — Chunk 1 code review (M1+M2+M3) completed via
+  superpowers-code-reviewer subagent against `7b4b197..b38609b`.
+  Outcome: production-ready scaffolding with one Critical and seven
+  Important findings. All Critical + Important findings fixed in
+  the same session before proceeding to M4:
+  - **Critical**: `keychain.DeleteRaw` (CLI fallback path,
+    `kv.go`) was masking ALL non-zero `*exec.ExitError` exits as
+    "not found" via a tautological check. Fixed to match exit
+    code 44 (errSecItemNotFound) explicitly; other exits surface
+    as wrapped errors. Brings CLI semantics in line with the
+    cgo path's `gokeychain.ErrorItemNotFound` check.
+  - **Important #2**: Anthropic `Provider.orgIDCache` lifecycle
+    was implicit — added `InvalidateAdminKey(adminKey)` method
+    + test (`TestProvider_InvalidateAdminKey_ForcesRediscovery`)
+    + doc comment naming the TUI's call-site contract on
+    rotation. Full migration of OrgID resolution out of Provider
+    deferred to M4 per reviewer recommendation.
+  - **Important #3**: `Type` string `"admin-key"` was duplicated
+    as a local constant in three places. Replaced with imports
+    of `vault.TypeAdminKey` from openai, anthropic, and Fake.
+    Single source of truth.
+  - **Important #4**: 429 + 5xx test coverage was missing.
+    Added `TestProvider_RateLimit_NotMappedToSentinel` and
+    `TestProvider_5xx_NotMappedToSentinel` to both providers
+    asserting that rate-limit and server-error responses don't
+    accidentally map to ErrInvalidAdminKey or ErrAlreadyRevoked
+    and that upstream messages survive the wrap.
+  - **Important #5**: Context cancellation propagation was
+    untested. Added `TestProvider_ContextCancellation_Propagates`
+    to both providers using a hanging httptest server.
+  - **Important #6**: `AdminKeyStore.Set` write order flipped to
+    meta-first/admin-second. Half-failure now leaves the store
+    with no admin entry → `Get` returns `ErrAdminKeyNotSet`
+    cleanly (not corruption), retry-Set overwrites both. Added
+    `TestAdminKeyStore_Set_HalfFailureLeavesRecoverable`.
+  - **Important #7**: AdminKeyStore.Delete idempotency
+    self-resolved by Critical #1 fix — once DeleteRaw correctly
+    returns nil only for missing entries, the chained Delete
+    naturally yields the right semantics.
+  - **Important #8**: `Fake.Now` / `Fake.timeNow()` dead code
+    + misleading `nolint:unused` comment removed.
+  - **Deferred (Minor)**: paginated-list warning, `WorkspaceID`
+    sanity check, namespace reorganization, ReadAll error
+    handling. Tracked for post-M4 cleanup; not blocking.

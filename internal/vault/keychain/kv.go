@@ -38,21 +38,23 @@ func SetRaw(service, account, value string) error {
 
 // DeleteRaw removes a raw key/value entry. Returns nil if the entry
 // doesn't exist (idempotent) — `security delete-generic-password`
-// exits non-zero on missing entries, but callers shouldn't have to
-// distinguish "didn't exist" from "deleted".
+// exits with status 44 (errSecItemNotFound) when the entry is missing,
+// which we map to success. Other non-zero exits (locked keychain,
+// permission denied, malformed args) are surfaced as errors so half-
+// failed cascade deletes don't silently leave orphan entries.
 func DeleteRaw(service, account string) error {
 	cmd := exec.Command("security", "delete-generic-password",
 		"-s", service,
 		"-a", account,
 	)
 	if err := cmd.Run(); err != nil {
-		// security CLI exits non-zero (typically 44 / errSecItemNotFound)
-		// when the entry is missing. Treat as success — DeleteRaw is
-		// idempotent at the charon level.
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() != 0 {
+		// errSecItemNotFound → idempotent success. Anything else (locked
+		// keychain, ACL denial, etc.) bubbles up so callers see real
+		// failures.
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 44 {
 			return nil
 		}
-		return err
+		return fmt.Errorf("keychain delete %s/%s: %w", service, account, err)
 	}
 	return nil
 }

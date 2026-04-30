@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/xianxu/charon/internal/providers"
 )
@@ -366,5 +367,82 @@ func TestProvider_NetworkError_Wrapped(t *testing.T) {
 	}
 	if errors.Is(err, providers.ErrInvalidAdminKey) || errors.Is(err, providers.ErrAlreadyRevoked) {
 		t.Errorf("network error should not map to a sentinel: %v", err)
+	}
+}
+
+// 429 (rate-limited) must NOT map to either sentinel — the TUI needs to
+// distinguish "key invalid, paste a new one" from "we hit the rate
+// limit, retry shortly." The upstream message must survive the wrap so
+// the user sees what happened.
+func TestProvider_RateLimit_NotMappedToSentinel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"rate limit exceeded","type":"rate_limit_exceeded"}}`))
+	}))
+	defer srv.Close()
+
+	p := &Provider{BaseURL: srv.URL, HTTP: srv.Client()}
+	_, _, err := p.DiscoverOrg(context.Background(), "sk-admin")
+	if err == nil {
+		t.Fatal("expected rate-limit error")
+	}
+	if errors.Is(err, providers.ErrInvalidAdminKey) || errors.Is(err, providers.ErrAlreadyRevoked) {
+		t.Errorf("429 should not map to a sentinel, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "rate limit exceeded") {
+		t.Errorf("upstream rate-limit message should be preserved, got %v", err)
+	}
+}
+
+// 5xx must NOT map to either sentinel — same reasoning as 429.
+func TestProvider_5xx_NotMappedToSentinel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":{"message":"internal server error","type":"server_error"}}`))
+	}))
+	defer srv.Close()
+
+	p := &Provider{BaseURL: srv.URL, HTTP: srv.Client()}
+	_, err := p.ListProjects(context.Background(), "sk-admin")
+	if err == nil {
+		t.Fatal("expected upstream error")
+	}
+	if errors.Is(err, providers.ErrInvalidAdminKey) || errors.Is(err, providers.ErrAlreadyRevoked) {
+		t.Errorf("5xx should not map to a sentinel, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "internal server error") {
+		t.Errorf("upstream message should be preserved, got %v", err)
+	}
+}
+
+// Context cancellation propagates: the TUI passes cancellable contexts
+// for slow mints; the request must abort promptly when ctx fires.
+func TestProvider_ContextCancellation_Propagates(t *testing.T) {
+	// Server hangs on every request; cancellation is the only way out.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	p := &Provider{BaseURL: srv.URL, HTTP: srv.Client()}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := p.DiscoverOrg(ctx, "sk-admin")
+		done <- err
+	}()
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("DiscoverOrg should return an error when context is cancelled")
+		}
+		if errors.Is(err, providers.ErrInvalidAdminKey) || errors.Is(err, providers.ErrAlreadyRevoked) {
+			t.Errorf("cancellation should not map to a sentinel: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("DiscoverOrg did not return after context cancel — context not propagated")
 	}
 }

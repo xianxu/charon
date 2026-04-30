@@ -4,7 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
+
+	"github.com/xianxu/charon/internal/vault"
 )
 
 // Fake is an in-memory Provider for tests. It models a single
@@ -29,12 +30,10 @@ type Fake struct {
 
 	// ValidAdminKey, when non-empty, is the only admin key DiscoverOrg
 	// accepts. Anything else returns ErrInvalidAdminKey. Empty means
-	// "accept any non-empty key" (the common case for happy-path tests).
+	// "accept any non-empty key" — but `checkAdminKey` still rejects
+	// the literally-empty admin key so the empty-key-as-error invariant
+	// is preserved across all paths.
 	ValidAdminKey string
-
-	// Now overrides time.Now for deterministic CreatedAt timestamps in
-	// tests. Defaults to time.Now if nil.
-	Now func() time.Time
 
 	// nameOverride optionally replaces the default "fake-admin" Name.
 	// Lets tests stand the Fake in for "openai" or "anthropic" without
@@ -113,10 +112,10 @@ func (f *Fake) Name() string {
 	return "fake-admin"
 }
 
-// Type is hard-coded to "admin-key" — the Fake only models the
+// Type returns vault.TypeAdminKey — the Fake only models the
 // admin-key Provider shape. Catalog providers don't implement
 // Provider.
-func (f *Fake) Type() string { return "admin-key" }
+func (f *Fake) Type() string { return vault.TypeAdminKey }
 
 func (f *Fake) DiscoverOrg(_ context.Context, adminKey string) (orgID, orgName string, err error) {
 	if adminKey == "" {
@@ -206,16 +205,4 @@ func (f *Fake) checkAdminKey(adminKey string) error {
 		return ErrInvalidAdminKey
 	}
 	return nil
-}
-
-// timeNow is the test seam used by future implementations that record
-// CreatedAt timestamps. Kept here (unused by Fake itself) so subpackages
-// can inherit a single override path.
-//
-//nolint:unused // referenced by future provider impls
-func (f *Fake) timeNow() time.Time {
-	if f.Now != nil {
-		return f.Now()
-	}
-	return time.Now()
 }

@@ -158,3 +158,41 @@ func TestAdminKeyStore_SetValidation(t *testing.T) {
 		t.Error("empty OrgID should be rejected")
 	}
 }
+
+// Set writes meta first, then admin key. A half-failure where the
+// admin write fails after meta succeeds must leave the store in a
+// recoverable state: Get returns ErrAdminKeyNotSet (not a corruption
+// error), so the user can retry Set without manual keychain editing.
+func TestAdminKeyStore_Set_HalfFailureLeavesRecoverable(t *testing.T) {
+	fk := newFakeKeychain()
+	failingSet := func(service, account, value string) error {
+		// First write (meta) succeeds; second write (admin) fails.
+		if account == "_openai:admin" {
+			return errors.New("simulated keychain unavailable")
+		}
+		return fk.set(service, account, value)
+	}
+	s := NewAdminKeyStoreWithIO("openai", "charon-test", fk.get, failingSet, fk.del)
+
+	err := s.Set("sk-admin", AdminMeta{OrgID: "org-x", OrgLabel: "me"})
+	if err == nil {
+		t.Fatal("Set should have failed when admin write errors")
+	}
+
+	// After half-failure, Get must report ErrAdminKeyNotSet — clean
+	// retry path. Anything else (corruption error, succeeded read) means
+	// the caller is stuck.
+	_, _, getErr := s.Get()
+	if !errors.Is(getErr, ErrAdminKeyNotSet) {
+		t.Errorf("after half-failed Set, Get should report ErrAdminKeyNotSet; got %v", getErr)
+	}
+
+	// Retry with a working setRaw should succeed (overwrites both).
+	working := NewAdminKeyStoreWithIO("openai", "charon-test", fk.get, fk.set, fk.del)
+	if err := working.Set("sk-admin", AdminMeta{OrgID: "org-x", OrgLabel: "me"}); err != nil {
+		t.Fatalf("Set retry: %v", err)
+	}
+	if !working.IsSet() {
+		t.Error("after retry, IsSet should be true")
+	}
+}
