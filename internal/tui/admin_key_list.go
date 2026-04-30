@@ -73,6 +73,22 @@ type adminKeyPasteRequestMsg struct {
 	existingOrgID string
 }
 
+// adminMintRequestMsg signals "open the mint flow." Emitted on enter
+// against the `+ new project` / `+ new workspace` row when the
+// admin key is configured.
+type adminMintRequestMsg struct {
+	provider string
+}
+
+// adminRevokeRequestMsg signals "open the revoke confirm modal."
+// Emitted on `r` against either an admin-key row or a project row.
+// Target picks the model variant.
+type adminRevokeRequestMsg struct {
+	provider string
+	target   adminRevokeTarget // revokeProject or revokeAdminKey
+	account  string            // populated when target == revokeProject
+}
+
 // newAdminKeyListModel builds the model from the vault + admin-key
 // store state. Errors propagate from vault.List; missing admin key is
 // not an error (the row just renders red).
@@ -216,20 +232,39 @@ func (m adminKeyListModel) Update(msg tea.Msg) (adminKeyListModel, tea.Cmd) {
 			m.statusMsg = "set the admin key first — see the row above"
 			return m, nil
 		case row.kind == rowAddNew:
-			m.statusMsg = "(mint flow coming in M4 phase 2b)"
-			return m, nil
+			provider := m.provider
+			return m, func() tea.Msg {
+				return adminMintRequestMsg{provider: provider}
+			}
 		case row.kind == rowProject:
 			m.statusMsg = "(detail screen coming in M4 phase 3)"
 			return m, nil
 		}
 		return m, nil
 	case "r":
-		// Phase 1 stub for revoke; phase 2 wires the modal + cascade.
 		row := m.rows[m.cursor]
-		if row.kind == rowAddNew {
+		switch {
+		case row.kind == rowAddNew:
 			return m, nil
+		case row.kind == rowAdminKey && !m.adminKeySet:
+			// Nothing to revoke when no admin key is configured.
+			return m, nil
+		case row.kind == rowAdminKey:
+			provider := m.provider
+			return m, func() tea.Msg {
+				return adminRevokeRequestMsg{provider: provider, target: revokeAdminKey}
+			}
+		case row.kind == rowProject:
+			provider := m.provider
+			account := row.account
+			return m, func() tea.Msg {
+				return adminRevokeRequestMsg{
+					provider: provider,
+					target:   revokeProject,
+					account:  account,
+				}
+			}
 		}
-		m.statusMsg = "(revoke coming in M4 phase 2)"
 		return m, nil
 	case "esc":
 		return m, func() tea.Msg { return adminKeyListBackMsg{} }

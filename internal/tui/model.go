@@ -28,6 +28,8 @@ const (
 	screenAuthing                      // OAuth in flight from the picker; ignore picker keys
 	screenAdminKeyList                 // admin-key entity list (admin row + projects)
 	screenAdminKeyPaste                // admin-key first-time setup or replace flow
+	screenAdminMint                    // mint a new project key (+ optional create-project step)
+	screenAdminRevoke                  // revoke confirmation modal (project or admin-key cascade)
 )
 
 // model is the top-level bubbletea model.
@@ -38,6 +40,8 @@ type model struct {
 	scopes         scopesModel
 	adminList      adminKeyListModel
 	adminPaste     adminKeyPasteModel
+	adminMint      adminMintModel
+	adminRevoke    adminRevokeModel
 
 	vault       vault.Store
 	auth        Authenticator
@@ -183,6 +187,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case adminKeyPasteCancelMsg:
 		// User cancelled the paste flow — return to the entity list
 		// without rebuilding (state didn't change).
+		m.current = screenAdminKeyList
+		return m, nil
+
+	case adminMintRequestMsg:
+		return m.openAdminMint(msg)
+
+	case adminMintDoneMsg:
+		// New credential was minted + stored — rebuild the entity
+		// list so the new project row appears.
+		return m.refreshAdminKeyList()
+
+	case adminMintCancelMsg:
+		// Cancelled mint — return to the entity list. State may have
+		// partially changed upstream (e.g. CreateProject succeeded
+		// then MintKey failed); refresh so the new project shows up
+		// even though it has no minted credential.
+		return m.refreshAdminKeyList()
+
+	case adminRevokeRequestMsg:
+		return m.openAdminRevoke(msg)
+
+	case adminRevokeDoneMsg:
+		return m.refreshAdminKeyList()
+
+	case adminRevokeCancelMsg:
 		m.current = screenAdminKeyList
 		return m, nil
 
@@ -341,6 +370,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.adminPaste, cmd = m.adminPaste.Update(msg)
 		return m, cmd
+	case screenAdminMint:
+		var cmd tea.Cmd
+		m.adminMint, cmd = m.adminMint.Update(msg)
+		return m, cmd
+	case screenAdminRevoke:
+		var cmd tea.Cmd
+		m.adminRevoke, cmd = m.adminRevoke.Update(msg)
+		return m, cmd
 	case screenAuthing:
 		// Block all picker/scopes input while OAuth is in flight; only
 		// ctrl+c reaches us here so the user can still abort the program.
@@ -418,6 +455,65 @@ func (m model) openAdminKeyPaste(req adminKeyPasteRequestMsg) (tea.Model, tea.Cm
 	return m, nil
 }
 
+// openAdminMint constructs the mint flow. The entity list only emits
+// adminMintRequestMsg when the admin key is set, so we don't have to
+// re-validate that here — but newAdminMintModel reads the admin key
+// from the store and would surface a hard error if it disappeared in
+// the gap.
+func (m model) openAdminMint(req adminMintRequestMsg) (tea.Model, tea.Cmd) {
+	provider := m.adminProviders[req.provider]
+	store := m.adminStores[req.provider]
+	if provider == nil || store == nil {
+		m.err = fmt.Errorf("no admin-key provider registered for %q", req.provider)
+		return m, tea.Quit
+	}
+	mm, err := newAdminMintModel(req.provider, provider, store, m.vault)
+	if err != nil {
+		m.err = err
+		return m, tea.Quit
+	}
+	m.adminMint = mm
+	m.activeAdminProvider = req.provider
+	m.current = screenAdminMint
+	return m, nil
+}
+
+// openAdminRevoke constructs the revoke confirm modal for either a
+// minted project credential or the admin key (cascade). Errors at
+// construction (e.g. credential not found in vault, admin key meta
+// corrupt) surface as model.err + tea.Quit, since the entity list
+// only ever emits adminRevokeRequestMsg for visible rows — anything
+// else is a real bug.
+func (m model) openAdminRevoke(req adminRevokeRequestMsg) (tea.Model, tea.Cmd) {
+	provider := m.adminProviders[req.provider]
+	store := m.adminStores[req.provider]
+	if store == nil {
+		m.err = fmt.Errorf("no admin-key store for %q", req.provider)
+		return m, tea.Quit
+	}
+
+	var rm adminRevokeModel
+	var err error
+	switch req.target {
+	case revokeProject:
+		if provider == nil {
+			m.err = fmt.Errorf("no admin-key provider for %q", req.provider)
+			return m, tea.Quit
+		}
+		rm, err = newProjectRevokeModel(req.provider, provider, store, m.vault, req.account)
+	case revokeAdminKey:
+		rm, err = newAdminKeyRevokeModel(req.provider, store, m.vault)
+	}
+	if err != nil {
+		m.err = err
+		return m, tea.Quit
+	}
+	m.adminRevoke = rm
+	m.activeAdminProvider = req.provider
+	m.current = screenAdminRevoke
+	return m, nil
+}
+
 // refreshAdminKeyList rebuilds the admin entity list for the active
 // admin provider after a state change (admin key set / replaced /
 // cascade-deleted) and routes the screen.
@@ -449,6 +545,10 @@ func (m model) View() string {
 		return m.adminList.View()
 	case screenAdminKeyPaste:
 		return m.adminPaste.View()
+	case screenAdminMint:
+		return m.adminMint.View()
+	case screenAdminRevoke:
+		return m.adminRevoke.View()
 	case screenAuthing:
 		return "\nAuthenticating with Google...\n\n" +
 			"  A browser window should have opened for OAuth.\n" +

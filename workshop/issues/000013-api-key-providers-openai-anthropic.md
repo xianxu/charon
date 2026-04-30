@@ -206,11 +206,13 @@ Progress:
 - [ ] M4 — TUI provider/admin-key/account flows
   - [x] **Phase 1** (provider picker + entity-list rendering +
     dispatch infrastructure) — landed 2026-04-30
-  - [ ] **Phase 2** (admin-key paste + mint + replace modal flows)
+  - [x] **Phase 2** (admin-key paste + mint + replace modal flows) —
+    landed 2026-04-30
     - [x] **2a** (admin-key paste flow with same-org rotate +
-      different-org cascade-confirm) — landed 2026-04-30
-    - [ ] **2b** (`+ new project` mint flow)
-    - [ ] **2c** (revoke at entity list — project + admin cascade)
+      different-org cascade-confirm)
+    - [x] **2b** (`+ new project` mint flow with create-or-pick
+      project step)
+    - [x] **2c** (revoke at entity list — project + admin cascade)
   - [ ] **Phase 3** (admin-key detail screen + catalog stub)
 - [ ] M5 — proxy per-host routing
 - [ ] M6 — account-level rm refactor
@@ -583,3 +585,60 @@ plan doc; validate before writing code.
     provider→list→paste navigation.
   - 2b (mint flow) and 2c (revoke) are next; the `+ new
     project` row and `r` keypress still flash phase-2b/3 stubs.
+
+- **2026-04-30** — M4 Phase 2b (mint flow) landed.
+  - `internal/tui/admin_mint.go` — new `adminMintModel` with
+    state machine: editingAccount → loadingProjects →
+    pickingProject → (existing → minting | + create new →
+    editingProjectName → creatingProject → minting) → done. Errors
+    at any stage land in mintStateError; dismiss returns the user
+    to the entity list (no rollback — partial-success states like
+    "project created, mint failed" require a fresh re-entry).
+  - Step 1: local name input (X-Charon-Account value). Rejects
+    duplicate-account names early (vault.Get) so an upstream mint
+    isn't wasted on a name that won't fit in the vault.
+  - Step 2: project picker. Lists existing (sorted) + "+ create
+    new" sentinel row. Selecting existing skips straight to
+    minting; selecting create-new prompts for upstream name.
+  - On success: writes vault.Credential with full AdminKeyData
+    payload (OrgID + ProjectID + KeyID + KeyMaterial inherited
+    from admin meta + freshly captured) so cascade-revoke can
+    find it.
+  - 11 tests cover happy-path with existing project, happy-path
+    with create-new, duplicate-account rejection, esc at each
+    step, ListProjects error, view chrome, Anthropic wording
+    (workspace vs project), and full provider→list→mint→back
+    navigation.
+
+- **2026-04-30** — M4 Phase 2c (revoke flow) landed.
+  - `internal/tui/admin_revoke.go` — new `adminRevokeModel` with
+    two target shapes: `revokeProject` and `revokeAdminKey`.
+  - **Project revoke**: confirm modal lists project ID + key ID
+    + warns about agent breakage. On confirm: calls
+    Provider.RevokeKey (ErrAlreadyRevoked treated as success since
+    the goal is "key gone, vault clean") then deletes the vault
+    entry. On other upstream error: state→error, vault preserved
+    so the user can retry.
+  - **Admin-key revoke**: confirm modal lists OrgID + the
+    cascade accounts (filtered to the active provider — cross-
+    provider creds with the same OrgID string are NOT touched)
+    + yellow warning that orphaned upstream keys keep working at
+    the provider until manually revoked. On confirm: cascade-
+    deletes vault entries then drops `_<provider>:admin` and
+    `_<provider>:meta`. No upstream call — the orphan-keys
+    behavior is documented in the threat model and surfaced in
+    the modal.
+  - `internal/tui/admin_key_list.go` — `r` key now dispatches to
+    `adminRevokeRequestMsg` based on row kind. `r` on
+    unconfigured admin row is a no-op.
+  - 8 tests cover: project happy-path with vault delete; already-
+    revoked treated as success (still cleans vault); upstream
+    error preserves vault entry; project cancel preserves
+    everything; admin-key cascade with cross-provider isolation;
+    admin-key with empty cascade ("clean removal" path);
+    admin-key cancel preserves everything; full
+    provider→list→r→confirm cycle.
+
+- M4 is now functionally complete for the admin-key happy path.
+  Phase 3 covers the project detail screen + catalog (#15) stub
+  + any polish from end-to-end testing.
