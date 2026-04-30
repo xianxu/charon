@@ -1,0 +1,370 @@
+package openai
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/xianxu/charon/internal/providers"
+)
+
+// fakeServer mounts the OpenAI Admin API endpoints we care about and
+// records calls for assertions. Tests construct it with the response
+// shapes they need; missing routes return 404 so misrouted calls
+// surface as test failures.
+type fakeServer struct {
+	t          *testing.T
+	expectAuth string
+
+	orgID, orgName string
+
+	projects     map[string]projectResponse
+	mintedKeys   map[string]apiKeyMintResponse // by key id
+	revokedKeys  map[string]bool
+	createCalls  atomic.Int32
+	revokeCalls  atomic.Int32
+
+	srv *httptest.Server
+}
+
+func newFakeServer(t *testing.T, adminKey string) *fakeServer {
+	t.Helper()
+	fs := &fakeServer{
+		t:           t,
+		expectAuth:  "Bearer " + adminKey,
+		orgID:       "org-test-aB3cD4",
+		orgName:     "test-org",
+		projects:    make(map[string]projectResponse),
+		mintedKeys:  make(map[string]apiKeyMintResponse),
+		revokedKeys: make(map[string]bool),
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/organization", fs.handleOrg)
+	mux.HandleFunc("/v1/organization/projects", fs.handleProjects)
+	mux.HandleFunc("/v1/organization/projects/", fs.handleProjectChild)
+	fs.srv = httptest.NewServer(mux)
+	t.Cleanup(fs.srv.Close)
+	return fs
+}
+
+// authOK returns true if the request carries the expected Bearer
+// header. When false it has already written a 401 response.
+func (fs *fakeServer) authOK(w http.ResponseWriter, r *http.Request) bool {
+	if r.Header.Get("Authorization") != fs.expectAuth {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"invalid api key","type":"invalid_request_error","code":"invalid_api_key"}}`))
+		return false
+	}
+	return true
+}
+
+func (fs *fakeServer) handleOrg(w http.ResponseWriter, r *http.Request) {
+	if !fs.authOK(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	resp := orgResponse{ID: fs.orgID, Name: fs.orgName}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (fs *fakeServer) handleProjects(w http.ResponseWriter, r *http.Request) {
+	if !fs.authOK(w, r) {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		out := projectsListResponse{Object: "list"}
+		for _, p := range fs.projects {
+			out.Data = append(out.Data, p)
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	case http.MethodPost:
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["name"] == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"name required","type":"invalid_request_error"}}`))
+			return
+		}
+		fs.createCalls.Add(1)
+		p := projectResponse{
+			ID:     fmt.Sprintf("proj_%d", len(fs.projects)+1),
+			Name:   body["name"],
+			Object: "organization.project",
+			Status: "active",
+		}
+		fs.projects[p.ID] = p
+		_ = json.NewEncoder(w).Encode(p)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+// handleProjectChild handles /v1/organization/projects/{pid}/api_keys
+// and /v1/organization/projects/{pid}/api_keys/{kid}. Path-pattern
+// matching is open-coded since net/http's standard mux pre-1.22 doesn't
+// support wildcards.
+func (fs *fakeServer) handleProjectChild(w http.ResponseWriter, r *http.Request) {
+	if !fs.authOK(w, r) {
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/v1/organization/projects/")
+	parts := strings.Split(rest, "/")
+	// Expected shapes: {pid}/api_keys or {pid}/api_keys/{kid}.
+	if len(parts) < 2 || parts[1] != "api_keys" {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	pid := parts[0]
+	if _, ok := fs.projects[pid]; !ok {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"message":"project not found","type":"invalid_request_error"}}`))
+		return
+	}
+	if len(parts) == 2 {
+		// POST /api_keys (mint) or GET (list — not implemented)
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		k := apiKeyMintResponse{
+			ID:            fmt.Sprintf("key_%d", len(fs.mintedKeys)+1),
+			Object:        "organization.project.api_key",
+			Name:          body["name"],
+			Value:         fmt.Sprintf("sk-test-%s", body["name"]),
+			RedactedValue: "sk-test-…",
+			CreatedAt:     1714492800,
+		}
+		fs.mintedKeys[k.ID] = k
+		_ = json.NewEncoder(w).Encode(k)
+		return
+	}
+	// 3 parts → DELETE specific key
+	kid := parts[2]
+	if r.Method != http.MethodDelete {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	fs.revokeCalls.Add(1)
+	if fs.revokedKeys[kid] {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"message":"key not found","type":"invalid_request_error"}}`))
+		return
+	}
+	if _, ok := fs.mintedKeys[kid]; !ok {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	fs.revokedKeys[kid] = true
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func newTestProvider(t *testing.T, adminKey string) (*Provider, *fakeServer) {
+	t.Helper()
+	fs := newFakeServer(t, adminKey)
+	p := &Provider{BaseURL: fs.srv.URL, HTTP: fs.srv.Client()}
+	return p, fs
+}
+
+// ── Tests ────────────────────────────────────────────────────────────
+
+func TestProvider_NameType(t *testing.T) {
+	p := New()
+	if p.Name() != "openai" {
+		t.Errorf("Name = %q", p.Name())
+	}
+	if p.Type() != "admin-key" {
+		t.Errorf("Type = %q", p.Type())
+	}
+}
+
+func TestProvider_DiscoverOrg_HappyPath(t *testing.T) {
+	p, fs := newTestProvider(t, "sk-admin-good")
+	fs.orgID = "org-aB3cD4eF5"
+	fs.orgName = "acme-inc"
+
+	id, name, err := p.DiscoverOrg(context.Background(), "sk-admin-good")
+	if err != nil {
+		t.Fatalf("DiscoverOrg: %v", err)
+	}
+	if id != "org-aB3cD4eF5" || name != "acme-inc" {
+		t.Errorf("got %q/%q", id, name)
+	}
+}
+
+func TestProvider_DiscoverOrg_InvalidKey(t *testing.T) {
+	p, _ := newTestProvider(t, "sk-admin-correct")
+
+	_, _, err := p.DiscoverOrg(context.Background(), "sk-admin-wrong")
+	if !errors.Is(err, providers.ErrInvalidAdminKey) {
+		t.Errorf("expected ErrInvalidAdminKey, got %v", err)
+	}
+}
+
+func TestProvider_DiscoverOrg_EmptyKey(t *testing.T) {
+	p := New()
+	_, _, err := p.DiscoverOrg(context.Background(), "")
+	if !errors.Is(err, providers.ErrInvalidAdminKey) {
+		t.Errorf("expected ErrInvalidAdminKey, got %v", err)
+	}
+}
+
+func TestProvider_DiscoverOrg_FallsBackToTitle(t *testing.T) {
+	// Some org responses surface "title" instead of "name". DiscoverOrg
+	// should accept either.
+	p, _ := newTestProvider(t, "sk-admin")
+	// Override the handler for this test by serving from a fresh mux.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		_, _ = w.Write([]byte(`{"id":"org-x","title":"title-org"}`))
+	}))
+	defer srv.Close()
+	p.BaseURL = srv.URL
+
+	id, name, err := p.DiscoverOrg(context.Background(), "sk-admin")
+	if err != nil {
+		t.Fatalf("DiscoverOrg: %v", err)
+	}
+	if id != "org-x" || name != "title-org" {
+		t.Errorf("title fallback failed: id=%q name=%q", id, name)
+	}
+}
+
+func TestProvider_ListProjects_FiltersArchived(t *testing.T) {
+	p, fs := newTestProvider(t, "sk-admin")
+	fs.projects["proj_1"] = projectResponse{ID: "proj_1", Name: "active-one", Status: "active"}
+	fs.projects["proj_2"] = projectResponse{ID: "proj_2", Name: "old", Status: "archived"}
+	fs.projects["proj_3"] = projectResponse{ID: "proj_3", Name: "active-two", Status: "active"}
+
+	got, err := p.ListProjects(context.Background(), "sk-admin")
+	if err != nil {
+		t.Fatalf("ListProjects: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("expected 2 active projects, got %d (%+v)", len(got), got)
+	}
+	for _, pr := range got {
+		if pr.Name == "old" {
+			t.Errorf("archived project leaked into result: %+v", pr)
+		}
+	}
+}
+
+func TestProvider_CreateProject_HappyPath(t *testing.T) {
+	p, fs := newTestProvider(t, "sk-admin")
+	pr, err := p.CreateProject(context.Background(), "sk-admin", "work-project")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if pr.ID == "" || pr.Name != "work-project" {
+		t.Errorf("unexpected project: %+v", pr)
+	}
+	if fs.createCalls.Load() != 1 {
+		t.Errorf("createCalls = %d, want 1", fs.createCalls.Load())
+	}
+}
+
+func TestProvider_MintKey_CapturesValueOnce(t *testing.T) {
+	p, _ := newTestProvider(t, "sk-admin")
+	pr, err := p.CreateProject(context.Background(), "sk-admin", "work")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	keyID, material, err := p.MintKey(context.Background(), "sk-admin", pr.ID, "charon-mint")
+	if err != nil {
+		t.Fatalf("MintKey: %v", err)
+	}
+	if keyID == "" || material == "" {
+		t.Errorf("MintKey returned empty fields: id=%q material=%q", keyID, material)
+	}
+	if !strings.HasPrefix(material, "sk-") {
+		t.Errorf("material missing sk- prefix: %q", material)
+	}
+}
+
+func TestProvider_MintKey_UnknownProject(t *testing.T) {
+	p, _ := newTestProvider(t, "sk-admin")
+	_, _, err := p.MintKey(context.Background(), "sk-admin", "proj_nope", "k")
+	if err == nil {
+		t.Fatal("expected error for unknown project")
+	}
+	// Should be an upstream-wrapped error, not a sentinel.
+	if errors.Is(err, providers.ErrAlreadyRevoked) || errors.Is(err, providers.ErrInvalidAdminKey) {
+		t.Errorf("MintKey on unknown project should not return a sentinel, got %v", err)
+	}
+}
+
+func TestProvider_RevokeKey_HappyPath(t *testing.T) {
+	p, fs := newTestProvider(t, "sk-admin")
+	pr, _ := p.CreateProject(context.Background(), "sk-admin", "work")
+	keyID, _, _ := p.MintKey(context.Background(), "sk-admin", pr.ID, "charon-mint")
+
+	if err := p.RevokeKey(context.Background(), "sk-admin", pr.ID, keyID); err != nil {
+		t.Fatalf("RevokeKey: %v", err)
+	}
+	if fs.revokeCalls.Load() != 1 {
+		t.Errorf("revokeCalls = %d, want 1", fs.revokeCalls.Load())
+	}
+}
+
+func TestProvider_RevokeKey_AlreadyRevoked(t *testing.T) {
+	p, _ := newTestProvider(t, "sk-admin")
+	pr, _ := p.CreateProject(context.Background(), "sk-admin", "work")
+	keyID, _, _ := p.MintKey(context.Background(), "sk-admin", pr.ID, "charon-mint")
+
+	// First revoke succeeds.
+	if err := p.RevokeKey(context.Background(), "sk-admin", pr.ID, keyID); err != nil {
+		t.Fatalf("first RevokeKey: %v", err)
+	}
+	// Second returns ErrAlreadyRevoked (mapped from 404 on DELETE).
+	if err := p.RevokeKey(context.Background(), "sk-admin", pr.ID, keyID); !errors.Is(err, providers.ErrAlreadyRevoked) {
+		t.Errorf("second RevokeKey should return ErrAlreadyRevoked, got %v", err)
+	}
+}
+
+func TestProvider_RevokeKey_UnknownKey_AlreadyRevoked(t *testing.T) {
+	p, _ := newTestProvider(t, "sk-admin")
+	pr, _ := p.CreateProject(context.Background(), "sk-admin", "work")
+
+	err := p.RevokeKey(context.Background(), "sk-admin", pr.ID, "key_does_not_exist")
+	if !errors.Is(err, providers.ErrAlreadyRevoked) {
+		t.Errorf("revoke of unknown key should be treated as ErrAlreadyRevoked, got %v", err)
+	}
+}
+
+func TestProvider_UpstreamError_PreservesMessage(t *testing.T) {
+	p, _ := newTestProvider(t, "sk-admin")
+	// Try to create a project with an empty name — fake server returns 400.
+	_, err := p.CreateProject(context.Background(), "sk-admin", "")
+	if err == nil {
+		t.Fatal("expected upstream error")
+	}
+	if !strings.Contains(err.Error(), "name required") {
+		t.Errorf("upstream message should be preserved; got %v", err)
+	}
+}
+
+func TestProvider_NetworkError_Wrapped(t *testing.T) {
+	// Point at a closed port so the request fails at connect.
+	p := &Provider{BaseURL: "http://127.0.0.1:1"}
+	_, _, err := p.DiscoverOrg(context.Background(), "sk-admin")
+	if err == nil {
+		t.Fatal("expected network error")
+	}
+	if errors.Is(err, providers.ErrInvalidAdminKey) || errors.Is(err, providers.ErrAlreadyRevoked) {
+		t.Errorf("network error should not map to a sentinel: %v", err)
+	}
+}

@@ -35,3 +35,24 @@ func SetRaw(service, account, value string) error {
 		"-U",
 	).Run()
 }
+
+// DeleteRaw removes a raw key/value entry. Returns nil if the entry
+// doesn't exist (idempotent) — `security delete-generic-password`
+// exits non-zero on missing entries, but callers shouldn't have to
+// distinguish "didn't exist" from "deleted".
+func DeleteRaw(service, account string) error {
+	cmd := exec.Command("security", "delete-generic-password",
+		"-s", service,
+		"-a", account,
+	)
+	if err := cmd.Run(); err != nil {
+		// security CLI exits non-zero (typically 44 / errSecItemNotFound)
+		// when the entry is missing. Treat as success — DeleteRaw is
+		// idempotent at the charon level.
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() != 0 {
+			return nil
+		}
+		return err
+	}
+	return nil
+}

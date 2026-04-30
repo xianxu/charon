@@ -454,17 +454,56 @@ Landed:
 `go test ./... && go vet ./...` all green. No upstream provider
 implementations yet (M2/M3).
 
-### M2 — OpenAI provider impl + threat-model amendment (10–16h)
+### M2 — OpenAI provider impl + threat-model amendment (10–16h) — **DONE 2026-04-30**
 
-- `internal/providers/openai/` — Admin API client (Bearer auth)
-- Discover org (`GET /v1/organization`)
-- ListProjects / CreateProject / MintKey / RevokeKey
-- Keychain storage for admin key + meta + minted credentials
-- Tests: fake HTTP server validates request shape, mint capture,
-  revoke
-- **threat-model.md amendment**: admin-key as new asset class
-  (highest blast radius); orphan-key caveat from different-org replace
-  documented
+Landed:
+
+- `internal/providers/openai/provider.go` — `Provider` impl over the
+  5 Admin API endpoints. Auth via `Authorization: Bearer <admin_key>`.
+  Status-code mapping: 401 → `ErrInvalidAdminKey`, 404 on DELETE →
+  `ErrAlreadyRevoked`, 2xx → decode, anything else → upstream-error-
+  message preserved. Network errors wrapped without sentinel mapping.
+- `internal/providers/openai/provider_test.go` — httptest-backed
+  fake server covering all 5 endpoints with auth checks; tests cover
+  happy paths, both auth-failure paths, double-revoke + unknown-key
+  → already-revoked, upstream-error message preservation, network
+  failure, archived-project filter, and `name`/`title` field
+  fallback.
+- `internal/providers/keychain.go` — shared `AdminKeyStore` for
+  admin-key + meta storage. MVP layout is single-org per provider:
+  `_<provider>:admin` (raw admin key) + `_<provider>:meta` (JSON
+  with `org_id`/`org_label`/`org_name`). The OrgID lives inside the
+  meta blob rather than in the keychain key itself. Multi-org-UI
+  future migration: rename to `_<provider>:admin:<OrgID>` /
+  `_<provider>:meta:<OrgID>` and add an index entry; trivial
+  migration since the meta blob already carries OrgID. AdminKeyData
+  on minted credentials already carries OrgID for cascade-revoke
+  logic, so no schema gap on the credential side.
+- `internal/providers/keychain_test.go` — covers round-trip,
+  per-provider namespacing, idempotent delete, validation
+  (empty admin key / OrgID rejected), and corruption case where
+  admin entry is present but meta is missing (explicit error,
+  not silent ErrAdminKeyNotSet).
+- `internal/vault/keychain.DeleteRaw` — added to both kv.go (CLI)
+  and kv_darwin.go (cgo) with matching idempotent semantics.
+- `docs/threat-model.md`:
+  - Assets table — admin keys (Highest, blast radius "anything the
+    dashboard can do") and minted per-account keys (High, project-
+    scoped, independent of admin key)
+  - "Posture in one page" intro — admin keys + minted keys called
+    out as protected
+  - New section "Admin keys: cross-org orphaning on replace" —
+    documents the user-facing caveat with the confirm-modal flow
+    and the bound (charon's M4 ACL gates the abuse path)
+  - New adversary entry **A11 — Provider admin key abuse** with
+    M4 ACL defense and cross-references to A10 (signing key
+    abuse), B1 (FDA), C (local root). Prior A11 ("Charon's own
+    bugs") renumbered to A12.
+
+Decisions documented in the issue's Log:
+- Discovery uses `GET /v1/organization` returning `{id, name, title}`;
+  `name` preferred, `title` fallback for response-shape robustness.
+- ListProjects single-page only for MVP (personal-gateway scope).
 
 ### M3 — Anthropic provider (mirror of M2) (4–8h)
 

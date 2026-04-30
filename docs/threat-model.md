@@ -20,8 +20,9 @@ Charon protects **credentials**, not **user content**.
 | Protected | Not protected |
 |---|---|
 | OAuth refresh tokens stored in keychain | Files in your home directory |
-| The proxy CA private key | Your shell history, browser cookies, mail stores |
-| The signing key that mints charon-trusted binaries | Outbound network traffic the agent makes (from non-credentialed paths) |
+| Provider admin keys (OpenAI, Anthropic) and the per-account API keys minted from them | Your shell history, browser cookies, mail stores |
+| The proxy CA private key | Outbound network traffic the agent makes (from non-credentialed paths) |
+| The signing key that mints charon-trusted binaries | |
 
 **Why this asymmetry**: an AI agent running on your Mac runs as your
 user. By Unix convention, that already gives it read/write access to
@@ -174,13 +175,40 @@ assumptions and is tracked separately as
 | Asset | Storage | Sensitivity | Why |
 |---|---|---|---|
 | OAuth refresh tokens | macOS Keychain (`charon` service) | High | Long-lived, per provider × account, mints fresh access tokens until revoked at provider |
+| Provider admin keys | macOS Keychain (`charon` service, `_<provider>:admin` account) | **Highest** | Mint per-account API keys with full org access; list/modify all projects; see all usage; modify rate limits — anything the provider's organization dashboard can do |
+| Per-account minted API keys | macOS Keychain (`charon` service, `<provider>:<account>` account) | High | Long-lived, scoped to one project/workspace. Independent of admin key — keep working until revoked individually or admin-key rotates to a different org |
 | Proxy CA private key | macOS Keychain (`charon` service, `_ca:key` account) | **Highest** | Owning it lets an attacker forge HTTPS for any host the agent trusts via `charon run`'s env vars |
 | Access tokens | In-memory cache only | Low | Short-lived (~1h), never persisted |
 | Charon signing key | macOS Keychain, login | High | Lets attacker produce Mach-O binaries that satisfy charon's M4 ACL predicate |
 
-The CA private key is arguably more dangerous than OAuth tokens — its
-blast radius isn't bounded by a single provider. Both get the same M4
-ACL treatment.
+Both highest-class assets — CA private key and provider admin keys —
+get the same M4 ACL treatment as everything else. The CA's blast
+radius is "any host charon proxies for"; an admin key's blast radius
+is "the entire upstream organization." Neither is bounded by a
+single account.
+
+### Admin keys: cross-org orphaning on replace
+
+Replacing a provider's admin key with one from a *different*
+organization (e.g. user switches from personal OpenAI org to work
+org) leaves charon unable to revoke the per-account API keys it
+previously minted under the old org — those calls would 404 because
+the new admin key can't see the old org's project IDs.
+
+Charon detects this at admin-key paste time (compares discovered
+`OrgID` against stored `OrgID`) and prompts the user with a confirm
+modal listing the per-account keys that will be removed from
+charon's vault. The underlying API keys remain *live at the
+provider* — the user must clean them up at the provider's dashboard
+to fully revoke them.
+
+This is documented user-facing behavior, not a defended adversary
+path. Consequence: a user who switches orgs and ignores the warning
+ends up with API keys at the provider that charon can't revoke. The
+adversarial implication (an attacker with admin-key paste access
+could orphan keys to delay detection) is bounded by the M4 ACL
+gating admin-key writes — only charon itself can paste an admin
+key, so the path requires an A1-class compromise first.
 
 ---
 
@@ -473,7 +501,44 @@ Mach-O whose DR matches the M4 predicate.
 The combination means the user is told to be careful AND verified
 to have stayed careful, rather than relying on memory.
 
-### A11. Charon's own bugs
+### A11. Provider admin key abuse
+
+Provider admin keys (OpenAI, Anthropic) are the highest-blast-radius
+credential charon holds: any one of them lets the holder mint API
+keys with full organization access, list/modify projects, see usage,
+modify rate limits — anything the dashboard can do. Same impact
+shape as A10 (signing key abuse): one credential = silent
+persistence at provider scope.
+
+Adversary path:
+
+1. AI agent reads `_<provider>:admin` from charon's keychain.
+2. Agent uses the admin key to mint a new project key under a
+   project name that looks legitimate.
+3. Agent exfiltrates the minted key for use from a different machine.
+
+✅ Defended by the same M4 ACL that gates OAuth refresh tokens. The
+admin key is stored as a `kSecClassGenericPassword` item with an
+ACL whose only trusted application is the codesigned `charon`
+binary itself. An agent calling `SecKeychainFindGenericPassword`
+gets prompted; the prompt is the user's decision point.
+
+Failure modes that bypass the ACL:
+- A10 (signing key abuse) — agent produces a Mach-O whose DR
+  matches charon's. Mitigated by A10's defenses.
+- B1 (FDA-granted hostile app reads keychain database) — bounded
+  by `charon-security`'s reporting of FDA grants on `make security`
+  runs.
+- C (local root) — out of scope.
+
+User-visible mitigations on top of the ACL:
+- Admin key revocation is one click in the provider's dashboard;
+  rotation in charon is a single paste flow. Worst-case recovery
+  is bounded.
+- Provider dashboards expose audit logs of admin-key activity; an
+  abused admin key creates a traceable record at the provider.
+
+### A12. Charon's own bugs
 
 Token logged to audit by mistake; routed to wrong upstream; bearer
 header not stripped on outbound; deserialization bug in token

@@ -186,7 +186,13 @@ Progress:
   extended with `Type` discriminator and `AdminKey`/`Catalog`
   payloads. OAuth payload kept flat for backward compat (concession
   documented in plan doc).
-- [ ] M2 — OpenAI provider impl + threat-model amendment
+- [x] **M2 — OpenAI provider impl + threat-model amendment** — landed
+  2026-04-30. `internal/providers/openai/` with httptest-backed
+  end-to-end coverage of the 5 Admin API endpoints and all sentinel
+  error paths. Shared `internal/providers/AdminKeyStore` for
+  admin-key + meta keychain storage. Threat-model gains admin-key
+  asset class, cross-org orphan-key caveat, and adversary entry A11
+  (provider admin key abuse).
 - [ ] M3 — Anthropic provider (mirror of M2)
 - [ ] M4 — TUI provider/admin-key/account flows
 - [ ] M5 — proxy per-host routing
@@ -379,3 +385,33 @@ plan doc; validate before writing code.
   legacy handling via `CredType()`. Pre-#13 keychain entries
   deserialize unchanged. New `internal/providers/` package with the
   `Provider` interface and a concurrency-safe `Fake` for tests.
+
+- **2026-04-30** — M2 (OpenAI provider + threat-model amendment)
+  landed.
+  - `internal/providers/openai/` — Provider impl over the 5 Admin
+    API endpoints (GET org, list/create projects, mint/revoke keys).
+    httptest-backed tests cover happy paths, invalid admin key →
+    `ErrInvalidAdminKey`, double-revoke and unknown-key →
+    `ErrAlreadyRevoked`, upstream-error message preservation,
+    network-error wrapping, and `name` vs `title` org-name fallback.
+  - `internal/providers/AdminKeyStore` — shared keychain helper for
+    `_<provider>:admin` + `_<provider>:meta` (single-org MVP layout;
+    documented future migration path to per-OrgID keying for
+    multi-org UI). Tested with injectable IO callbacks — no real
+    keychain access in unit tests.
+  - `internal/vault/keychain.DeleteRaw` added (kv.go + kv_darwin.go)
+    with idempotent semantics — missing entry is not an error.
+  - `docs/threat-model.md` — admin-key + minted-key rows added to
+    the assets table; "Posture in one page" intro mentions provider
+    admin keys; new "Admin keys: cross-org orphaning on replace"
+    section documents the user-facing caveat; new adversary entry
+    **A11 — Provider admin key abuse** (renumbered prior A11 to
+    A12). Same M4 ACL defense as OAuth refresh tokens; failure
+    modes (A10, B1, C) cross-referenced.
+  - Discovery shape decision: `GET /v1/organization` returns
+    `{id, name, title}`; `name` preferred, `title` fallback.
+    Defensive — accommodates the two response shapes seen in
+    third-party docs without locking either in.
+  - Pagination decision: ListProjects single-page only for MVP.
+    Personal-gateway scope (<100 projects) makes this safe; future
+    work plumbs `has_more` if needed.
