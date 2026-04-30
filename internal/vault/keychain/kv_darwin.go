@@ -4,7 +4,6 @@ package keychain
 
 import (
 	"fmt"
-	"os/exec"
 
 	gokeychain "github.com/keybase/go-keychain"
 )
@@ -14,11 +13,18 @@ import (
 
 // GetRaw reads a raw string value from the keychain.
 //
+// ServiceDev routes to the file-backed dev vault (dev_file.go) — no
+// keychain involvement, no prompts. ServiceProd uses the Security
+// framework directly.
+//
 // No TrimSpace here — the Security framework returns exact stored bytes.
 // The CLI counterpart in kv.go trims because `security -w` appends a
 // trailing newline. Round-trip via SetRaw→GetRaw is bytewise identical
 // on either backend.
 func GetRaw(service, account string) (string, error) {
+	if service == ServiceDev {
+		return devVaultGetRaw(account)
+	}
 	data, err := gokeychain.GetGenericPassword(service, account, "", "")
 	if err != nil {
 		return "", fmt.Errorf("keychain: %s/%s: %w", service, account, err)
@@ -29,57 +35,29 @@ func GetRaw(service, account string) (string, error) {
 	return string(data), nil
 }
 
-// SetRaw writes a raw string value to the keychain.
+// SetRaw writes a raw string value.
 //
-// Routing by service namespace:
-//   - ServiceProd: ACL pinned to the current process's designated
-//     requirement via the legacy SecAccess path (setGenericPassword,
-//     with_acl=true). Reads from any non-matching binary prompt.
-//   - ServiceDev: shells out to `security add-generic-password -A`
-//     ("allow any application without warning"). Required for `go run`
-//     iteration: each invocation produces a different ephemeral
-//     binary, and a default-ACL'd entry would prompt on every read
-//     of a previously-written entry. -A is documented-insecure (any
-//     app on the user's machine can read), which is fine for
-//     ServiceDev — dev entries hold test secrets the user already
-//     pastes interactively, never anything that ships.
-//
-// The dev path delete-then-adds (rather than -U upserts) so that an
-// entry written previously by the C path (with restrictive default
-// ACL) gets its ACL replaced cleanly.
+// ServiceDev routes to the file-backed dev vault (no keychain at all,
+// no prompts). ServiceProd uses the legacy SecAccess path with an
+// ACL pinned to the current process's designated requirement; reads
+// from any non-matching binary prompt.
 func SetRaw(service, account, value string) error {
-	if service == ServiceProd {
-		return setGenericPassword(service, account, []byte(value), true)
+	if service == ServiceDev {
+		return devVaultSetRaw(account, value)
 	}
-	return setRawPromptlessDev(service, account, value)
-}
-
-// setRawPromptlessDev writes a dev entry with `security -A` so any
-// process on the user's machine can read it without a keychain prompt.
-// Defensive against pre-existing entries with restrictive ACLs:
-// delete-then-add ensures the ACL is replaced, not preserved.
-func setRawPromptlessDev(service, account, value string) error {
-	// Best-effort delete; missing-entry exit codes are fine.
-	_ = exec.Command("security", "delete-generic-password",
-		"-s", service,
-		"-a", account,
-	).Run()
-	cmd := exec.Command("security", "add-generic-password",
-		"-s", service,
-		"-a", account,
-		"-w", value,
-		"-A", // allow any application — dev-only, fine for ServiceDev
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("keychain dev write %s/%s: %w (output: %s)", service, account, err, out)
-	}
-	return nil
+	return setGenericPassword(service, account, []byte(value), true)
 }
 
 // DeleteRaw removes a raw key/value entry. Idempotent — returns nil if
 // the entry doesn't exist, matching the CLI fallback's semantics so
 // callers don't have to distinguish "didn't exist" from "deleted".
+//
+// ServiceDev routes to the file-backed dev vault. ServiceProd uses
+// the legacy SecAccess path.
 func DeleteRaw(service, account string) error {
+	if service == ServiceDev {
+		return devVaultDeleteRaw(account)
+	}
 	err := gokeychain.DeleteGenericPasswordItem(service, account)
 	if err == gokeychain.ErrorItemNotFound {
 		return nil

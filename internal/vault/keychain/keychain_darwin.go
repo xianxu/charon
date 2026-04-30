@@ -47,6 +47,9 @@ func NewWithService(service string) *Store {
 }
 
 func (s *Store) Get(provider, account string) (*vault.Credential, error) {
+	if s.service == ServiceDev {
+		return devVaultGet(provider, account)
+	}
 	key := keyName(provider, account)
 	data, err := gokeychain.GetGenericPassword(s.service, key, "", "")
 	if err != nil {
@@ -63,39 +66,31 @@ func (s *Store) Get(provider, account string) (*vault.Credential, error) {
 }
 
 func (s *Store) Set(cred *vault.Credential) error {
+	if s.service == ServiceDev {
+		return devVaultSet(cred)
+	}
 	data, err := json.Marshal(fromCredential(cred))
 	if err != nil {
 		return err
 	}
 	key := keyName(cred.Provider, cred.Account)
-
-	// Routing by namespace:
-	//   - ServiceProd: SecAccess pinned to current process's designated
-	//     requirement via setGenericPassword(withACL=true). Atomic
-	//     upsert preserves the ACL across token rotation.
-	//   - ServiceDev: shells out to `security add-generic-password -A`
-	//     (any-application access). Without -A, macOS attaches a
-	//     default SecAccess pinned to the writing binary's identity;
-	//     `go run` produces a different ephemeral binary on every
-	//     invocation, so subsequent reads from a fresh ephemeral
-	//     binary prompt. -A is documented-insecure (any app on the
-	//     user's machine can read), which is fine for ServiceDev —
-	//     dev entries hold test secrets the user pastes interactively
-	//     into an unsigned binary, never anything that ships.
-	//
-	// kv_darwin.SetRaw applies the same routing for raw entries
-	// (admin key + meta) used by AdminKeyStore.
-	if s.service == ServiceProd {
-		return setGenericPassword(s.service, key, data, true)
-	}
-	return setRawPromptlessDev(s.service, key, string(data))
+	// ServiceProd path — SecAccess pinned to current process's designated
+	// requirement via setGenericPassword(withACL=true). Atomic upsert
+	// preserves the ACL across token rotation.
+	return setGenericPassword(s.service, key, data, true)
 }
 
 func (s *Store) Delete(provider, account string) error {
+	if s.service == ServiceDev {
+		return devVaultDelete(provider, account)
+	}
 	return deleteGenericPassword(s.service, keyName(provider, account))
 }
 
 func (s *Store) List() ([]*vault.Credential, error) {
+	if s.service == ServiceDev {
+		return devVaultList()
+	}
 	accounts, err := gokeychain.GetGenericPasswordAccounts(s.service)
 	if err != nil {
 		return nil, fmt.Errorf("keychain List: %w", err)
