@@ -505,11 +505,29 @@ Decisions documented in the issue's Log:
   `name` preferred, `title` fallback for response-shape robustness.
 - ListProjects single-page only for MVP (personal-gateway scope).
 
-### M3 — Anthropic provider (mirror of M2) (4–8h)
+### M3 — Anthropic provider (mirror of M2) (4–8h) — **DONE 2026-04-30**
 
-- `internal/providers/anthropic/` — `x-api-key` auth header
-- Workspaces in place of projects (`ws_…` IDs)
-- Same shape as M2; pattern reuse drives the smaller estimate
+Landed:
+
+- `internal/providers/anthropic/provider.go` — `Provider` impl
+  mirroring M2 with three material differences from OpenAI:
+  - Auth: `x-api-key` header (not `Authorization: Bearer`)
+  - Mandatory `anthropic-version: 2023-06-01` on every request;
+    a dedicated test asserts the header is always emitted
+  - Org id is part of the URL path, not implicit. Resolved via
+    `sync.Map` cache keyed by adminKey: `DiscoverOrg` populates;
+    `ListProjects`/`MintKey`/`RevokeKey` lazy-discover on cache
+    miss, single-trip on hit
+  - Wire-shape: mint response uses `key` (not `value`); error
+    envelope is `{"type":"error","error":{...}}`
+- `internal/providers/anthropic/provider_test.go` — 12 tests
+  covering all M2-equivalent scenarios plus the cache semantics
+  (single-discovery on warm path; lazy-discovery on cold path)
+  and the version-header enforcement
+- Pattern reuse from M2 was substantial — package layout, error
+  mapping, status-code dispatch, and test scaffolding are
+  near-isomorphic. Estimate held at the lower end of the 4–8h
+  range.
 
 ### M4 — TUI provider/admin-key/account flows (8–14h)
 

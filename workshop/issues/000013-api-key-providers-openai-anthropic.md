@@ -193,7 +193,14 @@ Progress:
   admin-key + meta keychain storage. Threat-model gains admin-key
   asset class, cross-org orphan-key caveat, and adversary entry A11
   (provider admin key abuse).
-- [ ] M3 — Anthropic provider (mirror of M2)
+- [x] **M3 — Anthropic provider** — landed 2026-04-30.
+  `internal/providers/anthropic/` mirrors M2 with `x-api-key`
+  auth, mandatory `anthropic-version: 2023-06-01` header, and
+  workspace-shaped path (org id in URL). Internal `orgIDCache`
+  memoizes the `/v1/organizations/me` lookup so non-discovery
+  calls remain single-round-trip. Tests cover all the M2
+  scenarios plus the version-header requirement and cache
+  single-discovery / lazy-discovery semantics.
 - [ ] M4 — TUI provider/admin-key/account flows
 - [ ] M5 — proxy per-host routing
 - [ ] M6 — account-level rm refactor
@@ -415,3 +422,25 @@ plan doc; validate before writing code.
   - Pagination decision: ListProjects single-page only for MVP.
     Personal-gateway scope (<100 projects) makes this safe; future
     work plumbs `has_more` if needed.
+
+- **2026-04-30** — M3 (Anthropic provider) landed.
+  - `internal/providers/anthropic/provider.go` — Provider impl
+    over the 5 endpoints under `/v1/organizations/{org_id}/`. Auth:
+    `x-api-key` (not Bearer) + mandatory `anthropic-version:
+    2023-06-01` on every request.
+  - URL-path org id resolved via lazy-discovery cache: first
+    non-DiscoverOrg call triggers `GET /v1/organizations/me`, result
+    cached on a per-admin-key `sync.Map`. Subsequent calls are
+    single-round-trip.
+  - Wire-shape decisions vs OpenAI: Anthropic's mint response uses
+    `key` (not `value`) for the secret material, and the error
+    envelope is `{"type":"error","error":{...}}` rather than
+    OpenAI's flat `{"error":{...}}`. Both encoded in package-local
+    types so the providers.Provider abstraction stays clean.
+  - Tests: 12 cases covering happy paths for all 5 endpoints,
+    invalid-key + empty-key sentinel errors, idempotent revoke,
+    archived-workspace filter, anthropic-version header
+    enforcement (server rejects requests missing it; charon must
+    always emit), single-discovery cache hit, lazy-discovery on
+    first non-DiscoverOrg call, upstream-error message
+    preservation, and network-error wrapping.
