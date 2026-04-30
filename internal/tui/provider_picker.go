@@ -69,25 +69,18 @@ func newProviderPickerModel(
 		return providerPickerModel{}, fmt.Errorf("list accounts: %w", err)
 	}
 
-	// Per-provider counters. vault.Store.List on the production
-	// keychain backend returns lightweight skeletons (Provider+Account
-	// only) — Type / AdminKey / Catalog payloads are nil on the
-	// returned creds. So we can't switch on CredType() directly here:
-	// every prod cred would default to TypeOAuth via the empty-string
-	// fallback and admin-key creds would be miscounted.
-	//
-	// Bucket by provider name instead: "google" → OAuth; any provider
-	// registered via WithAdminKeyProvider → admin-key. Catalog (#15)
-	// providers will fall into the same bucket-by-name pattern when
-	// they land. Cheaper than a full Get per cred.
+	// Per-provider counters. List returns full credentials with
+	// payload across all backends (see vault.Store interface contract);
+	// CredType() is the canonical discriminator.
 	googleAccounts := 0
 	adminCounts := map[string]int{} // provider name → minted-key count
 	for _, c := range creds {
-		if c.Provider == "google" {
-			googleAccounts++
-			continue
-		}
-		if _, isAdminKey := adminStores[c.Provider]; isAdminKey {
+		switch c.CredType() {
+		case vault.TypeOAuth:
+			if c.Provider == "google" {
+				googleAccounts++
+			}
+		case vault.TypeAdminKey:
 			adminCounts[c.Provider]++
 		}
 	}

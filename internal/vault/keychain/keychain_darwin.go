@@ -87,6 +87,18 @@ func (s *Store) Delete(provider, account string) error {
 	return deleteGenericPassword(s.service, keyName(provider, account))
 }
 
+// List returns full credentials (minus AccessToken — transient,
+// stripped per the cross-backend contract). Skips entries that fail
+// to load individually (corrupt JSON, ACL denial) rather than
+// failing the whole call.
+//
+// All vault.Store backends (memory, devFile, keychain prod) return
+// the same shape from List: full Credential structs with AccessToken
+// blanked. Callers can filter by CredType / AdminKey / Catalog
+// without an extra Get round-trip. The cost is N keychain reads per
+// List on the prod path — typical user has <20 entries and reads
+// from charon's own ACL'd entries are silent (M4 ACL pinned to the
+// running binary's DR).
 func (s *Store) List() ([]*vault.Credential, error) {
 	if s.service == ServiceDev {
 		return devVaultList()
@@ -105,10 +117,15 @@ func (s *Store) List() ([]*vault.Credential, error) {
 		if strings.HasPrefix(parts[0], "_") {
 			continue
 		}
-		creds = append(creds, &vault.Credential{
-			Provider: parts[0],
-			Account:  parts[1],
-		})
+		full, err := s.Get(parts[0], parts[1])
+		if err != nil {
+			// Corrupt entry or ACL denial — skip rather than fail
+			// the whole List. The entry is invisible to callers,
+			// matching the "skip internal namespaces" pattern above.
+			continue
+		}
+		full.AccessToken = "" // strip per the List contract
+		creds = append(creds, full)
 	}
 	return creds, nil
 }

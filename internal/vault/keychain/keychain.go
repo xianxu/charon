@@ -112,6 +112,11 @@ func (s *Store) Delete(provider, account string) error {
 	).Run()
 }
 
+// List returns full credentials (minus AccessToken). Matches the
+// cross-backend List contract (memory, devFile, keychain darwin+cgo,
+// this CLI fallback) — callers can filter on CredType/AdminKey/
+// Catalog without an extra Get. Entries that fail to load are
+// skipped silently.
 func (s *Store) List() ([]*vault.Credential, error) {
 	out, err := exec.Command("security", "dump-keychain").Output()
 	if err != nil {
@@ -129,20 +134,15 @@ func (s *Store) List() ([]*vault.Credential, error) {
 		if strings.HasPrefix(line, `"acct"<blob>=`) {
 			currentAccount = extractQuotedValue(line)
 		}
-		// When we have both and service matches, extract credential info.
 		if currentService == s.service && currentAccount != "" {
 			parts := strings.SplitN(currentAccount, ":", 2)
 			// Skip internal namespaces (e.g. "_ca:cert" — CA storage, not a credential).
 			if len(parts) == 2 && !strings.HasPrefix(parts[0], "_") {
-				// Lightweight: just provider+account from the dump. Loading
-				// full credentials would require a security find call per
-				// entry, which can trigger keychain dialogs and is much
-				// slower. Callers that need the full credential should use
-				// Get(provider, account) explicitly.
-				creds = append(creds, &vault.Credential{
-					Provider: parts[0],
-					Account:  parts[1],
-				})
+				full, err := s.Get(parts[0], parts[1])
+				if err == nil {
+					full.AccessToken = "" // strip per List contract
+					creds = append(creds, full)
+				}
 			}
 			currentService = ""
 			currentAccount = ""

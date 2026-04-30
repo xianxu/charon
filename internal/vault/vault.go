@@ -109,6 +109,15 @@ func (c *Credential) IsExpiredAt(now time.Time) bool {
 }
 
 // Store is the interface for credential storage backends.
+//
+// Cross-backend contract: List returns full Credential structs with
+// AccessToken stripped. All backends (memory, devFile, keychain prod
+// and CLI fallback) honor this — callers may inspect Type / AdminKey
+// / Catalog payloads on the returned creds without an extra Get
+// round-trip. Backend implementations that can't return full
+// credentials cheaply (e.g. keychain on prod) Get each entry
+// internally; entries that fail individual reads are skipped silently
+// rather than failing the whole List.
 type Store interface {
 	// Get retrieves a credential by provider and account.
 	Get(provider, account string) (*Credential, error)
@@ -119,6 +128,7 @@ type Store interface {
 	// Delete removes a credential.
 	Delete(provider, account string) error
 
-	// List returns all stored credentials (without access tokens).
+	// List returns all stored credentials with AccessToken stripped.
+	// See the Store interface comment for the full contract.
 	List() ([]*Credential, error)
 }
