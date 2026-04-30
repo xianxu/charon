@@ -203,17 +203,15 @@ Progress:
   single-discovery / lazy-discovery semantics.
 - [x] **Code review chunk 1 (M1+M2+M3)** — completed 2026-04-30.
   Critical + Important findings addressed (see Log).
-- [ ] M4 — TUI provider/admin-key/account flows
+- [x] **M4 — TUI provider/admin-key/account flows** — landed 2026-04-30
   - [x] **Phase 1** (provider picker + entity-list rendering +
-    dispatch infrastructure) — landed 2026-04-30
-  - [x] **Phase 2** (admin-key paste + mint + replace modal flows) —
-    landed 2026-04-30
+    dispatch infrastructure)
+  - [x] **Phase 2** (admin-key paste + mint + replace modal flows)
     - [x] **2a** (admin-key paste flow with same-org rotate +
       different-org cascade-confirm)
-    - [x] **2b** (`+ new project` mint flow with create-or-pick
-      project step)
+    - [x] **2b** (`+ new key` mint flow with key-centric language)
     - [x] **2c** (revoke at entity list — project + admin cascade)
-  - [ ] **Phase 3** (admin-key detail screen + catalog stub)
+  - [x] **Phase 3** (key detail screen + catalog stub)
 - [ ] M5 — proxy per-host routing
 - [ ] M6 — account-level rm refactor
 - [ ] M7 — docs
@@ -664,6 +662,41 @@ plan doc; validate before writing code.
   - Documented the credential-lifecycle principle in
     `atlas/charon.md` § "Design Decisions / Credential lifecycle
     principle" so #15 builds on the same foundation.
+
+- **2026-04-30** — M4 Phase 3 (key detail screen + catalog stub)
+  landed.
+  - `internal/tui/admin_key_detail.go` — new
+    `adminKeyDetailModel` for the per-key drill-in (Screen 3b).
+    Read-only view; renders Name, Project (name + opaque id),
+    Key ID, redacted Key prefix, Created timestamp, and Org
+    label/id. Two action keys: `r` reuses the existing
+    adminRevokeRequestMsg → revoke confirm flow (single revoke
+    implementation across entry points), `esc` returns to the
+    entity list. Full key material never appears in any
+    rendered state.
+  - `internal/tui/admin_key_list.go` — enter on a key row now
+    emits `adminKeyDetailRequestMsg` (was: stub status). The
+    entity-list `+ new key` and `r` paths are unchanged.
+  - `internal/tui/model.go` — `screenAdminKeyDetail` added,
+    dispatch + `openAdminKeyDetail` helper. Detail-back routes
+    through `refreshAdminKeyList` so any revoke that happened
+    while the user was on the detail screen reflects in the
+    rebuilt list.
+  - `internal/tui/provider_picker.go` — `+ add provider` row now
+    sets a transient `statusMsg` mentioning #15 so the user
+    isn't confused by a button that appears to do nothing. The
+    addProviderMsg is still emitted (top-level model handles it
+    as a no-op for now). Status clears on any nav keystroke.
+  - 7 detail-screen tests + 2 catalog-stub tests cover: all
+    field rendering with full data; key-material redaction; r →
+    revoke-request emission with correct target (revokeProject
+    + correct provider/account); esc → back-msg; q/ctrl+c →
+    quit; missing-credential error; missing-AdminKey-payload
+    error; sparse field fallbacks (project ID only, no org
+    label, zero CreatedAt skipped); end-to-end provider-picker
+    → list → detail → back navigation; status-clears-on-nav.
+  - This closes M4. The next milestone is M5 (proxy per-host
+    routing for OpenAI/Anthropic upstreams).
 
 - **2026-04-30** — wire-shape correction surfaced by manual
   testing: OpenAI does NOT expose a singular `/v1/organization`

@@ -36,8 +36,9 @@ type providerPickerItem struct {
 // WithAdminKeyProvider, plus a "+ add provider" stub for the catalog
 // (#15) flow.
 type providerPickerModel struct {
-	items  []providerPickerItem
-	cursor int
+	items     []providerPickerItem
+	cursor    int
+	statusMsg string // transient hint shown on hover/action; clears on next nav
 }
 
 // providerSelectedMsg is emitted when the user picks a provider.
@@ -195,10 +196,12 @@ func (m providerPickerModel) Update(msg tea.Msg) (providerPickerModel, tea.Cmd) 
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
+			m.statusMsg = ""
 		}
 	case "down", "j":
 		if m.cursor < len(m.items)-1 {
 			m.cursor++
+			m.statusMsg = ""
 		}
 	case "enter":
 		if m.cursor < 0 || m.cursor >= len(m.items) {
@@ -206,6 +209,13 @@ func (m providerPickerModel) Update(msg tea.Msg) (providerPickerModel, tea.Cmd) 
 		}
 		item := m.items[m.cursor]
 		if item.isAddProvider {
+			// Stub for #15. Catalog (Tier 3 long-tail providers —
+			// Anthropic, Groq, Mistral, etc.) ships in the catalog
+			// issue. For now, surface a status message naming what's
+			// coming so users aren't left wondering why nothing
+			// happened.
+			m.statusMsg = "+ add provider opens the catalog picker — coming in #15. " +
+				"Today: Google (OAuth) + OpenAI (admin key) only."
 			return m, func() tea.Msg { return addProviderMsg{} }
 		}
 		return m, func() tea.Msg {
@@ -252,6 +262,10 @@ func (m providerPickerModel) View() string {
 	}
 
 	b.WriteString("\n")
+	if m.statusMsg != "" {
+		b.WriteString(helpStyle.Render(m.statusMsg))
+		b.WriteString("\n")
+	}
 	b.WriteString(helpStyle.Render("↑↓ nav   enter select   q quit"))
 	return b.String()
 }

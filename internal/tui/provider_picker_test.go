@@ -235,12 +235,37 @@ func TestProviderPicker_EnterOnAddProvider_EmitsAddMsg(t *testing.T) {
 	for m.cursor < len(m.items)-1 {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	}
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("enter should emit a command")
 	}
 	if _, ok := cmd().(addProviderMsg); !ok {
 		t.Errorf("expected addProviderMsg from + add provider row, got %T", cmd())
+	}
+	// The picker should also surface a stub status pointing at #15.
+	if !strings.Contains(updated.statusMsg, "#15") {
+		t.Errorf("+ add provider should set a status mentioning #15, got %q", updated.statusMsg)
+	}
+	view := updated.View()
+	if !strings.Contains(view, "#15") {
+		t.Errorf("rendered view should include #15 stub status, got\n%s", view)
+	}
+}
+
+func TestProviderPicker_StatusClearsOnNav(t *testing.T) {
+	v := memory.New()
+	m, _ := newProviderPickerModel(v, nil)
+	// Move to last and trigger the stub.
+	for m.cursor < len(m.items)-1 {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if updated.statusMsg == "" {
+		t.Fatal("expected status to be set after enter on + add provider")
+	}
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if updated.statusMsg != "" {
+		t.Errorf("status should clear on nav, got %q", updated.statusMsg)
 	}
 }
 

@@ -22,14 +22,15 @@ type newAccountAuthedMsg struct {
 type screen int
 
 const (
-	screenProvider      screen = iota // top-level provider picker (post-#13 entry point)
-	screenPicker                       // OAuth account picker (Google)
-	screenScopes                       // OAuth scope view
-	screenAuthing                      // OAuth in flight from the picker; ignore picker keys
-	screenAdminKeyList                 // admin-key entity list (admin row + projects)
-	screenAdminKeyPaste                // admin-key first-time setup or replace flow
-	screenAdminMint                    // mint a new project key (+ optional create-project step)
-	screenAdminRevoke                  // revoke confirmation modal (project or admin-key cascade)
+	screenProvider       screen = iota // top-level provider picker (post-#13 entry point)
+	screenPicker                        // OAuth account picker (Google)
+	screenScopes                        // OAuth scope view
+	screenAuthing                       // OAuth in flight from the picker; ignore picker keys
+	screenAdminKeyList                  // admin-key entity list (admin row + projects)
+	screenAdminKeyPaste                 // admin-key first-time setup or replace flow
+	screenAdminMint                     // mint a new project key (+ optional create-project step)
+	screenAdminRevoke                   // revoke confirmation modal (project or admin-key cascade)
+	screenAdminKeyDetail                // per-key drill-in (Screen 3b)
 )
 
 // model is the top-level bubbletea model.
@@ -42,6 +43,7 @@ type model struct {
 	adminPaste     adminKeyPasteModel
 	adminMint      adminMintModel
 	adminRevoke    adminRevokeModel
+	adminDetail    adminKeyDetailModel
 
 	vault       vault.Store
 	auth        Authenticator
@@ -212,8 +214,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.refreshAdminKeyList()
 
 	case adminRevokeCancelMsg:
+		// Coming back from revoke-cancel: if we were on the detail
+		// screen before, return there; otherwise the entity list.
+		// activeAdminProvider is set in either case.
 		m.current = screenAdminKeyList
 		return m, nil
+
+	case adminKeyDetailRequestMsg:
+		return m.openAdminKeyDetail(msg)
+
+	case adminKeyDetailBackMsg:
+		// State could have changed (e.g., a revoke happened from the
+		// detail screen and was cancelled — entity list is unchanged
+		// but cheaper to just refresh than reason about it).
+		return m.refreshAdminKeyList()
 
 	case accountSelectedMsg:
 		rows, err := loadScopeRows(m.vault, msg.email, m.fetchDenied)
@@ -378,6 +392,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.adminRevoke, cmd = m.adminRevoke.Update(msg)
 		return m, cmd
+	case screenAdminKeyDetail:
+		var cmd tea.Cmd
+		m.adminDetail, cmd = m.adminDetail.Update(msg)
+		return m, cmd
 	case screenAuthing:
 		// Block all picker/scopes input while OAuth is in flight; only
 		// ctrl+c reaches us here so the user can still abort the program.
@@ -478,6 +496,21 @@ func (m model) openAdminMint(req adminMintRequestMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// openAdminKeyDetail constructs the per-key detail screen.
+// Errors at construction surface as model.err + tea.Quit because
+// the entity list only emits the request for visible key rows.
+func (m model) openAdminKeyDetail(req adminKeyDetailRequestMsg) (tea.Model, tea.Cmd) {
+	d, err := newAdminKeyDetailModel(req.provider, m.vault, req.account)
+	if err != nil {
+		m.err = err
+		return m, tea.Quit
+	}
+	m.adminDetail = d
+	m.activeAdminProvider = req.provider
+	m.current = screenAdminKeyDetail
+	return m, nil
+}
+
 // openAdminRevoke constructs the revoke confirm modal for either a
 // minted project credential or the admin key (cascade). Errors at
 // construction (e.g. credential not found in vault, admin key meta
@@ -549,6 +582,8 @@ func (m model) View() string {
 		return m.adminMint.View()
 	case screenAdminRevoke:
 		return m.adminRevoke.View()
+	case screenAdminKeyDetail:
+		return m.adminDetail.View()
 	case screenAuthing:
 		return "\nAuthenticating with Google...\n\n" +
 			"  A browser window should have opened for OAuth.\n" +

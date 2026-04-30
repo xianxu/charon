@@ -93,6 +93,13 @@ type adminRevokeRequestMsg struct {
 	account  string            // populated when target == revokeProject
 }
 
+// adminKeyDetailRequestMsg signals "open the per-key detail screen."
+// Emitted on enter against a project (key) row in the entity list.
+type adminKeyDetailRequestMsg struct {
+	provider string
+	account  string
+}
+
 // newAdminKeyListModel builds the model from the vault + admin-key
 // store state. Errors propagate from vault.List; missing admin key is
 // not an error (the row just renders red).
@@ -243,8 +250,14 @@ func (m adminKeyListModel) Update(msg tea.Msg) (adminKeyListModel, tea.Cmd) {
 				return adminMintRequestMsg{provider: provider}
 			}
 		case row.kind == rowProject:
-			m.statusMsg = "(detail screen coming in M4 phase 3)"
-			return m, nil
+			provider := m.provider
+			account := row.account
+			return m, func() tea.Msg {
+				return adminKeyDetailRequestMsg{
+					provider: provider,
+					account:  account,
+				}
+			}
 		}
 		return m, nil
 	case "r":
