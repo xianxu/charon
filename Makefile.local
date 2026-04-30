@@ -88,8 +88,35 @@ install: sign
 		   echo "To make it permanent, add that line to your ~/.zshrc or ~/.bashrc" ;; \
 	esac
 
+# Remove all artifacts produced by `make build` plus runtime state
+# written by dev binaries:
+#   - bin/                              (signed/unsigned dev binaries)
+#   - ~/.local/share/charon/            (dev vault file from ServiceDev)
+#   - charon-dev keychain entries       (stale state from pre-file-vault
+#                                        builds; best-effort, silent on
+#                                        missing entries / unavailable
+#                                        security CLI)
+#
+# Production state (signed binary at ~/.local/bin/charon, charon
+# keychain namespace) is NOT touched — `make uninstall` is the
+# deliberate path for that.
 clean:
 	rm -rf bin/
+	rm -rf "$$HOME/.local/share/charon"
+	@for acct in '_openai:admin' '_openai:meta' '_anthropic:admin' '_anthropic:meta'; do \
+		security delete-generic-password -s charon-dev -a "$$acct" >/dev/null 2>&1 || true ; \
+	done
+	@# Sweep any remaining charon-dev entries (minted credentials,
+	@# CA from older builds, etc.). Skip silently if security CLI
+	@# isn't present.
+	@if command -v security >/dev/null 2>&1; then \
+		security dump-keychain "$$HOME/Library/Keychains/login.keychain-db" 2>/dev/null | \
+		  perl -ne 'BEGIN{$$svc=""} if (/"svce"<blob>="charon-dev"/) {$$svc=1} if ($$svc && /"acct"<blob>="([^"]+)"/) { print "$$1\n"; $$svc=0 }' | \
+		  while read acct; do \
+		    security delete-generic-password -s charon-dev -a "$$acct" >/dev/null 2>&1 || true ; \
+		  done ; \
+	fi
+	@echo "cleaned: bin/, ~/.local/share/charon/, charon-dev keychain entries"
 
 # Dependency CVE audit. Scans the Go module graph + reachable code for
 # known vulnerabilities (govulncheck reports only what the call graph
