@@ -47,6 +47,12 @@ type adminKeyListModel struct {
 	cursor      int
 	adminKeySet bool
 
+	// adminOrgID is the configured admin key's OrgID (empty when
+	// adminKeySet is false). Threaded into the paste flow's replace
+	// path so the same-org-vs-different-org compare doesn't need a
+	// second store.Get round-trip.
+	adminOrgID string
+
 	// adminLabelStr is the human label shown on the admin-key row
 	// (`<OrgLabel> / <OrgName>` when set, fallback otherwise).
 	adminLabelStr string
@@ -57,6 +63,15 @@ type adminKeyListModel struct {
 
 // adminKeyListBackMsg signals "navigate back to provider picker."
 type adminKeyListBackMsg struct{}
+
+// adminKeyPasteRequestMsg signals "open the admin-key paste flow."
+// Emitted on enter against the admin-key row. Replace mode is true
+// iff the row's adminKeySet flag is true.
+type adminKeyPasteRequestMsg struct {
+	provider      string
+	isReplace     bool
+	existingOrgID string
+}
 
 // newAdminKeyListModel builds the model from the vault + admin-key
 // store state. Errors propagate from vault.List; missing admin key is
@@ -78,6 +93,7 @@ func newAdminKeyListModel(
 		if err == nil {
 			m.adminKeySet = true
 			m.adminLabelStr = formatAdminLabel(meta)
+			m.adminOrgID = meta.OrgID
 		} else {
 			// Corrupt-meta path: don't claim the admin key is set; the
 			// user needs to re-paste.
@@ -181,18 +197,31 @@ func (m adminKeyListModel) Update(msg tea.Msg) (adminKeyListModel, tea.Cmd) {
 			m.statusMsg = ""
 		}
 	case "enter":
-		// Phase 1 stub. Phase 2 will dispatch on row kind:
-		//   rowAdminKey + !adminKeySet → open admin-key paste flow
-		//   rowAdminKey +  adminKeySet → open admin-key replace flow
-		//   rowProject               → open project detail
-		//   rowAddNew + !adminKeySet  → flash "set admin key first" status
-		//   rowAddNew +  adminKeySet  → open mint flow
 		row := m.rows[m.cursor]
-		if row.kind == rowAddNew && !m.adminKeySet {
+		switch {
+		case row.kind == rowAdminKey:
+			// First-time setup or replace — same flow, isReplace
+			// branches the post-discovery path.
+			provider := m.provider
+			isReplace := m.adminKeySet
+			existing := m.adminOrgID
+			return m, func() tea.Msg {
+				return adminKeyPasteRequestMsg{
+					provider:      provider,
+					isReplace:     isReplace,
+					existingOrgID: existing,
+				}
+			}
+		case row.kind == rowAddNew && !m.adminKeySet:
 			m.statusMsg = "set the admin key first — see the row above"
 			return m, nil
+		case row.kind == rowAddNew:
+			m.statusMsg = "(mint flow coming in M4 phase 2b)"
+			return m, nil
+		case row.kind == rowProject:
+			m.statusMsg = "(detail screen coming in M4 phase 3)"
+			return m, nil
 		}
-		m.statusMsg = "(action coming in M4 phase 2)"
 		return m, nil
 	case "r":
 		// Phase 1 stub for revoke; phase 2 wires the modal + cascade.

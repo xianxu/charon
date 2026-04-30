@@ -22,11 +22,12 @@ type newAccountAuthedMsg struct {
 type screen int
 
 const (
-	screenProvider     screen = iota // top-level provider picker (post-#13 entry point)
-	screenPicker                      // OAuth account picker (Google)
-	screenScopes                      // OAuth scope view
-	screenAuthing                     // OAuth in flight from the picker; ignore picker keys
-	screenAdminKeyList                // admin-key entity list (admin row + projects)
+	screenProvider      screen = iota // top-level provider picker (post-#13 entry point)
+	screenPicker                       // OAuth account picker (Google)
+	screenScopes                       // OAuth scope view
+	screenAuthing                      // OAuth in flight from the picker; ignore picker keys
+	screenAdminKeyList                 // admin-key entity list (admin row + projects)
+	screenAdminKeyPaste                // admin-key first-time setup or replace flow
 )
 
 // model is the top-level bubbletea model.
@@ -36,6 +37,7 @@ type model struct {
 	picker         pickerModel
 	scopes         scopesModel
 	adminList      adminKeyListModel
+	adminPaste     adminKeyPasteModel
 
 	vault       vault.Store
 	auth        Authenticator
@@ -169,6 +171,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pickerBackMsg:
 		return m.refreshProviderPicker()
+
+	case adminKeyPasteRequestMsg:
+		return m.openAdminKeyPaste(msg)
+
+	case adminKeyPasteDoneMsg:
+		// Admin key was written — rebuild the entity list so the
+		// admin row flips to ●, then return to that screen.
+		return m.refreshAdminKeyList()
+
+	case adminKeyPasteCancelMsg:
+		// User cancelled the paste flow — return to the entity list
+		// without rebuilding (state didn't change).
+		m.current = screenAdminKeyList
+		return m, nil
 
 	case accountSelectedMsg:
 		rows, err := loadScopeRows(m.vault, msg.email, m.fetchDenied)
@@ -321,6 +337,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.adminList, cmd = m.adminList.Update(msg)
 		return m, cmd
+	case screenAdminKeyPaste:
+		var cmd tea.Cmd
+		m.adminPaste, cmd = m.adminPaste.Update(msg)
+		return m, cmd
 	case screenAuthing:
 		// Block all picker/scopes input while OAuth is in flight; only
 		// ctrl+c reaches us here so the user can still abort the program.
@@ -382,6 +402,43 @@ func (m model) refreshProviderPicker() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// openAdminKeyPaste constructs the paste flow for the active admin
+// provider and routes the screen. Replace mode is determined by the
+// caller (entity list) — model just plumbs.
+func (m model) openAdminKeyPaste(req adminKeyPasteRequestMsg) (tea.Model, tea.Cmd) {
+	provider := m.adminProviders[req.provider]
+	if provider == nil {
+		m.err = fmt.Errorf("no admin-key provider registered for %q", req.provider)
+		return m, tea.Quit
+	}
+	store := m.adminStores[req.provider]
+	m.adminPaste = newAdminKeyPasteModel(req.provider, provider, store, m.vault, req.isReplace, req.existingOrgID)
+	m.activeAdminProvider = req.provider
+	m.current = screenAdminKeyPaste
+	return m, nil
+}
+
+// refreshAdminKeyList rebuilds the admin entity list for the active
+// admin provider after a state change (admin key set / replaced /
+// cascade-deleted) and routes the screen.
+func (m model) refreshAdminKeyList() (tea.Model, tea.Cmd) {
+	if m.activeAdminProvider == "" {
+		// No active admin provider — fall back to provider picker.
+		// Defensive: shouldn't happen since the paste flow is only
+		// reachable when an admin provider is active.
+		return m.refreshProviderPicker()
+	}
+	store := m.adminStores[m.activeAdminProvider]
+	l, err := newAdminKeyListModel(m.activeAdminProvider, m.vault, store)
+	if err != nil {
+		m.err = err
+		return m, tea.Quit
+	}
+	m.adminList = l
+	m.current = screenAdminKeyList
+	return m, nil
+}
+
 func (m model) View() string {
 	switch m.current {
 	case screenProvider:
@@ -390,6 +447,8 @@ func (m model) View() string {
 		return m.picker.View()
 	case screenAdminKeyList:
 		return m.adminList.View()
+	case screenAdminKeyPaste:
+		return m.adminPaste.View()
 	case screenAuthing:
 		return "\nAuthenticating with Google...\n\n" +
 			"  A browser window should have opened for OAuth.\n" +

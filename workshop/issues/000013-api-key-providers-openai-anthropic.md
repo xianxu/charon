@@ -207,6 +207,10 @@ Progress:
   - [x] **Phase 1** (provider picker + entity-list rendering +
     dispatch infrastructure) — landed 2026-04-30
   - [ ] **Phase 2** (admin-key paste + mint + replace modal flows)
+    - [x] **2a** (admin-key paste flow with same-org rotate +
+      different-org cascade-confirm) — landed 2026-04-30
+    - [ ] **2b** (`+ new project` mint flow)
+    - [ ] **2c** (revoke at entity list — project + admin cascade)
   - [ ] **Phase 3** (admin-key detail screen + catalog stub)
 - [ ] M5 — proxy per-host routing
 - [ ] M6 — account-level rm refactor
@@ -533,3 +537,49 @@ plan doc; validate before writing code.
     provider→adminList→back navigation cycle.
   - Phase 1 deliberately does NOT include actions (paste, mint,
     revoke, replace modal, detail screen). Those are Phase 2/3.
+
+- **2026-04-30** — M4 Phase 2a (admin-key paste flow) landed.
+  - `internal/tui/admin_key_paste.go` — new `adminKeyPasteModel`
+    with internal state machine: editingLabel → editingKey →
+    discovering → (success path: same-org silent rotate OR
+    different-org confirm modal → cascade) → done. Error state
+    handles invalid-key with friendly framing + retry path.
+  - First-time setup: prompts for label (informational email/
+    mnemonic) then admin key paste. Key input echoes `•` so the
+    secret never appears in the rendered view.
+  - Replace mode: same UX up through discovery, then branches:
+    - Same OrgID (matches stored OrgID) → silent commit, no
+      modal. Keychain admin entry rewritten in place; minted
+      credentials untouched.
+    - Different OrgID → confirm modal lists the minted accounts
+      that will be cascade-deleted (filtered to the active
+      provider — cross-provider creds with the same OrgID
+      string are NOT touched). Modal explains that underlying
+      API keys keep working at the provider until manually
+      revoked.
+  - Admin-key URL surfaced in the label-step view (OpenAI vs
+    Anthropic dashboards) so the user can grab a key without
+    leaving the TUI.
+  - Discovery uses provider.DiscoverOrg with a 30s context
+    timeout. ErrInvalidAdminKey gets a dedicated error message
+    naming the discovery endpoint for cross-referencing with
+    the provider's own audit log; other errors render the
+    upstream message verbatim.
+  - `internal/tui/admin_key_list.go` — entity-list `enter` on
+    admin-key row now emits `adminKeyPasteRequestMsg` with
+    isReplace based on the row's adminKeySet flag and the
+    captured OrgID from the keychain meta.
+  - `internal/tui/model.go` — wired the new screen
+    (`screenAdminKeyPaste`), dispatch via
+    `openAdminKeyPaste` / `refreshAdminKeyList`, and
+    `adminKeyPasteDoneMsg` / `adminKeyPasteCancelMsg` handlers.
+  - 13 tests cover: happy-path first-time, label-step
+    enter-on-empty no-op, label-step esc cancels, key-step esc
+    returns to label, discovery error → state error → dismiss
+    → key cleared, same-org silent rotate (no modal), different-
+    org confirm with cascade list shape (and cross-provider
+    isolation), different-org cancel preserves everything,
+    URL display, key-echo bullet hiding, end-to-end
+    provider→list→paste navigation.
+  - 2b (mint flow) and 2c (revoke) are next; the `+ new
+    project` row and `r` keypress still flash phase-2b/3 stubs.
