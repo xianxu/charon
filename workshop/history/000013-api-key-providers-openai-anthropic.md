@@ -1,6 +1,6 @@
 ---
 id: 000013
-status: working
+status: done
 deps: []
 github_issue:
 created: 2026-04-28
@@ -823,6 +823,50 @@ plan doc; validate before writing code.
     semantics defensive.
   - Verdict: **ready to close #13** with the three Important
     fixes landed in the same review cycle.
+
+- **2026-04-30** — chunk-2 deferred items #3 + #4 + general
+  hardening sweep landed in a single follow-up commit.
+  - **#3 (FIXED)**: `internal/vault/keychain/dev_file.go` —
+    cross-process write safety via unix flock on a separate
+    lock file (`dev-vault.json.lock`). Reads stay lock-free
+    (atomic-rename means readers always see consistent state).
+    Writes go through `withDevVaultWriteLock` helper that
+    acquires `LOCK_EX`, runs the load+mutate+save transaction,
+    releases on close. Lock file is created on first write and
+    never deleted (idempotent reuse). Test
+    `TestDevVault_ConcurrentWritesNoLostUpdates` verifies 50
+    concurrent writers don't lose updates;
+    `TestDevVault_LockFileReusable` verifies lock-file reuse.
+  - **#4 (FIXED)**: `internal/tui/admin_mint.go` mint flow now
+    tracks upstream-state across steps (`createdProjectID`,
+    `mintedKeyID`, `mintedKeyHasVault`) and emits cancel-msg
+    with a `StatusNote` when upstream side effects landed but
+    the flow exits without producing a working credential.
+    Two surfaceable cases: orphan project (CreateProject
+    succeeded, MintKey failed) and orphan key (MintKey
+    succeeded, vault.Set failed — worst case, key exists at
+    provider but charon never persisted it; user must revoke
+    manually at dashboard). Top-level model wires the note
+    into the entity-list status message on cancel-msg receipt.
+    Two new tests
+    (`TestMint_VaultSetFailure_CancelMsgCarriesOrphanNote`,
+    `TestMint_MintFailure_AfterCreateProject_OrphanProjectInNote`)
+    drive each partial-failure path.
+  - **General hardening (related)**: cascade-delete loops in
+    `admin_key_paste.go` (different-org replace) and
+    `admin_revoke.go` (admin-key cascade) switched from
+    bail-on-first-error to continue-and-aggregate-then-bail.
+    Per-account Delete failures are collected, the loop
+    completes (best-effort cleanup), then if any failed, the
+    error names every failing account and reports
+    "partially failed". Vault may still be in an inconsistent
+    state after partial cascade — error surfacing is the
+    user's signal to retry. Test
+    `TestRevokeAdminKey_CascadeContinuesPastFailures` drives
+    a 3-account cascade where the middle account fails;
+    verifies first and third are deleted, error names
+    "second", and admin entry survives so the user can retry.
+  - All chunk-2 review items resolved. **#13 closed.**
 
 - **2026-04-30** — wire-shape correction surfaced by manual
   testing: OpenAI does NOT expose a singular `/v1/organization`

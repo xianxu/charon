@@ -224,12 +224,22 @@ func (m adminRevokeModel) updateInProgress(msg tea.Msg) (adminRevokeModel, tea.C
 		// Cascade-delete vault, then drop admin entry. No upstream
 		// call — the user is warned in the modal that orphaned API
 		// keys keep working at the provider.
+		//
+		// Continue-and-aggregate: a per-account Delete failure
+		// shouldn't abandon the rest of the cascade and leave the
+		// vault in a partially-revoked state. Loop through all,
+		// collect failures, surface them after.
+		var cascadeErrs []string
 		for _, account := range m.cascadeAccounts {
 			if err := m.vault.Delete(m.providerName, account); err != nil {
-				m.state = revokeStateError
-				m.err = fmt.Errorf("cascade-delete %q: %w", account, err)
-				return m, nil
+				cascadeErrs = append(cascadeErrs, fmt.Sprintf("%s: %v", account, err))
 			}
+		}
+		if len(cascadeErrs) > 0 {
+			m.state = revokeStateError
+			m.err = fmt.Errorf("cascade-delete partially failed (%d of %d): %s",
+				len(cascadeErrs), len(m.cascadeAccounts), strings.Join(cascadeErrs, "; "))
+			return m, nil
 		}
 		if err := m.store.Delete(); err != nil {
 			m.state = revokeStateError

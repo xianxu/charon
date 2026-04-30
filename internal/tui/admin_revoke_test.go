@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -240,6 +241,74 @@ func TestRevokeAdminKey_CancelKeepsEverything(t *testing.T) {
 	}
 	if _, err := v.Get("openai", "work"); err != nil {
 		t.Error("cascade target should be preserved on cancel")
+	}
+}
+
+// failingDeleteVault lets specific accounts fail Delete; used to
+// exercise the cascade continue-and-aggregate path.
+type failingDeleteVault struct {
+	*memory.Store
+	failOn map[string]bool // account names that should fail
+}
+
+func (f *failingDeleteVault) Delete(provider, account string) error {
+	if f.failOn[account] {
+		return fmt.Errorf("simulated delete failure")
+	}
+	return f.Store.Delete(provider, account)
+}
+
+// Chunk-2 review hardening: cascade continues past per-account
+// Delete failures, aggregates errors, surfaces all of them rather
+// than abandoning the loop on the first failure.
+func TestRevokeAdminKey_CascadeContinuesPastFailures(t *testing.T) {
+	store := fakeAdminStore(t, "openai", true, "me@example.com")
+	mem := memory.New()
+	v := &failingDeleteVault{Store: mem, failOn: map[string]bool{"second": true}}
+
+	for _, acct := range []string{"first", "second", "third"} {
+		_ = mem.Set(&vault.Credential{
+			Type: vault.TypeAdminKey, Provider: "openai", Account: acct,
+			AdminKey: &vault.AdminKeyData{OrgID: "org-test-001", ProjectID: "p_" + acct, KeyMaterial: "sk-" + acct},
+		})
+	}
+
+	rm, err := newAdminKeyRevokeModel("openai", store, v)
+	if err != nil {
+		t.Fatalf("newAdminKeyRevokeModel: %v", err)
+	}
+	if len(rm.cascadeAccounts) != 3 {
+		t.Fatalf("expected 3 cascade accounts, got %d", len(rm.cascadeAccounts))
+	}
+
+	// Drive: y → cascade loop → aggregated error.
+	updated, cmd := rm.Update(tea.KeyMsg{Runes: []rune{'y'}, Type: tea.KeyRunes})
+	rm = updated
+	rs := cmd().(adminRevokeResultMsg)
+	updated, _ = rm.Update(rs)
+	rm = updated
+
+	if rm.state != revokeStateError {
+		t.Fatalf("expected revokeStateError, got %d", rm.state)
+	}
+	// Error should mention the failing account by name and indicate
+	// partial-failure semantics ("partially failed").
+	if !strings.Contains(rm.err.Error(), "second") {
+		t.Errorf("error should name failing account 'second', got %v", rm.err)
+	}
+	if !strings.Contains(rm.err.Error(), "partially failed") {
+		t.Errorf("error should say 'partially failed', got %v", rm.err)
+	}
+	// First and third deletions ran despite the second's failure.
+	if _, err := mem.Get("openai", "first"); err == nil {
+		t.Error("first should have been deleted")
+	}
+	if _, err := mem.Get("openai", "third"); err == nil {
+		t.Error("third should have been deleted (loop didn't bail on second's failure)")
+	}
+	// Admin entry NOT deleted because cascade had errors.
+	if !store.IsSet() {
+		t.Error("admin key should be preserved when cascade fails")
 	}
 }
 

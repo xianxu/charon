@@ -285,13 +285,25 @@ func (m adminKeyPasteModel) updateReplaceConfirm(msg tea.Msg) (adminKeyPasteMode
 	}
 	switch k.String() {
 	case "y", "enter":
-		// Cascade-delete then commit.
+		// Cascade-delete then commit. Continue-and-aggregate: a
+		// per-account Delete failure shouldn't abandon the rest of
+		// the cascade — that leaves the user with inconsistent
+		// partial cleanup. Collect all failures, surface them after
+		// the admin write so the user sees the full picture.
+		var cascadeErrs []string
 		for _, account := range m.cascadeAccounts {
 			if err := m.vault.Delete(m.providerName, account); err != nil {
-				m.state = pasteStateError
-				m.err = fmt.Errorf("cascade delete %q: %w", account, err)
-				return m, nil
+				cascadeErrs = append(cascadeErrs, fmt.Sprintf("%s: %v", account, err))
 			}
+		}
+		if len(cascadeErrs) > 0 {
+			// Don't proceed to admin write — the vault is now in an
+			// inconsistent state (some old creds gone, some present).
+			// Surface the error; user retries with the same paste flow.
+			m.state = pasteStateError
+			m.err = fmt.Errorf("cascade delete partially failed (%d of %d): %s",
+				len(cascadeErrs), len(m.cascadeAccounts), strings.Join(cascadeErrs, "; "))
+			return m, nil
 		}
 		// Old admin entry is overwritten by Set below; if MVP layout
 		// ever changes to per-OrgID keying we'd also delete the old

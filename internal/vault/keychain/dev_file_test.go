@@ -2,9 +2,11 @@ package keychain
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/xianxu/charon/internal/vault"
@@ -195,6 +197,59 @@ func TestDevVault_DeleteIdempotent(t *testing.T) {
 	}
 	if err := devVaultDeleteRaw("missing"); err != nil {
 		t.Errorf("DeleteRaw on missing should be silent, got %v", err)
+	}
+}
+
+// Concurrent writers don't lose updates. Intra-process is guarded by
+// devVaultMu; cross-process relies on the unix flock layered on top.
+// This test exercises the intra-process side directly and exercises
+// flock indirectly (the path is taken even within one process, just
+// against an in-process lock file).
+func TestDevVault_ConcurrentWritesNoLostUpdates(t *testing.T) {
+	withDevVaultPath(t)
+	const N = 50
+	var wg sync.WaitGroup
+	wg.Add(N)
+	for i := 0; i < N; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			account := fmt.Sprintf("openai:k%03d", i)
+			if err := devVaultSetRaw(account, fmt.Sprintf("v%d", i)); err != nil {
+				t.Errorf("SetRaw %d: %v", i, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	// All N writes must be visible.
+	for i := 0; i < N; i++ {
+		got, err := devVaultGetRaw(fmt.Sprintf("openai:k%03d", i))
+		if err != nil {
+			t.Errorf("missing key %d after concurrent writes: %v", i, err)
+			continue
+		}
+		want := fmt.Sprintf("v%d", i)
+		if got != want {
+			t.Errorf("key %d: got %q, want %q", i, got, want)
+		}
+	}
+}
+
+// The lock file is created on first write and never deleted by
+// charon. Re-opening a previously-used vault directory works
+// without manual lock cleanup.
+func TestDevVault_LockFileReusable(t *testing.T) {
+	path := withDevVaultPath(t)
+	if err := devVaultSetRaw("k1", "v1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path + ".lock"); err != nil {
+		t.Fatalf("lock file should exist after a write: %v", err)
+	}
+	// Subsequent writes still work.
+	if err := devVaultSetRaw("k2", "v2"); err != nil {
+		t.Fatalf("second write: %v", err)
 	}
 }
 

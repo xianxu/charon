@@ -201,11 +201,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.refreshAdminKeyList()
 
 	case adminMintCancelMsg:
-		// Cancelled mint — return to the entity list. State may have
-		// partially changed upstream (e.g. CreateProject succeeded
-		// then MintKey failed); refresh so the new project shows up
-		// even though it has no minted credential.
-		return m.refreshAdminKeyList()
+		// Cancelled mint — return to the entity list. The cancel msg's
+		// StatusNote names any partial-success upstream state (orphan
+		// project from CreateProject success + MintKey fail, or orphan
+		// minted key from MintKey success + vault.Set fail) so the
+		// user can clean up at the provider's dashboard. Empty note
+		// means clean cancel before any side effects.
+		updated, cmd := m.refreshAdminKeyList()
+		mm := updated.(model)
+		if msg.StatusNote != "" {
+			mm.adminList.statusMsg = msg.StatusNote
+		}
+		return mm, cmd
 
 	case adminRevokeRequestMsg:
 		return m.openAdminRevoke(msg)

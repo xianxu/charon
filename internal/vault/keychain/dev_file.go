@@ -12,10 +12,19 @@
 // and the raw key/value entries used by AdminKeyStore + the proxy CA
 // (keyed by account name, since service is always ServiceDev here).
 //
-// Concurrency: single-process serialization via sync.Mutex. Multiple
-// concurrent charon instances writing the dev vault would race; for
-// dev iteration this is fine, and a flock-based extension is cheap to
-// add later if needed.
+// Concurrency: single-process serialization via sync.Mutex; cross-
+// process serialization via unix flock on a separate lock file
+// (dev-vault.json.lock). Writes always go load → mutate → save under
+// exclusive flock so two charon instances running concurrently in
+// dev (e.g. `charon serve` + `charon auth`) don't lose each other's
+// updates. Reads don't take the flock — the atomic-rename save
+// pattern means readers either see the pre-update or post-update
+// file, never partial.
+//
+// Why a separate lock file: the data file is replaced via atomic
+// rename (write tmp, rename onto path), which severs any flock held
+// on the old inode. A standalone lock-file inode persists across
+// renames so cross-process writers serialize correctly.
 //
 // File mode 0600. Atomic writes via temp-file + rename.
 //
@@ -31,6 +40,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/xianxu/charon/internal/vault"
 )
@@ -60,10 +71,40 @@ type devVaultState struct {
 	Raw         map[string]string            `json:"raw"`         // keyed by account (service implied = ServiceDev)
 }
 
-// devVaultMu guards file IO. Reads and writes are serialized; the
-// load/mutate/save pattern in each helper holds the lock for the
-// entire operation.
+// devVaultMu serializes intra-process access. Writes additionally
+// take a unix flock on the lock file for cross-process safety.
 var devVaultMu sync.Mutex
+
+// devVaultLockPath returns the path to the lock file. A separate
+// inode from the data file so the atomic-rename save doesn't
+// invalidate active locks.
+func devVaultLockPath() string {
+	return devVaultPath() + ".lock"
+}
+
+// withDevVaultWriteLock takes the cross-process write lock, runs fn
+// while holding it, and releases on close. Caller is the in-process
+// devVaultMu holder so this is the second of two locks.
+//
+// flock blocks until the previous holder releases — fine for dev
+// iteration where contention is rare and brief. The lock file is
+// created on demand and never deleted (orphaned files don't cause
+// issues; flock works on the inode).
+func withDevVaultWriteLock(fn func() error) error {
+	path := devVaultLockPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return fmt.Errorf("dev vault lock mkdir: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		return fmt.Errorf("dev vault lock open: %w", err)
+	}
+	defer f.Close() // also releases the flock per close(2) semantics
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+		return fmt.Errorf("dev vault flock: %w", err)
+	}
+	return fn()
+}
 
 // loadDevVault returns a fresh state if the file doesn't exist; an
 // error only when the file exists but can't be parsed (corrupt JSON,
@@ -136,25 +177,29 @@ func devVaultGet(provider, account string) (*vault.Credential, error) {
 func devVaultSet(c *vault.Credential) error {
 	devVaultMu.Lock()
 	defer devVaultMu.Unlock()
-	s, err := loadDevVault()
-	if err != nil {
-		return err
-	}
-	key := keyName(c.Provider, c.Account)
-	cp := *c
-	s.Credentials[key] = &cp
-	return saveDevVault(s)
+	return withDevVaultWriteLock(func() error {
+		s, err := loadDevVault()
+		if err != nil {
+			return err
+		}
+		key := keyName(c.Provider, c.Account)
+		cp := *c
+		s.Credentials[key] = &cp
+		return saveDevVault(s)
+	})
 }
 
 func devVaultDelete(provider, account string) error {
 	devVaultMu.Lock()
 	defer devVaultMu.Unlock()
-	s, err := loadDevVault()
-	if err != nil {
-		return err
-	}
-	delete(s.Credentials, keyName(provider, account))
-	return saveDevVault(s)
+	return withDevVaultWriteLock(func() error {
+		s, err := loadDevVault()
+		if err != nil {
+			return err
+		}
+		delete(s.Credentials, keyName(provider, account))
+		return saveDevVault(s)
+	})
 }
 
 func devVaultList() ([]*vault.Credential, error) {
@@ -194,21 +239,25 @@ func devVaultGetRaw(account string) (string, error) {
 func devVaultSetRaw(account, value string) error {
 	devVaultMu.Lock()
 	defer devVaultMu.Unlock()
-	s, err := loadDevVault()
-	if err != nil {
-		return err
-	}
-	s.Raw[account] = value
-	return saveDevVault(s)
+	return withDevVaultWriteLock(func() error {
+		s, err := loadDevVault()
+		if err != nil {
+			return err
+		}
+		s.Raw[account] = value
+		return saveDevVault(s)
+	})
 }
 
 func devVaultDeleteRaw(account string) error {
 	devVaultMu.Lock()
 	defer devVaultMu.Unlock()
-	s, err := loadDevVault()
-	if err != nil {
-		return err
-	}
-	delete(s.Raw, account)
-	return saveDevVault(s)
+	return withDevVaultWriteLock(func() error {
+		s, err := loadDevVault()
+		if err != nil {
+			return err
+		}
+		delete(s.Raw, account)
+		return saveDevVault(s)
+	})
 }

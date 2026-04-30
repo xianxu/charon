@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -307,6 +309,142 @@ func TestMint_AnthropicWordingInStep2(t *testing.T) {
 	if !strings.Contains(step2, "+ create new workspace") {
 		t.Errorf("Step 2 should offer 'create new workspace', got\n%s", step2)
 	}
+}
+
+// failingSetVault wraps memory.Store but returns an error on Set.
+// Used to drive the "minted upstream but vault.Set failed" partial-
+// failure case in the mint flow.
+type failingSetVault struct {
+	*memory.Store
+}
+
+func (f *failingSetVault) Set(c *vault.Credential) error {
+	return fmt.Errorf("simulated keychain failure")
+}
+
+// Chunk-2 review #4: when MintKey succeeds upstream but vault.Set
+// fails, the mint flow's cancel msg carries a StatusNote that names
+// the orphan key id so the user can revoke at the dashboard.
+func TestMint_VaultSetFailure_CancelMsgCarriesOrphanNote(t *testing.T) {
+	v := &failingSetVault{Store: memory.New()}
+	store := fakeAdminStore(t, "openai", true, "me@example.com")
+	fake := providers.NewFake().WithName("openai")
+	m, err := newAdminMintModel("openai", fake, store, v)
+	if err != nil {
+		t.Fatalf("newAdminMintModel: %v", err)
+	}
+
+	// Drive: name → enter → projects load → pick + create new →
+	// project name → create + mint → vault.Set fails → error state.
+	m = typeMint(t, m, "ghost-key")
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated
+	updated, _ = m.Update(cmd().(adminMintProjectsLoadedMsg))
+	m = updated
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // pick + create new
+	m = updated
+	m = typeMint(t, m, "orphan-project")
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated
+	updated, cmd = m.Update(cmd().(adminMintProjectCreatedMsg)) // creating → minting
+	m = updated
+	updated, _ = m.Update(cmd().(adminMintMintedMsg)) // minting → vault.Set fails → error state
+	m = updated
+
+	if m.state != mintStateError {
+		t.Fatalf("expected mintStateError after vault.Set failure, got %d", m.state)
+	}
+	if !strings.Contains(m.err.Error(), "revoke") {
+		t.Errorf("error should advise dashboard revoke, got %v", m.err)
+	}
+	if m.mintedKeyID == "" {
+		t.Error("mintedKeyID should be tracked after MintKey succeeded")
+	}
+	if m.mintedKeyHasVault {
+		t.Error("mintedKeyHasVault should be false after vault.Set failed")
+	}
+
+	// Any key dismisses the error and emits cancel msg with the orphan
+	// note named.
+	_, cancelCmd := m.Update(tea.KeyMsg{Runes: []rune{' '}, Type: tea.KeyRunes})
+	if cancelCmd == nil {
+		t.Fatal("error dismiss should emit cancel msg")
+	}
+	cancel, ok := cancelCmd().(adminMintCancelMsg)
+	if !ok {
+		t.Fatalf("expected adminMintCancelMsg, got %T", cancelCmd())
+	}
+	if !strings.Contains(cancel.StatusNote, m.mintedKeyID) {
+		t.Errorf("StatusNote should name the orphan key id %q, got %q",
+			m.mintedKeyID, cancel.StatusNote)
+	}
+	if !strings.Contains(strings.ToLower(cancel.StatusNote), "revoke") &&
+		!strings.Contains(strings.ToLower(cancel.StatusNote), "dashboard") {
+		t.Errorf("StatusNote should hint at provider dashboard cleanup, got %q", cancel.StatusNote)
+	}
+}
+
+// Chunk-2 review #4: when CreateProject succeeds but MintKey fails,
+// the cancel note describes the orphan project so the user can clean
+// up or re-use.
+func TestMint_MintFailure_AfterCreateProject_OrphanProjectInNote(t *testing.T) {
+	v := memory.New()
+	store := fakeAdminStore(t, "openai", true, "me@example.com")
+	fake := providers.NewFake().WithName("openai")
+	// Set ValidAdminKey so MintKey rejects (matches the seeded admin
+	// key in store; we re-set to a different value so MintKey fails
+	// while CreateProject — using the same fake — still works since
+	// CreateProject also runs the same check). Hmm — Fake checks
+	// ValidAdminKey on every op, so both fail. Use a different
+	// approach: seed a project up front and skip CreateProject.
+	//
+	// Simpler: use a custom provider that lets CreateProject pass but
+	// MintKey fail.
+	custom := &mintFailureProvider{Fake: fake}
+
+	m, err := newAdminMintModel("openai", custom, store, v)
+	if err != nil {
+		t.Fatalf("newAdminMintModel: %v", err)
+	}
+	m = typeMint(t, m, "test-key")
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated
+	updated, _ = m.Update(cmd().(adminMintProjectsLoadedMsg))
+	m = updated
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // + create new
+	m = updated
+	m = typeMint(t, m, "test-orphan")
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated
+	updated, cmd = m.Update(cmd().(adminMintProjectCreatedMsg))
+	m = updated
+	updated, _ = m.Update(cmd().(adminMintMintedMsg))
+	m = updated
+
+	if m.state != mintStateError {
+		t.Fatalf("expected mintStateError, got %d", m.state)
+	}
+	if m.createdProjectID == "" {
+		t.Error("createdProjectID should be tracked after CreateProject succeeded")
+	}
+	if m.mintedKeyID != "" {
+		t.Error("mintedKeyID should be empty after MintKey failed")
+	}
+
+	_, cancelCmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	cancel := cancelCmd().(adminMintCancelMsg)
+	if !strings.Contains(cancel.StatusNote, m.createdProjectID) {
+		t.Errorf("StatusNote should name the orphan project id, got %q", cancel.StatusNote)
+	}
+}
+
+// mintFailureProvider lets CreateProject succeed but rejects MintKey.
+type mintFailureProvider struct {
+	*providers.Fake
+}
+
+func (m *mintFailureProvider) MintKey(ctx context.Context, adminKey, projectID, keyName string) (string, string, error) {
+	return "", "", fmt.Errorf("simulated mint failure")
 }
 
 // End-to-end through the top-level model.

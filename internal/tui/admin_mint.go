@@ -61,6 +61,15 @@ type adminMintModel struct {
 	chosenProjectID   string
 	chosenProjectName string
 
+	// Upstream-state tracking for partial-failure surfacing. Set as
+	// each upstream step succeeds; on failure, the cancel message's
+	// StatusNote names what landed upstream so the user can clean
+	// up at the provider's dashboard.
+	createdProjectID    string // non-empty if CreateProject succeeded this flow
+	createdProjectName  string
+	mintedKeyID         string // non-empty if MintKey succeeded this flow
+	mintedKeyHasVault   bool   // true once vault.Set persisted the credential
+
 	err error
 }
 
@@ -78,9 +87,18 @@ const (
 
 // Messages
 type adminMintDoneMsg struct {
-	account     string // newly-stored credential's X-Charon-Account
+	account string // newly-stored credential's X-Charon-Account
 }
-type adminMintCancelMsg struct{}
+
+// adminMintCancelMsg signals the user backed out of the flow. When
+// the cancel happens after a partial-success state (e.g. CreateProject
+// succeeded upstream but MintKey then failed, leaving an orphan
+// project at the provider), the StatusNote describes the upstream
+// state so the user can clean up via the dashboard. Empty StatusNote
+// means a clean cancel before any upstream side effects.
+type adminMintCancelMsg struct {
+	StatusNote string
+}
 
 type adminMintProjectsLoadedMsg struct {
 	projects []providers.Project
@@ -188,7 +206,7 @@ func (m adminMintModel) updateEditingAccount(msg tea.Msg) (adminMintModel, tea.C
 				return adminMintProjectsLoadedMsg{projects: ps, err: err}
 			}
 		case "esc":
-			return m, func() tea.Msg { return adminMintCancelMsg{} }
+			return m, m.cancel()
 		case "ctrl+c":
 			return m, tea.Quit
 		}
@@ -196,6 +214,34 @@ func (m adminMintModel) updateEditingAccount(msg tea.Msg) (adminMintModel, tea.C
 	var cmd tea.Cmd
 	m.accountInput, cmd = m.accountInput.Update(msg)
 	return m, cmd
+}
+
+// cancel emits adminMintCancelMsg with a StatusNote that names any
+// upstream side effects — orphan project, orphan minted key — so
+// the parent screen can surface them to the user. Clean cancel
+// (no upstream work yet) emits an empty note.
+func (m adminMintModel) cancel() tea.Cmd {
+	note := m.partialFailureNote()
+	return func() tea.Msg { return adminMintCancelMsg{StatusNote: note} }
+}
+
+// partialFailureNote builds a one-line summary of what survived
+// upstream when the mint flow exits without producing a working
+// credential. Empty string means clean exit (no upstream side
+// effects to report).
+func (m adminMintModel) partialFailureNote() string {
+	switch {
+	case m.mintedKeyID != "" && !m.mintedKeyHasVault:
+		// Worst case: key exists at provider but charon doesn't have
+		// it. The user has to revoke it manually at the dashboard.
+		return fmt.Sprintf("orphan: API key %s was minted in %s upstream but charon couldn't store it — revoke at the provider's dashboard",
+			m.mintedKeyID, m.chosenProjectName)
+	case m.createdProjectID != "" && m.mintedKeyID == "":
+		// New project sitting empty upstream.
+		return fmt.Sprintf("orphan: created %s (%s) but no key was minted — re-run + new key into this %s, or archive it at the dashboard",
+			m.chosenProjectName, m.createdProjectID, entityTerm(m.providerName))
+	}
+	return ""
 }
 
 func (m adminMintModel) updateLoadingProjects(msg tea.Msg) (adminMintModel, tea.Cmd) {
@@ -302,8 +348,10 @@ func (m adminMintModel) updateCreatingProject(msg tea.Msg) (adminMintModel, tea.
 		return m, nil
 	}
 	m.chosenProjectID = pc.project.ID
+	m.createdProjectID = pc.project.ID
 	if pc.project.Name != "" {
 		m.chosenProjectName = pc.project.Name
+		m.createdProjectName = pc.project.Name
 	}
 	return m.kickoffMint()
 }
@@ -336,6 +384,10 @@ func (m adminMintModel) updateMinting(msg tea.Msg) (adminMintModel, tea.Cmd) {
 		return m, nil
 	}
 
+	// Mint succeeded upstream — record the key id so partialFailureNote
+	// can surface the orphan if the vault.Set below fails.
+	m.mintedKeyID = mm.keyID
+
 	// Persist the credential. Per the keychain layout, minted creds
 	// store the OrgID + ProjectID + KeyID + KeyMaterial so cascade-
 	// revoke and per-key revoke can both find the right targets.
@@ -355,22 +407,26 @@ func (m adminMintModel) updateMinting(msg tea.Msg) (adminMintModel, tea.Cmd) {
 		},
 	}
 	if err := m.vault.Set(cred); err != nil {
+		// Worst case: minted upstream but couldn't store locally. The
+		// user must revoke the key at the provider's dashboard since
+		// charon never persisted the IDs needed to call RevokeKey.
 		m.state = mintStateError
-		m.err = fmt.Errorf("store credential: %w", err)
+		m.err = fmt.Errorf("store credential (key was minted upstream — revoke %s manually at provider dashboard): %w", mm.keyID, err)
 		return m, nil
 	}
+	m.mintedKeyHasVault = true
 	account := cred.Account
 	return m, func() tea.Msg { return adminMintDoneMsg{account: account} }
 }
 
 func (m adminMintModel) updateError(msg tea.Msg) (adminMintModel, tea.Cmd) {
 	if _, ok := msg.(tea.KeyMsg); ok {
-		// Any key cancels the flow — error states from mint can leave
-		// the upstream in inconsistent states (e.g. CreateProject
-		// succeeded but MintKey failed); rather than try to roll back
-		// from the TUI we surface the error and let the user re-enter
-		// the flow with a fresh state.
-		return m, func() tea.Msg { return adminMintCancelMsg{} }
+		// Any key cancels the flow. Error states can leave the upstream
+		// in a partial-success state (project created but mint failed,
+		// or mint succeeded but vault.Set failed). The cancel msg
+		// carries a status note that names the orphan so the user
+		// knows what's left to clean up.
+		return m, m.cancel()
 	}
 	return m, nil
 }
