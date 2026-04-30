@@ -246,40 +246,45 @@ upstream-revoked through charon. The confirmation modal makes this
 explicit and lets the user pre-revoke them individually first if
 they want clean upstream state.
 
-## Vault `Credential` shape (tagged-tuple)
+## Vault `Credential` shape (tagged-tuple, with OAuth-flat concession)
 
-Discriminated by `Type`, with type-specific payload structs. Wrong
-fields can't accidentally co-exist. Adding a new provider type means
-adding one new payload struct — no field-weaving in a flat struct.
+Discriminated by `Type`, with type-specific payload structs for the
+*new* provider types. Wrong fields can't accidentally co-exist for
+admin-key vs catalog. Adding a new provider type means adding one new
+payload struct.
+
+**Pragmatic concession — OAuth payload kept flat in M1.** The
+originally-discussed fully-nested shape (`OAuth *OAuthData`) would
+have required migrating 39 call sites across `internal/oauth/`,
+`internal/proxy/`, `internal/tui/`, and `internal/vault/keychain/`.
+That balloons M1 from "interface skeleton" into a cross-cutting
+refactor. M1 keeps the OAuth fields top-level so existing call sites
+compile unchanged; admin-key and catalog get proper nested payloads.
+Future cleanup (post-#13) can lift OAuth into a nested struct in its
+own issue when motivated.
 
 ```go
 type Credential struct {
-    Type     string // "oauth" | "admin-key" | "catalog"
+    Type     string // TypeOAuth | TypeAdminKey | TypeCatalog; "" = TypeOAuth (legacy)
     Provider string // "google" | "openai" | "anthropic" | "groq" | …
     Account  string // X-Charon-Account value
 
-    OAuth    *OAuthData    `json:"oauth,omitempty"`
+    // OAuth payload (flat for backward compat).
+    AccessToken  string
+    RefreshToken string
+    Expiry       time.Time
+    Scopes       []string
+
+    // Type-specific payloads.
     AdminKey *AdminKeyData `json:"admin_key,omitempty"`
     Catalog  *CatalogData  `json:"catalog,omitempty"`
 }
 
-type OAuthData struct {
-    RefreshToken string
-    Scopes       []string
-}
-
 type AdminKeyData struct {
-    OrgID       string    // opaque upstream id (e.g. OpenAI "org-aB3cD4…",
-                          // Anthropic UUID). Stable join key for keychain
-                          // and same-org-replace detection.
-    OrgLabel    string    // user-typed mnemonic (e.g. "xianxu@gmail.com")
-    OrgName     string    // discovered display name (e.g. "acme-inc"); may
-                          // drift if user renames upstream
-    ProjectID   string    // proj_… (OpenAI) or ws_… (Anthropic)
-    ProjectName string    // human label, mirrors local naming on screen
-    KeyID       string    // upstream-side key id, used for revoke
-    KeyMaterial string    // sk-… or sk-ant-…
-    CreatedAt   time.Time
+    OrgID, OrgLabel, OrgName       string
+    ProjectID, ProjectName, KeyID  string
+    KeyMaterial                    string
+    CreatedAt                      time.Time
 }
 
 type CatalogData struct {
@@ -287,6 +292,10 @@ type CatalogData struct {
     AddedAt     time.Time
 }
 ```
+
+`Credential.CredType()` normalizes empty `Type` to `TypeOAuth` so
+callers can switch on a single canonical value without juggling the
+legacy empty-string case.
 
 ## Keychain layout
 
@@ -416,14 +425,34 @@ catalog YAML in #15 and don't have admin-key operations.
 
 ## Milestones
 
-### M1 — `internal/providers/` package skeleton (2–4h)
+### M1 — `internal/providers/` package skeleton (2–4h) — **DONE 2026-04-30**
 
-- New package `internal/providers/` with the `Provider` interface
-- Stub admin-key types (`Project`, etc.) shared across providers
-- Test scaffolding: an in-memory fake `Provider` for TUI tests
-- Extend `vault.Credential` to the tagged-tuple shape (with backward
-  compat for existing OAuth entries)
-- No upstream implementations yet (those are M2 + M3)
+Landed:
+
+- `internal/providers/provider.go` — `Provider` interface, `Project`
+  type, sentinel errors `ErrAlreadyRevoked` and `ErrInvalidAdminKey`
+- `internal/providers/fake.go` — in-memory `Fake` Provider with
+  configurable identity (`OrgID`/`OrgName`), gateable admin-key
+  validation (`ValidAdminKey`), seedable projects, and a `Snapshot`
+  helper for assertions. Concurrency-safe.
+- `internal/providers/fake_test.go` — covers DiscoverOrg accept/reject,
+  full mint/revoke happy path, idempotent revoke (returns
+  `ErrAlreadyRevoked` on the second call), unknown-project rejection,
+  seeded list, and `WithName` identity override
+- `internal/vault/vault.go` — `Type` discriminator (`TypeOAuth`,
+  `TypeAdminKey`, `TypeCatalog`), `AdminKeyData` and `CatalogData`
+  payload structs, `CredType()` accessor that normalizes empty Type
+  to `TypeOAuth`
+- `internal/vault/vault_test.go` — covers legacy JSON deserialize
+  (no Type field, flat OAuth fields), admin-key round-trip
+  (including wrong-payload guard: admin-key creds reject OAuth
+  fields), catalog round-trip, OAuth round-trip with explicit Type
+- `internal/vault/keychain/common.go` — `storedCredential` extended
+  with `Type`/`AdminKey`/`Catalog`; pre-#13 keychain entries
+  deserialize unchanged
+
+`go test ./... && go vet ./...` all green. No upstream provider
+implementations yet (M2/M3).
 
 ### M2 — OpenAI provider impl + threat-model amendment (10–16h)
 

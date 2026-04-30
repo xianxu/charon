@@ -181,7 +181,11 @@ Progress:
   plan doc § "TUI design sketch" for the three-screen flow, per-type
   entity-list dispatch, admin-key-as-list-row pattern, multi-org
   schema with single-org UI, and `Credential` tagged-tuple shape.
-- [ ] M1 — provider interface skeleton
+- [x] **M1 — provider interface skeleton** — landed 2026-04-30.
+  `internal/providers/` package + `Fake` for tests; `vault.Credential`
+  extended with `Type` discriminator and `AdminKey`/`Catalog`
+  payloads. OAuth payload kept flat for backward compat (concession
+  documented in plan doc).
 - [ ] M2 — OpenAI provider impl + threat-model amendment
 - [ ] M3 — Anthropic provider (mirror of M2)
 - [ ] M4 — TUI provider/admin-key/account flows
@@ -366,3 +370,12 @@ plan doc; validate before writing code.
     `OrgID` + `OrgName`
   - `OrgID`/`OrgLabel`/`OrgName` three-field shape: opaque
     upstream id, user mnemonic, discovered display name
+
+- **2026-04-30** — M1 (provider interface skeleton) landed. Concession
+  vs the plan doc's strict "fully-nested OAuth": kept OAuth fields
+  top-level on `vault.Credential` to avoid migrating 39 unrelated call
+  sites in OAuth/proxy/TUI/keychain. Admin-key and catalog payloads
+  are properly nested. `Type` discriminator added with empty-string
+  legacy handling via `CredType()`. Pre-#13 keychain entries
+  deserialize unchanged. New `internal/providers/` package with the
+  `Provider` interface and a concurrency-safe `Fake` for tests.

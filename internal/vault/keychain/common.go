@@ -21,37 +21,47 @@ func keyName(provider, account string) string {
 	return provider + ":" + account
 }
 
-// storedCredential is the JSON blob persisted in keychain. We store
-// access_token alongside refresh_token for manual-token flows; OAuth
-// refresh-only flows leave access_token empty and rely on the in-memory
-// proxy cache.
+// storedCredential is the JSON blob persisted in keychain. The shape
+// mirrors vault.Credential including the post-#13 Type discriminator
+// and AdminKey/Catalog payloads. Pre-#13 entries omit Type and the new
+// payloads; they round-trip unchanged because Type defaults to "" which
+// vault.Credential.CredType() normalizes to TypeOAuth.
 type storedCredential struct {
-	Provider     string    `json:"provider"`
-	Account      string    `json:"account"`
-	AccessToken  string    `json:"access_token,omitempty"`
-	RefreshToken string    `json:"refresh_token,omitempty"`
-	Expiry       time.Time `json:"expiry,omitempty"`
-	Scopes       []string  `json:"scopes,omitempty"`
+	Type         string              `json:"type,omitempty"`
+	Provider     string              `json:"provider"`
+	Account      string              `json:"account"`
+	AccessToken  string              `json:"access_token,omitempty"`
+	RefreshToken string              `json:"refresh_token,omitempty"`
+	Expiry       time.Time           `json:"expiry,omitempty"`
+	Scopes       []string            `json:"scopes,omitempty"`
+	AdminKey     *vault.AdminKeyData `json:"admin_key,omitempty"`
+	Catalog      *vault.CatalogData  `json:"catalog,omitempty"`
 }
 
 func fromCredential(c *vault.Credential) storedCredential {
 	return storedCredential{
+		Type:         c.Type,
 		Provider:     c.Provider,
 		Account:      c.Account,
 		AccessToken:  c.AccessToken,
 		RefreshToken: c.RefreshToken,
 		Expiry:       c.Expiry,
 		Scopes:       c.Scopes,
+		AdminKey:     c.AdminKey,
+		Catalog:      c.Catalog,
 	}
 }
 
 func (sc storedCredential) toCredential() *vault.Credential {
 	return &vault.Credential{
+		Type:         sc.Type,
 		Provider:     sc.Provider,
 		Account:      sc.Account,
 		AccessToken:  sc.AccessToken,
 		RefreshToken: sc.RefreshToken,
 		Expiry:       sc.Expiry,
 		Scopes:       sc.Scopes,
+		AdminKey:     sc.AdminKey,
+		Catalog:      sc.Catalog,
 	}
 }
