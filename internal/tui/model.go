@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/xianxu/charon/internal/oauth"
+	"github.com/xianxu/charon/internal/providers"
 	"github.com/xianxu/charon/internal/vault"
 )
 
@@ -21,21 +22,36 @@ type newAccountAuthedMsg struct {
 type screen int
 
 const (
-	screenPicker screen = iota
-	screenScopes
-	screenAuthing // OAuth in flight from the picker; ignore picker keys
+	screenProvider     screen = iota // top-level provider picker (post-#13 entry point)
+	screenPicker                      // OAuth account picker (Google)
+	screenScopes                      // OAuth scope view
+	screenAuthing                     // OAuth in flight from the picker; ignore picker keys
+	screenAdminKeyList                // admin-key entity list (admin row + projects)
 )
 
 // model is the top-level bubbletea model.
 type model struct {
-	current screen
-	picker  pickerModel
-	scopes  scopesModel
+	current        screen
+	providerPicker providerPickerModel
+	picker         pickerModel
+	scopes         scopesModel
+	adminList      adminKeyListModel
 
 	vault       vault.Store
 	auth        Authenticator
 	fetchDenied denialFetcher
 	proxyAddr   string // for cache-clear notify after vault writes; "" disables
+
+	// adminProviders is keyed by provider name ("openai", "anthropic").
+	// Empty map means no admin-key providers registered — the provider
+	// picker still renders, just without those rows.
+	adminProviders map[string]providers.Provider
+	adminStores    map[string]*providers.AdminKeyStore
+
+	// activeAdminProvider is the provider whose entity list is on
+	// screen when current==screenAdminKeyList. Used for re-rendering
+	// the list after a vault/store mutation lands.
+	activeAdminProvider string
 
 	width, height int
 
@@ -65,6 +81,22 @@ func WithProxyAddr(addr string) Option {
 	return func(m *model) { m.proxyAddr = addr }
 }
 
+// WithAdminKeyProvider registers an admin-key provider (OpenAI,
+// Anthropic). The provider's Name() determines the keychain namespace
+// and the picker label; all admin-key providers are auto-paired with
+// an AdminKeyStore for the same name. Multiple calls are additive —
+// register one provider per call.
+func WithAdminKeyProvider(p providers.Provider) Option {
+	return func(m *model) {
+		if m.adminProviders == nil {
+			m.adminProviders = make(map[string]providers.Provider)
+			m.adminStores = make(map[string]*providers.AdminKeyStore)
+		}
+		m.adminProviders[p.Name()] = p
+		m.adminStores[p.Name()] = providers.NewAdminKeyStore(p.Name())
+	}
+}
+
 // notifyProxyCacheClear pings the proxy at proxyAddr to flush its
 // in-memory token + account cache. Best-effort; failure means the proxy
 // isn't running locally, which is fine.
@@ -80,18 +112,15 @@ func (m model) notifyProxyCacheClear() {
 }
 
 func newModel(v vault.Store, initialAccount string, opts ...Option) (model, error) {
-	p, err := newPickerModel(v)
-	if err != nil {
-		return model{}, err
-	}
-	m := model{
-		current: screenPicker,
-		picker:  p,
-		vault:   v,
-	}
+	m := model{vault: v}
 	for _, opt := range opts {
 		opt(&m)
 	}
+
+	// initialAccount short-circuits the provider picker: it's a
+	// pre-#13 escape hatch for "open scope view directly for this
+	// google account" used by Run(v, "user@gmail.com", …). Implies
+	// the OAuth/Google flow.
 	if initialAccount != "" {
 		rows, err := loadScopeRows(v, initialAccount, m.fetchDenied)
 		if err != nil {
@@ -99,7 +128,15 @@ func newModel(v vault.Store, initialAccount string, opts ...Option) (model, erro
 		}
 		m.scopes = newScopesModel(initialAccount, rows, m.auth)
 		m.current = screenScopes
+		return m, nil
 	}
+
+	pp, err := newProviderPickerModel(v, m.adminStores)
+	if err != nil {
+		return model{}, err
+	}
+	m.providerPicker = pp
+	m.current = screenProvider
 	return m, nil
 }
 
@@ -116,6 +153,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+
+	case providerSelectedMsg:
+		return m.handleProviderSelected(msg)
+
+	case addProviderMsg:
+		// Phase 1 stub. Catalog (#15) will wire the catalog picker
+		// here. Today: re-render the provider picker with a status
+		// hint baked into the label (no separate flash mechanism yet
+		// — keeping the picker stateless until #15 motivates one).
+		return m, nil
+
+	case adminKeyListBackMsg:
+		return m.refreshProviderPicker()
+
+	case pickerBackMsg:
+		return m.refreshProviderPicker()
 
 	case accountSelectedMsg:
 		rows, err := loadScopeRows(m.vault, msg.email, m.fetchDenied)
@@ -168,6 +221,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case scopesQuitMsg:
+		// scopesQuitMsg used to terminate the program. With the
+		// provider picker as the new top-level, exiting the scope
+		// view returns to the OAuth account picker. The user has to
+		// `q` from the provider picker (or chain `q`s up the stack)
+		// to actually exit. Initial-account mode (skipped the picker)
+		// still terminates here.
+		if m.current == screenScopes && m.picker.items != nil {
+			m.current = screenPicker
+			return m, nil
+		}
 		return m, tea.Quit
 
 	case applyResultMsg:
@@ -246,9 +309,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.current {
+	case screenProvider:
+		var cmd tea.Cmd
+		m.providerPicker, cmd = m.providerPicker.Update(msg)
+		return m, cmd
 	case screenPicker:
 		var cmd tea.Cmd
 		m.picker, cmd = m.picker.Update(msg)
+		return m, cmd
+	case screenAdminKeyList:
+		var cmd tea.Cmd
+		m.adminList, cmd = m.adminList.Update(msg)
 		return m, cmd
 	case screenAuthing:
 		// Block all picker/scopes input while OAuth is in flight; only
@@ -265,10 +336,60 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleProviderSelected routes from the provider picker to the
+// per-type screen for the chosen provider. OAuth → existing
+// pickerModel; admin-key → adminKeyListModel.
+func (m model) handleProviderSelected(msg providerSelectedMsg) (tea.Model, tea.Cmd) {
+	switch msg.provType {
+	case vault.TypeOAuth:
+		// Today only Google has an OAuth flow registered. Build (or
+		// rebuild) the OAuth account picker.
+		p, err := newPickerModel(m.vault)
+		if err != nil {
+			m.err = err
+			return m, tea.Quit
+		}
+		m.picker = p
+		m.current = screenPicker
+		return m, nil
+	case vault.TypeAdminKey:
+		store := m.adminStores[msg.name]
+		l, err := newAdminKeyListModel(msg.name, m.vault, store)
+		if err != nil {
+			m.err = err
+			return m, tea.Quit
+		}
+		m.adminList = l
+		m.activeAdminProvider = msg.name
+		m.current = screenAdminKeyList
+		return m, nil
+	}
+	return m, nil
+}
+
+// refreshProviderPicker rebuilds the provider picker (state may have
+// changed: an OAuth account was added, an admin key was set, etc.)
+// and returns to that screen. Called when navigating back from any
+// per-provider sub-screen.
+func (m model) refreshProviderPicker() (tea.Model, tea.Cmd) {
+	pp, err := newProviderPickerModel(m.vault, m.adminStores)
+	if err != nil {
+		m.err = err
+		return m, tea.Quit
+	}
+	m.providerPicker = pp
+	m.current = screenProvider
+	return m, nil
+}
+
 func (m model) View() string {
 	switch m.current {
+	case screenProvider:
+		return m.providerPicker.View()
 	case screenPicker:
 		return m.picker.View()
+	case screenAdminKeyList:
+		return m.adminList.View()
 	case screenAuthing:
 		return "\nAuthenticating with Google...\n\n" +
 			"  A browser window should have opened for OAuth.\n" +

@@ -40,6 +40,10 @@ func newPickerModel(v vault.Store) (pickerModel, error) {
 type accountSelectedMsg struct{ email string }
 type newAccountMsg struct{}
 
+// pickerBackMsg signals "navigate back to the provider picker" — the
+// new top-level. Distinct from tea.Quit which terminates the program.
+type pickerBackMsg struct{}
+
 func (m pickerModel) Update(msg tea.Msg) (pickerModel, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -63,7 +67,9 @@ func (m pickerModel) Update(msg tea.Msg) (pickerModel, tea.Cmd) {
 			return m, func() tea.Msg { return newAccountMsg{} }
 		}
 		return m, func() tea.Msg { return accountSelectedMsg{email: item.email} }
-	case "q", "esc", "ctrl+c":
+	case "esc":
+		return m, func() tea.Msg { return pickerBackMsg{} }
+	case "q", "ctrl+c":
 		return m, tea.Quit
 	}
 	return m, nil
@@ -96,7 +102,7 @@ func (m pickerModel) View() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("↑/↓: navigate    enter: select    q/esc: quit"))
+	b.WriteString(helpStyle.Render("↑/↓: navigate    enter: select    esc: back    q: quit"))
 	b.WriteString("\n")
 	return b.String()
 }

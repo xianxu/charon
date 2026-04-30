@@ -204,6 +204,10 @@ Progress:
 - [x] **Code review chunk 1 (M1+M2+M3)** — completed 2026-04-30.
   Critical + Important findings addressed (see Log).
 - [ ] M4 — TUI provider/admin-key/account flows
+  - [x] **Phase 1** (provider picker + entity-list rendering +
+    dispatch infrastructure) — landed 2026-04-30
+  - [ ] **Phase 2** (admin-key paste + mint + replace modal flows)
+  - [ ] **Phase 3** (admin-key detail screen + catalog stub)
 - [ ] M5 — proxy per-host routing
 - [ ] M6 — account-level rm refactor
 - [ ] M7 — docs
@@ -491,3 +495,41 @@ plan doc; validate before writing code.
   - **Deferred (Minor)**: paginated-list warning, `WorkspaceID`
     sanity check, namespace reorganization, ReadAll error
     handling. Tracked for post-M4 cleanup; not blocking.
+
+- **2026-04-30** — M4 Phase 1 (provider picker + entity-list
+  rendering) landed.
+  - `internal/tui/provider_picker.go` + tests — top-level
+    `screenProvider` lists Google + admin-key providers + "+ add
+    provider" stub. Per-row `●`/`○` glyph for admin-key state;
+    summary shows account count (Google) or project count
+    (configured admin-key) or "admin key not set" (red).
+  - `internal/tui/admin_key_list.go` + tests — entity-list
+    screen for OpenAI projects / Anthropic workspaces. Admin-key
+    row at top (red/green), project rows in the middle
+    (alphabetically sorted), "+ new project"/"+ new workspace"
+    affordance at the bottom (muted when admin key not set).
+    Phase 1 has navigation + render only; enter/r flash a
+    "(action coming in M4 phase 2)" status. Key material is
+    redacted to a `sk-…xyz` hint.
+  - `internal/tui/model.go` — `screen` enum gains
+    `screenProvider` (new top-level) and `screenAdminKeyList`.
+    `newModel` routes through provider picker by default;
+    initial-account argument still short-circuits to scope view
+    (pre-#13 escape hatch). New options:
+    `WithAdminKeyProvider(p)` registers a provider + auto-pairs
+    an `AdminKeyStore`. Navigation: `esc` from any sub-screen
+    returns to the provider picker; `q` from anywhere quits.
+  - `internal/tui/picker.go` — OAuth account picker `esc` now
+    emits `pickerBackMsg` (back to provider picker) instead of
+    quitting; `q`/`ctrl+c` keep program-quit semantics.
+  - `cmd/charon/main.go` — `charon auth` wires `openai.New()`
+    and `anthropic.New()` providers into the TUI.
+  - Test coverage: provider picker rendering with all
+    configured-state combinations; navigation; enter dispatches
+    correct message types; entity-list rendering for both
+    OpenAI/Anthropic; per-provider local naming
+    (Projects/Workspaces); key-material redaction; alphabetical
+    account sort; cross-provider filtering; full
+    provider→adminList→back navigation cycle.
+  - Phase 1 deliberately does NOT include actions (paste, mint,
+    revoke, replace modal, detail screen). Those are Phase 2/3.

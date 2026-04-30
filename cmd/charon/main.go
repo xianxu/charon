@@ -14,6 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/xianxu/charon/internal/oauth"
+	"github.com/xianxu/charon/internal/providers/anthropic"
+	"github.com/xianxu/charon/internal/providers/openai"
 	"github.com/xianxu/charon/internal/proxy"
 	"github.com/xianxu/charon/internal/service"
 	"github.com/xianxu/charon/internal/tui"
@@ -333,7 +335,12 @@ Headless removal: 'charon vault delete --provider X --account Y'.`,
 				return fmt.Errorf("init google provider: %w", err)
 			}
 			gp.Output = io.Discard // suppress oauth status prints inside TUI
-			return tui.Run(newVault(), "", listenAddr, gp)
+			// Admin-key providers (#13). Wired even when no admin key
+			// has been configured yet — the TUI shows them with the
+			// red ○ glyph until the user pastes an admin key.
+			openaiProv := openai.New()
+			anthropicProv := anthropic.New()
+			return tui.Run(newVault(), "", listenAddr, gp, openaiProv, anthropicProv)
 		},
 	}
 }

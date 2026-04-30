@@ -6,14 +6,17 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/xianxu/charon/internal/providers"
 	"github.com/xianxu/charon/internal/vault"
 )
 
 // Run launches the TUI, blocking until the user exits.
 //
-// Required: vault. Optional: account (skips picker), addr (badges), auth
-// (apply support — without it, Enter on pending changes will fail).
-func Run(v vault.Store, account, addr string, auth Authenticator) error {
+// Required: vault. Optional: account (skips picker, implies google
+// provider), addr (badges + cache-clear), auth (OAuth apply), and
+// admin-key providers via WithAdminKeyProvider for OpenAI/Anthropic
+// flows.
+func Run(v vault.Store, account, addr string, auth Authenticator, adminProviders ...providers.Provider) error {
 	var opts []Option
 	if addr != "" {
 		opts = append(opts, WithDenialFetcher(httpDenialFetcher(addr)))
@@ -21,6 +24,9 @@ func Run(v vault.Store, account, addr string, auth Authenticator) error {
 	}
 	if auth != nil {
 		opts = append(opts, WithAuthenticator(auth))
+	}
+	for _, p := range adminProviders {
+		opts = append(opts, WithAdminKeyProvider(p))
 	}
 	m, err := newModel(v, account, opts...)
 	if err != nil {

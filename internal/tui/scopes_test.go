@@ -340,14 +340,22 @@ func TestPickerToScopesTransition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newModel: %v", err)
 	}
-	if m.current != screenPicker {
-		t.Fatalf("initial screen = %v, want picker", m.current)
+	// Post-#13: the entry point is the provider picker, not the OAuth
+	// account picker. Drilling in: provider → OAuth picker → scopes.
+	if m.current != screenProvider {
+		t.Fatalf("initial screen = %v, want screenProvider", m.current)
 	}
 
-	updated, _ := m.Update(accountSelectedMsg{email: "a@gmail.com"})
+	updated, _ := m.Update(providerSelectedMsg{name: "google", provType: vault.TypeOAuth})
+	m = updated.(model)
+	if m.current != screenPicker {
+		t.Fatalf("after google selection: screen = %v, want screenPicker", m.current)
+	}
+
+	updated, _ = m.Update(accountSelectedMsg{email: "a@gmail.com"})
 	m = updated.(model)
 	if m.current != screenScopes {
-		t.Errorf("after selection: screen = %v, want scopes", m.current)
+		t.Errorf("after account selection: screen = %v, want scopes", m.current)
 	}
 	if m.scopes.account != "a@gmail.com" {
 		t.Errorf("scope view account = %q, want a@gmail.com", m.scopes.account)
