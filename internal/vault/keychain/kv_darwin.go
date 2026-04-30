@@ -4,6 +4,7 @@ package keychain
 
 import (
 	"fmt"
+	"os/exec"
 
 	gokeychain "github.com/keybase/go-keychain"
 )
@@ -30,14 +31,49 @@ func GetRaw(service, account string) (string, error) {
 
 // SetRaw writes a raw string value to the keychain.
 //
-// Atomic upsert via SecItemUpdate-then-SecItemAdd (see setGenericPassword).
-// Routes ACL based on service name: ServiceProd entries (signed binary)
-// get an ACL bound to the current process; ServiceDev entries don't,
-// since dev iteration writes from many ephemeral binaries with
-// non-matching designated requirements.
+// Routing by service namespace:
+//   - ServiceProd: ACL pinned to the current process's designated
+//     requirement via the legacy SecAccess path (setGenericPassword,
+//     with_acl=true). Reads from any non-matching binary prompt.
+//   - ServiceDev: shells out to `security add-generic-password -A`
+//     ("allow any application without warning"). Required for `go run`
+//     iteration: each invocation produces a different ephemeral
+//     binary, and a default-ACL'd entry would prompt on every read
+//     of a previously-written entry. -A is documented-insecure (any
+//     app on the user's machine can read), which is fine for
+//     ServiceDev — dev entries hold test secrets the user already
+//     pastes interactively, never anything that ships.
+//
+// The dev path delete-then-adds (rather than -U upserts) so that an
+// entry written previously by the C path (with restrictive default
+// ACL) gets its ACL replaced cleanly.
 func SetRaw(service, account, value string) error {
-	withACL := service == ServiceProd
-	return setGenericPassword(service, account, []byte(value), withACL)
+	if service == ServiceProd {
+		return setGenericPassword(service, account, []byte(value), true)
+	}
+	return setRawPromptlessDev(service, account, value)
+}
+
+// setRawPromptlessDev writes a dev entry with `security -A` so any
+// process on the user's machine can read it without a keychain prompt.
+// Defensive against pre-existing entries with restrictive ACLs:
+// delete-then-add ensures the ACL is replaced, not preserved.
+func setRawPromptlessDev(service, account, value string) error {
+	// Best-effort delete; missing-entry exit codes are fine.
+	_ = exec.Command("security", "delete-generic-password",
+		"-s", service,
+		"-a", account,
+	).Run()
+	cmd := exec.Command("security", "add-generic-password",
+		"-s", service,
+		"-a", account,
+		"-w", value,
+		"-A", // allow any application — dev-only, fine for ServiceDev
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("keychain dev write %s/%s: %w (output: %s)", service, account, err, out)
+	}
+	return nil
 }
 
 // DeleteRaw removes a raw key/value entry. Idempotent — returns nil if
