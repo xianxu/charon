@@ -141,8 +141,8 @@ func TestProviderPicker_AdminKey_GreenWhenConfigured_WithMintCount(t *testing.T)
 	if !openai.adminKeySet {
 		t.Error("configured openai should have adminKeySet=true")
 	}
-	if openai.summary != "2 projects" {
-		t.Errorf("configured openai summary = %q, want '2 projects'", openai.summary)
+	if openai.summary != "2 keys" {
+		t.Errorf("configured openai summary = %q, want '2 keys'", openai.summary)
 	}
 }
 

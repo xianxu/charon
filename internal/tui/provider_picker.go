@@ -114,7 +114,12 @@ func newProviderPickerModel(
 		}
 		if set {
 			item.glyph = "●"
-			item.summary = pluralize(adminCounts[name], entityTerm(name), entityTermPlural(name))
+			// Universal "key/keys" wording — matches the entity-list
+			// title ("Keys"), the mint flow ("+ new key"), and the
+			// detail screen breadcrumb. The upstream-container term
+			// (project/workspace) only shows up in the mint flow's
+			// step-2 picker where it's actually disambiguating.
+			item.summary = pluralize(adminCounts[name], "key", "keys")
 		} else {
 			item.glyph = "○"
 			item.summary = "admin key not set"
