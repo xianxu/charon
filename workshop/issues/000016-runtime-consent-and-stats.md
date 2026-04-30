@@ -5,7 +5,9 @@ deps: []
 github_issue:
 created: 2026-04-29
 updated: 2026-04-29
-estimate_hours: 85
+estimate_hours: 20
+estimate_method: estimate-logic-v2.md (Method A)
+prior_estimate_hours: 85  # v1 estimate; superseded by v2 after #13 actuals
 ---
 
 # Runtime consent + proxy stats
@@ -279,29 +281,34 @@ Runtime consent is a parallel feature inside the same `.app`.
 
 ## Estimate
 
-**Range: 65–124 hr (~6.5–12.5 working days). Best guess: ~85 hr (~8.5 days).**
+**Range: 11–34 hr. Best guess: ~20 hr.**
 
-Produced via `brain/data/life/42shots/velocity/estimate-logic-v1.md` against `baseline-v1.md`. Method A only.
+Produced via `brain/data/life/42shots/velocity/estimate-logic-v2.md` against `baseline-v2.md`. Method A only.
 
-The spec is detailed enough that Method B's design-density contribution is negligible — most decisions are pre-resolved.
+v2 supersedes the previous v1 estimate (65–124 hr range). #13's actuals showed v1 over-estimated by ~10×; v2 splits design + impl per primitive. #16's design density is the highest of the three remaining issues — Mac UI / AppKit and CGo proc syscalls are genuinely novel territory with no charon precedent — so the v2 reduction is least aggressive (~4×). Spec is detailed (most decisions pre-resolved per the issue Spec section), so design hours are bounded but not zero.
 
-| Phase | Primitive match | Base hr | Familiarity × | Adjusted |
-|---|---|---|---|---|
-| A — session state | Greenfield Go module (single concern) | 8–14 | ×1.0 | 8–14 |
-| B — caller ID + audit | Greenfield Go module + macOS proc syscalls (CGo, novel) | 8–14 | ×1.5 | 12–21 |
-| C — security.app trust edge | Greenfield Go module, reuses M4 DR-verification | 8–12 | ×1.0 | 8–12 |
-| D — menubar + consent UI | Greenfield Go module (closest analog; novel Mac UI stack) | 8–14 | ×1.5 | 12–21 |
-| E — stats Tier 1+2 | Smaller Go module + parser | 6–12 | ×1.0 | 6–12 |
-| F — CLI surfaces | Familiar (charon CLI extension) | 4–8 | ×1.0 | 4–8 |
-| G — atlas + threat-model docs | Atlas/docs maintenance ×3 | 1–3 | ×1.0 | 1–3 |
-| H — code review × 3 | Process overhead | 3–12 | ×1.0 | 3–12 |
-| **Subtotal** | | | | **54–103** |
-| **+20% unknown-unknowns buffer** | | | | **65–124** |
+| Phase | Primitive | Spec quality | Design (hr) | Impl (hr × familiarity) | Total |
+|---|---|---|---|---|---|
+| A — session state (armed/disarmed mutex, idle/absolute timers, /session/{arm,disarm,status} HTTP, CLI: arm/disarm/status, drain-vs-RST tests) | Greenfield Go module | ×0.5 (spec detailed, idle-vs-absolute timer logic + drain semantics need design dialogue) | 0.5–2 | 0.3–0.8 ×1.0 = 0.3–0.8 | 0.8–2.8 |
+| B — caller ID + audit (proc_listpids + proc_pidinfo CGo, parent-chain via PROC_PIDT_BSDINFO.ppid, cache per CONNECT, audit.Record peer_* fields) | Greenfield Go + CGo darwin syscalls | (CGo darwin novel; design+impl both bounded but unfamiliar) | 0.5–2 | 0.5–1.5 ×1.5 = 0.75–2.25 | 1.25–4.25 |
+| C — security.app trust edge (unix socket at `~/Library/Caches/charon/runtime.sock`, peer DR check, signed approval token + keychain ACL, JSON proto: Arm/Disarm/Status/RecentActivity) | Greenfield Go module (reuses M4 DR-verification) | ×0.5 (signed token shape + JSON proto design open) | 0.5–2 | 0.5–1.5 ×1.0 = 0.5–1.5 | 1.0–3.5 |
+| D — menubar + consent UI (LSUIElement bundle, status glyph, click-to-arm panel, live connection count, disarm-on-idle notification, blocked-CONNECT toast with rate cap, audit log viewer with search) | Greenfield Mac UI (novel stack — Swift or Obj-C, AppKit) | (no spec discount — every UI element is a design decision) | 1.5–4 | 1–3 ×1.5 = 1.5–4.5 | 3.0–8.5 |
+| E — stats Tier 1+2 (req_bytes/resp_bytes/resp_content_type plumbing, size-capped JSON tee, top-level array count, streaming-detection skip path for chunked + SSE/NDJSON, threat-model amend) | Smaller Go module + parser | ×0.5 (streaming detection has design choices) | 0.3–1 | 0.5–1.5 ×1.0 = 0.5–1.5 | 0.8–2.5 |
+| F — CLI surfaces (`charon who`, `charon stats --since 1h`, `--json`) | Smaller Go module (familiar) | ×0.2 (charon CLI patterns established) | 0.1–0.3 | 0.3–0.8 ×1.0 = 0.3–0.8 | 0.4–1.1 |
+| G — atlas + threat-model docs ×3 | Atlas/docs maintenance ×3 | n/a | 0.15–0.6 | 0.15–0.6 | 0.3–1.2 |
+| H — code review × 3 chunks | Process overhead | n/a | 0–0.6 | 0.6–1.5 | 0.6–2.1 |
+| Real-API discovery (macOS Security framework + LaunchServices; expect 2–3 surprises in proc syscalls + AppKit) | NEW v2 primitive | n/a | 0 | 0.6–1.8 | 0.6–1.8 |
+| Mid-flight scope pivot (8-phase issues typically have 1–2; allocate 1) | NEW v2 primitive | n/a | 0.2–0.5 | 0.2–0.5 | 0.4–1 |
+| **Subtotal (design / impl)** | | | **3.75–13** | **5.4–15.7** | **9.15–28.7** |
+| **+30% on design subtotal** | | | +1.1–3.9 | n/a | +1.1–3.9 |
+| **Total** | | | | | **10.3–32.6** |
 
 Caveats:
-- Assumes baseline calibration (10hr/day focused, solo founder + AI, current-baseline polish; see `baseline-v1.md`).
-- Mac UI / AppKit work and CGo Darwin syscalls aren't direct primitives in v1 — handled via ×1.5 familiarity multipliers on adjacent Go-module primitives. Could be off in either direction; record actuals to recalibrate.
-- Wide range reflects the 8-phase structure (per-phase ranges compound). Best-guess ~85 hr represents the P50.
+- v2's least aggressive reduction (~4×) of the three remaining issues, reflecting genuine novelty: Mac UI / AppKit (no charon precedent), CGo darwin proc syscalls (no charon precedent).
+- Assumes baseline-v2 calibration (Claude Code Opus 4.7 + SDK loop). Mac UI primitive in v2's table inherits v1's extrapolation (mapped to "Greenfield Go module" + ×1.5 familiarity for impl) — this is the largest single source of estimate uncertainty. **First Mac-UI actual will calibrate it sharply.**
+- 8-phase structure compounds ranges. Best guess (~20 hr) represents the P50 (geometric mean of design+impl-with-familiarity ranges).
+- Open question on **streaming auto-detection** is a real design open; if it expands beyond chunked + SSE/NDJSON, +0.5–1 hr design on E.
+- Wide range honest reflection of cross-stack work (Go + CGo + Swift/AppKit) plus 8 phases.
 
 ## Plan
 

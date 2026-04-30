@@ -6,6 +6,10 @@ github_issue:
 created: 2026-04-28
 updated: 2026-04-30
 estimate_hours: 55
+actual_hours: 5
+estimate_method: estimate-logic-v1.md (Method A)
+estimate_off_by: ~10x (over-estimated)
+estimate_notes: triggered estimate-logic-v2.md; see velocity/baseline-v2.md
 ---
 
 # API-key providers: OpenAI + Anthropic

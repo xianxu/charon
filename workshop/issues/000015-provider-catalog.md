@@ -5,7 +5,9 @@ deps: []
 github_issue:
 created: 2026-04-28
 updated: 2026-04-28
-estimate_hours: 45
+estimate_hours: 12
+estimate_method: estimate-logic-v2.md (Method A)
+prior_estimate_hours: 45  # v1 estimate; superseded by v2 after #13 actuals
 ---
 
 # Provider catalog + onboarding (Tier 3 generalized)
@@ -178,31 +180,37 @@ counts against quota); user opts in.
 
 ## Estimate
 
-**Range: 30–64 hr (~3–6.5 working days). Best guess: ~45 hr (~4.5 days).**
+**Range: 6.1–18.5 hr. Best guess: ~12 hr.**
 
-Produced via `brain/data/life/42shots/velocity/estimate-logic-v1.md` against `baseline-v1.md`. Method A only.
+Produced via `brain/data/life/42shots/velocity/estimate-logic-v2.md` against `baseline-v2.md`. Method A only.
 
-This estimate **assumes #13 ships first** — `internal/providers/` interface, the keychain-storage convention, and the TUI provider-picker scaffolding are reused. The catalog flow integrates as another provider-type on top of that scaffolding. If #15 ships before #13, add ~5–10 hr for picker + basic provider abstractions.
+v2 supersedes the previous v1 estimate (30–64 hr range). #13's actuals showed v1 over-estimated by ~10×; v2 splits design + impl per primitive and applies a per-API discovery budget. #15's design density is higher than #14's because it introduces a new generic abstraction (catalog schema, metadata-driven router) and curates 13 providers with potentially novel auth shapes — so the v2 reduction is less aggressive (~5×).
 
-| Milestone | Primitive match | Base hr | Familiarity × | Adjusted |
-|---|---|---|---|---|
-| M1 — Catalog schema + 13-provider seed YAML (URL/auth research per provider) | Atlas/docs + schema code | 2–5 | ×1.0 | 2–5 |
-| M2 — Catalog loader + TUI fuzzy-search picker | Smaller Go module | 3–6 | ×1.0 | 3–6 |
-| M3 — Generic metadata-driven per-host router (the meat) | Greenfield Go module (single concern) | 8–14 | ×1.0 | 8–14 |
-| M4 — TUI add-account flow ([Open] buttons + paste + e2e test against 3 providers) | Greenfield Go module (TUI) | 6–12 | ×1.0 | 6–12 |
-| M5 — `--verify` flag (optional health-check post-paste) | Smaller Go module | 2–4 | ×1.0 | 2–4 |
-| M6 — Docs (README, `providers.md`, threat-model notes) | Atlas/docs ×3 | 1–3 | ×1.0 | 1–3 |
-| M7 — Onboarding polish (default to catalog for empty-state) | Smaller Go module | 1–3 | ×1.0 | 1–3 |
-| Code review × 2 chunks | Process overhead | 2–6 | ×1.0 | 2–6 |
-| **Subtotal** | | | | **25–53** |
-| **+20% unknown-unknowns buffer** | | | | **30–64** |
+This issue's scope expanded after #13 closed: **Anthropic was demoted here** (its Admin API can't programmatically create keys, breaking the mint flow). #15 now also implements the optional revoke-endpoint pathway for catalog providers that support it (Anthropic specifically: `POST /v1/organizations/api_keys/{id}` with `status: inactive`).
+
+| Milestone | Primitive | Spec quality | Design (hr) | Impl (hr) | Total |
+|---|---|---|---|---|---|
+| M1 — Catalog schema + 13-provider seed YAML (URL/auth/revoke research per provider) | Atlas/docs + schema code | ×0.5 (schema sketched in Spec but per-provider details unknown) | 0.3–0.8 | 0.3–0.8 | 0.6–1.6 |
+| M2 — Catalog loader + TUI fuzzy-search picker | Smaller Go + TUI screen | ×0.5 (fuzzy picker UX has open shape) | 0.3–1 | 0.3–1 | 0.6–2 |
+| M3 — Generic metadata-driven per-host router | Greenfield Go module (single concern) | ×0.5 (auth.style dispatch design partially open) | 0.3–1.2 | 0.5–1.5 | 0.8–2.7 |
+| M4 — TUI add-account flow ([Open] + paste + 3-provider e2e) | TUI screen + state machine | (full design — UX iteration like #13's M4) | 0.5–2 | 0.5–1.5 | 1.0–3.5 |
+| M4b — Anthropic revoke pathway (catalog `revoke:` endpoint dispatch) | Smaller Go module (mirror) | ×0.2 (anthropic provider already shipped in #13's tree) | 0.1–0.3 | 0.2–0.5 | 0.3–0.8 |
+| M5 — `--verify` flag (post-paste health check) | Smaller Go module | ×0.5 | 0–0.2 | 0.2–0.5 | 0.2–0.7 |
+| M6 — Docs ×3 (README, `providers.md`, threat-model) | Atlas/docs ×3 | n/a | 0.15–0.6 | 0.15–0.6 | 0.3–1.2 |
+| M7 — Onboarding polish (default to catalog when empty) | Smaller Go module | n/a | 0.1–0.3 | 0.2–0.5 | 0.3–0.8 |
+| Code review × 2 chunks | Process overhead | n/a | 0–0.4 | 0.4–1 | 0.4–1.4 |
+| Real-API discovery (~3 of 13 seed providers will surprise; ~25% hit rate per typical API) | NEW v2 primitive | n/a | 0 | 0.9–1.8 | 0.9–1.8 |
+| **Subtotal (design / impl)** | | | **1.75–6.8** | **3.85–9.7** | **5.4–16.5** |
+| **+30% on design subtotal** | | | +0.5–2 | n/a | +0.5–2 |
+| **Total** | | | | | **6.1–18.5** |
 
 Caveats:
-- Assumes baseline calibration (10hr/day focused, solo founder + AI, current-baseline polish; see `baseline-v1.md`).
-- Assumes #13 ships first (see above). Independent in spec, coupled in scaffolding.
-- M1's range is higher than typical "Atlas/docs maintenance" because per-provider URL/auth-shape research is real curation work, not just writing prose.
-- Open questions on user-extensible catalog and catalog-update mechanism are explicitly deferred (Notes section), so they don't add to this estimate. If pulled in, +5–10 hr for the user-config merge + ~3–5 hr for a refresh subcommand.
-- The "60-second add-provider" UX target in the Notes is a real success criterion — under-shooting M4's polish budget would miss it. The high end of M4 (12 hr) reflects polishing to that bar.
+- Assumes #13 has shipped (it has — closed 2026-04-30). `internal/providers/` interface, `AdminKeyStore`, TUI provider picker, and the credential-lifecycle principle ("manage what you mint; revoke what you touched") are all established.
+- The 13 seed providers carry real research cost — per-provider docs, URL paths, auth shapes (header vs URL param vs basic), revoke endpoints if any. Captured in M1 + the discovery-budget primitive.
+- M4 is the most design-bound (UX iteration with user, similar to #13's M4 actuals of ~1.5 hr).
+- Anthropic's hybrid-paste-then-list-and-deactivate revoke pathway is the gnarliest catalog feature; isolated in M4b for visibility. Other catalog providers (Groq, Mistral, etc.) get the simpler "delete locally + dashboard URL" path documented in `atlas/charon.md`.
+- Open questions on user-extensible catalog and catalog-update mechanism are explicitly deferred (Notes section). If pulled in, +1–2 hr for user-config merge + ~0.5–1 hr for refresh subcommand under v2 rates.
+- The "60-second add-provider" UX target — M4 high end (3.5 hr) reflects polishing to that bar.
 
 ## Plan
 

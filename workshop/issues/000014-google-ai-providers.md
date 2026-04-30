@@ -5,7 +5,9 @@ deps: []
 github_issue:
 created: 2026-04-28
 updated: 2026-04-28
-estimate_hours: 25
+estimate_hours: 5
+estimate_method: estimate-logic-v2.md (Method A)
+prior_estimate_hours: 25  # v1 estimate; superseded by v2 after #13 actuals
 ---
 
 # Google AI providers: Gemini AI Studio + Vertex AI
@@ -107,29 +109,33 @@ Vertex needs no new entries; uses the existing OAuth token.
 
 ## Estimate
 
-**Range: 17–36 hr (~1.7–3.6 working days). Best guess: ~25 hr (~2.5 days).**
+**Range: 2.4–7.3 hr. Best guess: ~4.5 hr.**
 
-Produced via `brain/data/life/42shots/velocity/estimate-logic-v1.md` against `baseline-v1.md`. Method A only.
+Produced via `brain/data/life/42shots/velocity/estimate-logic-v2.md` against `baseline-v2.md`. Method A only.
 
-This estimate **assumes #13 ships first** — the keychain + mint + revoke scaffolding in `internal/providers/`, the TUI scope-picker patterns, and the threat-model admin-key asset class are all established there. If #14 lands before #13, add ~10 hr for pattern-establishing overhead.
+v2 supersedes the previous v1 estimate (17–36 hr range) because v1 mashed design and impl into one range; AI-paired impl collapsed 5–15× since the v1 baseline. The shipped charon #13 actual was ~5 hr against a v1 estimate of 41–78 hr.
 
-| Milestone | Primitive match | Base hr | Familiarity × | Adjusted |
-|---|---|---|---|---|
-| M1 — Add `cloud-platform` scope to Google catalog | Atlas/docs + tiny code | 0.5–1 | ×1.0 | 0.5–1 |
-| M2 — Vertex routing (per-host + OAuth bearer attach + smoke test) | Smaller Go module | 3–6 | ×1.0 | 3–6 |
-| M3 — AI Studio key mint (API Keys API client + Keychain storage + project/API-enablement detection) | Smaller Go module | 5–8 | ×1.0 | 5–8 |
-| M4 — AI Studio routing (URL-param key attach) | Smaller Go module | 2–4 | ×1.0 | 2–4 |
-| M5 — Revoke flow on `accounts rm` (API Keys DELETE) | Smaller Go module | 2–4 | ×1.0 | 2–4 |
-| M6 — Docs (README, agent-protocol, threat-model touch-up) | Atlas/docs ×3 | 1–3 | ×1.0 | 1–3 |
-| Code review × 1–2 chunks | Process overhead | 1–4 | ×1.0 | 1–4 |
-| **Subtotal** | | | | **14.5–30** |
-| **+20% unknown-unknowns buffer** | | | | **17–36** |
+This estimate **assumes #13 has shipped** — `internal/providers/` interface, `AdminKeyStore`, the TUI provider picker / entity-list patterns, and the threat-model admin-key asset class are all established. M3 (AI Studio key mint) is essentially a mirror of #13's `internal/providers/openai/` package against a different upstream API.
+
+| Milestone | Primitive | Spec quality | Design (hr) | Impl (hr) | Total |
+|---|---|---|---|---|---|
+| M1 — Add `cloud-platform` scope to Google catalog | Atlas/docs + tiny code | spec pre-resolved | 0.05–0.2 | 0.05–0.2 | 0.1–0.4 |
+| M2 — Vertex routing (per-host + OAuth bearer + smoke test) | Smaller Go module (mirror M5 from #13) | ×0.2 (mirror existing) | 0–0.06 | 0.2–0.5 | 0.2–0.56 |
+| M3 — AI Studio key mint (API Keys API client + Keychain + project/API-enablement detection) | Greenfield Go module (mirror OpenAI provider shape) | ×0.2 (#13 set the pattern) | 0.1–0.4 | 0.3–0.8 | 0.4–1.2 |
+| M4 — AI Studio routing (URL-param key attach) | Smaller Go module + new auth method | ×0.5 (URL-param is genuinely novel auth) | 0.1–0.5 | 0.2–0.5 | 0.3–1.0 |
+| M5 — Revoke flow (API Keys DELETE on `accounts rm`) | Smaller Go module (mirror) | ×0.2 | 0–0.06 | 0.2–0.5 | 0.2–0.56 |
+| M6 — Docs (README, agent-protocol, threat-model touch-up) | Atlas/docs ×3 | n/a | 0.15–0.6 | 0.15–0.6 | 0.3–1.2 |
+| Code review × 1–2 chunks | Process overhead | n/a | 0–0.4 | 0.4–1 | 0.4–1.4 |
+| Real-API discovery (1 external API: Google AI Studio API Keys) | NEW v2 primitive | n/a | 0 | 0.3–0.6 | 0.3–0.6 |
+| **Subtotal (design / impl)** | | | **0.4–2.2** | **1.85–4.7** | **2.25–6.9** |
+| **+30% on design subtotal** | | | +0.12–0.66 | n/a | +0.12–0.66 |
+| **Total** | | | | | **2.4–7.6** |
 
 Caveats:
-- Assumes baseline calibration (10hr/day focused, solo founder + AI, current-baseline polish; see `baseline-v1.md`).
-- Assumes #13 ships first (see above). If parallel, raise the M3 estimate by 2–4 hr (re-establishing mint/keychain shape).
-- Open question on scope granularity (`cloud-platform` is broad; narrower scopes might exist) is bounded research — ~1 hr at most, absorbed in M1 high end.
-- Region selection for Vertex: assumed to be config or per-request, not a TUI feature in v1. If full TUI support needed, add 2 hr to M2.
+- Assumes #13 shipped (it has — closed 2026-04-30). The mirror-pattern discount applies.
+- M4's URL-param auth is genuinely novel — Google AI Studio uses `?key=` query param, not Bearer header. New `AuthMethod` const + injection codepath. Wider design range than other M-numbers.
+- Open question on scope granularity (`cloud-platform` broad, narrower might exist) is bounded research — ~5 min, absorbed in M1.
+- Region selection for Vertex: assumed config or per-request, not a TUI feature. If full TUI support added, +0.5 hr design + 0.3 hr impl on M2.
 
 ## Plan
 
