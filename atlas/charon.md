@@ -45,7 +45,7 @@ request host → Provider (routing table) → {provider.Name, account} → token
   → if expired and has refresh_token → Refresher.Refresh() → updated token + vault persist
   → InjectAuth (bearer header)
 ```
-- Routing: exact host match first, then suffix match (e.g. `*.googleapis.com` → `{google, bearer}`)
+- Routing: exact host match first, then suffix match (e.g. `*.googleapis.com` → `{google, bearer}`). The Google suffix rule transparently covers all Gemini paths: Vertex AI (`{region}-aiplatform.googleapis.com`), AI Studio (`generativelanguage.googleapis.com`), and the API Keys mint endpoint (`apikeys.googleapis.com`) — no per-host entries needed; OAuth bearer with the `cloud-platform` scope authenticates them all.
 - Account resolution: single account auto-selected; multiple requires `X-Charon-Account` header
 - Token cache: in-memory `sync.Map`, keyed by `provider:account`, respects expiry with 30s grace
 - Cache invalidation: `vault set/delete` POSTs to `/cache/clear` on the proxy

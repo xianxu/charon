@@ -23,6 +23,14 @@ func TestProviderForHost_GoogleSuffix(t *testing.T) {
 		"youtubeanalytics.googleapis.com",
 		"storage.googleapis.com",
 		"some-future-api.googleapis.com", // not in any explicit list — suffix catches it
+		// Gemini paths (#000014). No dedicated routing entries — the
+		// .googleapis.com suffix rule covers both:
+		//   - Vertex AI: regional, OAuth bearer (cloud-platform scope)
+		//   - AI Studio: minted API key attached as ?key=<...> (M4)
+		"us-central1-aiplatform.googleapis.com",
+		"europe-west4-aiplatform.googleapis.com",
+		"generativelanguage.googleapis.com",
+		"apikeys.googleapis.com", // used by M3 to mint AI Studio keys
 	}
 	for _, host := range googleHosts {
 		p := ProviderForHost(host)

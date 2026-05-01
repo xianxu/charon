@@ -149,7 +149,9 @@ Sketch milestones:
    Existing TUI surfaces it for opt-in. **[done 2026-05-01]**
 2. **M2** — Vertex routing. Add `*.aiplatform.googleapis.com` to
    the per-host routing table; attach OAuth bearer. Smoke test
-   with a Gemini request via Vertex endpoint.
+   with a Gemini request via Vertex endpoint. **[done 2026-05-01;
+   no code change needed — existing `.googleapis.com` suffix rule
+   already routes Vertex regional hosts. Added regression test.]**
 3. **M3** — AI Studio key mint flow. New `aistudio` subcommand or
    account-level mint trigger. Integrates with API Keys API.
 4. **M4** — AI Studio routing. Add
@@ -212,3 +214,19 @@ independently.
   for both Vertex AI and the API Keys API. TUI scope picker surfaces
   this automatically (catalog-driven). Test added in
   `scope_catalog_test.go`.
+
+- **2026-05-01 — TUI polish.** Granted scopes float to top in the
+  scope picker (stable sort by realized; preserves catalog order
+  within each group). At load and after Apply only — toggling a
+  checkbox does not reflow.
+
+- **2026-05-01 — M2 done. Zero code.** Routing was already there:
+  `internal/proxy/routing.go` has a `.googleapis.com` suffix rule that
+  routes all Google hosts to `{google, bearer}`. Vertex's regional
+  hosts (`{region}-aiplatform.googleapis.com`), AI Studio's host
+  (`generativelanguage.googleapis.com`), and the API Keys mint host
+  (`apikeys.googleapis.com`) all match the existing rule and get the
+  user's OAuth access token attached as `Authorization: Bearer`.
+  Added explicit hosts to `routing_test.go` as a regression guard.
+  Atlas updated. Smoke test deferred to user (requires real account
+  with `cloud-platform` granted + a real Gemini call).
