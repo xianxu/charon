@@ -35,6 +35,10 @@ var GoogleScopeCatalog = []ScopeInfo{
 	{Scope: "https://www.googleapis.com/auth/tasks", Short: "tasks", Description: "Read and write Google Tasks"},
 	{Scope: "https://www.googleapis.com/auth/contacts.readonly", Short: "contacts.readonly", Description: "Read Google Contacts"},
 	{Scope: "https://www.googleapis.com/auth/youtube.readonly", Short: "youtube.readonly", Description: "Read YouTube account"},
+	// cloud-platform is broad (covers most GCP APIs). Used here to enable Gemini access via
+	// AI Studio (mint API key via apikeys.googleapis.com) and Vertex AI (OAuth bearer to
+	// {region}-aiplatform.googleapis.com). Google does not publish narrower scopes for these.
+	{Scope: "https://www.googleapis.com/auth/cloud-platform", Short: "cloud-platform", Description: "Gemini API access via AI Studio + Vertex AI (broad: full GCP)"},
 }
 
 // googleScopeIndex maps full scope URLs and short names to ScopeInfo.

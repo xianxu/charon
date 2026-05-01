@@ -146,7 +146,7 @@ Sketch milestones:
 
 1. **M1** — Add `cloud-platform` scope to Google scope catalog
    (`internal/oauth/google/scopes.go` or wherever scopes live).
-   Existing TUI surfaces it for opt-in.
+   Existing TUI surfaces it for opt-in. **[done 2026-05-01]**
 2. **M2** — Vertex routing. Add `*.aiplatform.googleapis.com` to
    the per-host routing table; attach OAuth bearer. Smoke test
    with a Gemini request via Vertex endpoint.
@@ -201,3 +201,14 @@ independently.
   permission requirements; the user's GCP project needs the API
   Keys API enabled. charon should detect "API not enabled" errors
   and prompt the user with the enable URL.
+
+## Log
+
+- **2026-05-01 — M1 done.** Added `cloud-platform` scope (short
+  `cloud-platform`) to `internal/oauth/scope_catalog.go`. Description
+  surfaces the breadth tradeoff. Open question on narrower scopes
+  resolved: Google does not publish narrower OAuth scopes for either
+  Gemini API path — `cloud-platform` is the documented requirement
+  for both Vertex AI and the API Keys API. TUI scope picker surfaces
+  this automatically (catalog-driven). Test added in
+  `scope_catalog_test.go`.
