@@ -103,9 +103,13 @@ Per Google account (e.g. `xianxu@gmail.com`):
 
 - `google:xianxu@gmail.com` — OAuth refresh token (existing)
 - `google:xianxu@gmail.com:gcp` — `{project_id, project_name,
-  vertex_region}` (NEW; populated when `cloud-platform` scope is
-  granted — see M3). Required by Vertex (URL contains project +
-  region) and by the AI Studio key-mint URL.
+  parent, vertex_region, created_by_charon, billing_enabled}`
+  (NEW; populated when `cloud-platform` scope is granted — see M3).
+  Required by Vertex (URL contains project + region) and by the AI
+  Studio key-mint URL. `parent` is `{type: "organization"|"folder",
+  id: "..."}` or `null`; MVP always writes `null` (no UI to pick
+  org), but the field is present so a later org-aware flow needs
+  only UI changes, no schema migration.
 - `google:xianxu@gmail.com:aistudio` — minted AI Studio API key +
   key_id metadata (NEW; only when AI Studio path is used).
 
@@ -220,11 +224,22 @@ Sketch milestones:
       `apikeys.googleapis.com` (M4 key mint),
       `generativelanguage.googleapis.com` (AI Studio data plane).
       Idempotent.
-   5. Stores `{project_id, project_name, vertex_region, created_by_charon}`
-      under `google:<account>:gcp`. The `created_by_charon` flag
-      is informational only — see Lifecycle of GCP artifacts above
-      (charon never deletes projects regardless).
-   6. Surfaces in `charon manifest` under
+   5. Detect billing state. GET
+      `cloudbilling.googleapis.com/v1/projects/{id}/billingInfo`.
+      If `billingEnabled: false`, print a non-fatal warning to
+      the TUI: "AI Studio (free tier) will work, but Vertex calls
+      will return 403 BILLING_DISABLED until you link a billing
+      account at
+      https://console.cloud.google.com/billing/linkedaccount?project={id}".
+      Charon does not attempt to attach billing.
+   6. Stores `{project_id, project_name, parent, vertex_region,
+      created_by_charon, billing_enabled}` under
+      `google:<account>:gcp`. `parent` is `null` for MVP (no UI to
+      pick org); the field exists in the schema so a future
+      org-aware flow is a UI-only change. `created_by_charon` and
+      `billing_enabled` are informational — see Lifecycle of GCP
+      artifacts (charon never deletes projects regardless).
+   7. Surfaces in `charon manifest` under
       `permissions.google.<account>.gcp`.
 
    Recovery flow: if the user already has a `:gcp` entry but it's
@@ -275,17 +290,27 @@ independently.
   account-add time, or per-request? **[resolved: account-add time,
   via M3's region picker. Stored in `:gcp` entry. Agents can still
   override per-request via URL — that takes precedence.]**
-- **Project under organization vs no-org**: charon-created projects
-  default to *no parent organization*. Users with a GCP org may
-  prefer projects nested under it; deferred to a later iteration
-  (org listing requires extra `cloudresourcemanager.organizations.get`
-  permission).
-- **Quota / billing**: project-create on a personal Google account
-  with no billing attached works for AI Studio (free tier) but
-  Vertex calls will fail with `BILLING_DISABLED`. M3 should detect
-  and surface this; deferred whether to also automate billing
-  attachment (probably no — billing is sensitive and the user
-  should consciously hook up a billing account in Cloud Console).
+- **Project under organization vs no-org**: **[resolved for MVP:
+  personal use, no parent org. UI defers org listing/picking. But
+  the backend data shape stores an optional `parent` field
+  (`{type, id}` or null) on the `:gcp` entry from day one so a
+  later org-aware UI doesn't require a migration.]** Cross-cutting
+  follow-up: charon-wide single-org assumption (also present in
+  #13's OpenAI/Anthropic admin-key flows) will get a unified
+  multi-org treatment in a separate issue; until then individual
+  providers each keep room in their data shape but don't surface
+  org pickers.
+- **Quota / billing**: **[resolved: M3 detects, doesn't fix.]**
+  After project create or selection, charon calls
+  `cloudbilling.googleapis.com/v1/projects/{id}/billingInfo` and
+  inspects `billingEnabled`. If false, surfaces a clear message
+  with the actionable link
+  `https://console.cloud.google.com/billing/linkedaccount?project={id}`.
+  Charon never auto-attaches billing — that decision belongs in
+  Cloud Console where the user can review pricing, set budgets,
+  and pick the right billing account. AI Studio (free tier) still
+  works regardless; the warning specifically calls out that Vertex
+  calls will fail with `BILLING_DISABLED` until linked.
 
 ## Notes
 
