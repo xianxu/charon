@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
@@ -97,6 +99,54 @@ func TestPermissionsPayload_NilScopesNormalizedToEmptySlice(t *testing.T) {
 	}
 	if entry.GCP != nil {
 		t.Errorf("expected no GCP payload, got %+v", entry.GCP)
+	}
+}
+
+// AI Studio surfaces in the manifest as a redacted ref — UID + display
+// name + project_id only. The actual KeyMaterial must NOT appear:
+// keeping the key invisible to agents is charon's job. Regression
+// guard for the specific oversight where M4 added cred.AIStudio
+// storage but forgot the projection on the manifest side.
+func TestPermissionsPayload_AIStudioSurfacedRedacted(t *testing.T) {
+	v := memory.New()
+	v.Set(&vault.Credential{
+		Provider: "google",
+		Account:  "alice@gmail.com",
+		Scopes:   []string{"https://www.googleapis.com/auth/cloud-platform"},
+		AIStudio: &vault.AIStudioData{
+			Name:        "projects/alice-charon/locations/global/keys/uid-1",
+			UID:         "uid-1",
+			DisplayName: "charon-aistudio",
+			KeyMaterial: "AIzaSy_THIS_IS_THE_SECRET",
+			ProjectID:   "alice-charon",
+			CreatedAt:   time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		},
+	})
+	got, err := permissionsPayload(v)
+	if err != nil {
+		t.Fatalf("permissionsPayload: %v", err)
+	}
+	entry := got["google"]["alice@gmail.com"]
+	if entry.AIStudio == nil {
+		t.Fatal("expected AIStudio ref in manifest")
+	}
+	if entry.AIStudio.UID != "uid-1" {
+		t.Errorf("UID = %q", entry.AIStudio.UID)
+	}
+	if entry.AIStudio.ProjectID != "alice-charon" {
+		t.Errorf("ProjectID = %q", entry.AIStudio.ProjectID)
+	}
+
+	// The secret must not appear anywhere in the JSON shape.
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if bytes.Contains(b, []byte("AIzaSy_THIS_IS_THE_SECRET")) {
+		t.Errorf("KeyMaterial leaked into manifest JSON:\n%s", b)
+	}
+	if bytes.Contains(b, []byte("key_material")) {
+		t.Errorf("manifest should not have a key_material field at all:\n%s", b)
 	}
 }
 

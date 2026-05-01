@@ -457,10 +457,43 @@ func manifestPayload(v vault.Store, addr string) (map[string]any, error) {
 
 // AccountPermissions is the per-account value in the manifest's
 // permissions section. Scopes is always present (empty slice when
-// none granted); GCP is omitted when the account has no GCP setup.
+// none granted); GCP is omitted when the account has no GCP setup;
+// AIStudio is omitted when no AI Studio key is minted.
+//
+// AIStudio's KeyMaterial is intentionally NOT surfaced — keeping
+// the key secret from agents is the whole point of charon. Agents
+// see metadata (UID, displayName, project_id) so they can identify
+// the key and recognize whether it exists, but the actual key
+// material gets attached server-side by the proxy.
 type AccountPermissions struct {
-	Scopes []string       `json:"scopes"`
-	GCP    *vault.GCPData `json:"gcp,omitempty"`
+	Scopes   []string             `json:"scopes"`
+	GCP      *vault.GCPData       `json:"gcp,omitempty"`
+	AIStudio *AIStudioManifestRef `json:"aistudio,omitempty"`
+}
+
+// AIStudioManifestRef is the redacted view of vault.AIStudioData
+// for manifest output. Drops KeyMaterial (the secret) and keeps
+// only descriptive fields.
+type AIStudioManifestRef struct {
+	UID         string `json:"uid"`
+	DisplayName string `json:"display_name,omitempty"`
+	ProjectID   string `json:"project_id,omitempty"`
+	CreatedAt   string `json:"created_at,omitempty"`
+}
+
+func aiStudioManifestRef(d *vault.AIStudioData) *AIStudioManifestRef {
+	if d == nil {
+		return nil
+	}
+	r := &AIStudioManifestRef{
+		UID:         d.UID,
+		DisplayName: d.DisplayName,
+		ProjectID:   d.ProjectID,
+	}
+	if !d.CreatedAt.IsZero() {
+		r.CreatedAt = d.CreatedAt.UTC().Format("2006-01-02T15:04:05Z")
+	}
+	return r
 }
 
 // permissionsPayload returns granted scopes (and GCP metadata when
@@ -488,8 +521,9 @@ func permissionsPayload(v vault.Store) (map[string]map[string]AccountPermissions
 			scopes = []string{}
 		}
 		byProvider[c.Provider][c.Account] = AccountPermissions{
-			Scopes: scopes,
-			GCP:    cred.GCP,
+			Scopes:   scopes,
+			GCP:      cred.GCP,
+			AIStudio: aiStudioManifestRef(cred.AIStudio),
 		}
 	}
 	return byProvider, nil

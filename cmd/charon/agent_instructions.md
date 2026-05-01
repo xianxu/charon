@@ -55,6 +55,11 @@ this machine.
           "project_name":    "My Charon Project",
           "vertex_region":   "us-central1",
           "billing_enabled": true
+        },
+        "aistudio": {
+          "uid":          "abc-uid",
+          "display_name": "charon-aistudio",
+          "project_id":   "my-charon-project"
         }
       }
     },
@@ -68,13 +73,17 @@ this machine.
   under `charon run`).
 - `proxy.ca_pem_url` is where your HTTPS client should fetch the CA
   cert it must trust.
-- Each `permissions[provider][account]` is `{scopes, gcp?}`.
+- Each `permissions[provider][account]` is `{scopes, gcp?, aistudio?}`.
   - `scopes`: full URLs of granted OAuth scopes (Google) or empty list
     (admin-key providers).
   - `gcp`: present only on Google accounts that have run charon's
     project setup (`cloud-platform` granted + project picked).
     Carries `project_id` (used in Vertex URLs) and `vertex_region`
     (default region; you can override per-request).
+  - `aistudio`: present when an AI Studio key exists for the account.
+    Metadata only — `uid`, `display_name`, `project_id`. The actual
+    key is **not** surfaced; charon's proxy attaches it to outbound
+    AI Studio requests automatically (so agents never see it).
 
 The manifest is the **single source of truth at runtime**. Read it
 once at startup, cache, and re-read after any user-visible change
