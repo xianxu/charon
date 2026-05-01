@@ -130,13 +130,19 @@ Full spec: [`docs/agent-protocol.md`](docs/agent-protocol.md).
 ## Introspection commands for agents
 
 ```bash
-charon manifest    # JSON: proxy {addr,url,ca_pem_url} + granted scopes per provider/account
-charon scopes      # JSON: catalog of known scopes per provider (what's grantable)
+charon instructions    # Markdown: how to use charon, embedded in this binary
+charon manifest        # JSON: proxy {addr,url,ca_pem_url} + granted scopes per provider/account
+charon scopes          # JSON: catalog of known scopes per provider (what's grantable)
 ```
 
-`charon manifest` is the one call an agent needs to start using charon:
-it returns the proxy address (default `127.0.0.1:8230`), where to fetch
-the CA cert, and the set of accounts with each one's granted scopes.
+`charon instructions` is the canonical agent-facing guide — it ships
+inside the binary so it never drifts from what charon actually does.
+Point your agent at this command first; the rest of the introspection
+endpoints are documented inside.
+
+`charon manifest` is the runtime bootstrap call: proxy address (default
+`127.0.0.1:8230`), CA cert URL, and the set of accounts with each
+one's granted scopes (and Google Cloud project metadata when set up).
 
 ## CLI reference
 
@@ -145,8 +151,10 @@ charon serve [-v] [--audit-log path]   # start the proxy (port 8230 by default)
 charon run -- <cmd>                     # run a child process with proxy env set
 charon auth                             # scope-management TUI
 charon manifest                         # full snapshot for agents (JSON)
+charon instructions                     # agent-facing usage guide (Markdown)
 charon scopes                           # scope catalog (JSON)
 charon status                           # health-check the running proxy
+charon gcp setup <account>              # pick/create GCP project for Gemini
 charon vault set/delete                 # manual token management
 charon service install/uninstall/...    # macOS launchd integration
 ```
