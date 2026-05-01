@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 	"syscall"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/xianxu/charon/internal/providers/gcp"
 	"github.com/xianxu/charon/internal/providers/openai"
 	"github.com/xianxu/charon/internal/proxy"
+	charonruntime "github.com/xianxu/charon/internal/runtime"
 	"github.com/xianxu/charon/internal/service"
 	"github.com/xianxu/charon/internal/tui"
 	"github.com/xianxu/charon/internal/vault"
@@ -98,6 +100,27 @@ func serveCmd() *cobra.Command {
 				Verbose:      verbose,
 				ScopeTracker: proxy.NewScopeTracker(100, 24*time.Hour),
 			}
+
+			// Publish runtime info so other CLI invocations can find
+			// us without --addr. Best-effort: write failure logs but
+			// doesn't abort serve. Removed on graceful shutdown
+			// (signal trap below); stale files from a crash are
+			// tolerated since the next serve overwrites and
+			// `manifest`'s healthz probe surfaces "running: false".
+			if err := charonruntime.Write(listenAddr); err != nil {
+				log.Printf("warning: runtime file write failed: %v", err)
+			} else {
+				log.Printf("runtime file: %s", charonruntime.Path())
+			}
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+			go func() {
+				<-sigCh
+				_ = charonruntime.Remove()
+				os.Exit(0)
+			}()
+			defer charonruntime.Remove()
+
 			return srv.ListenAndServe()
 		},
 	}
@@ -132,10 +155,11 @@ Without arguments, prints the proxy environment variables for debugging.`,
 			}
 
 			// Check proxy is running and fetch CA cert.
-			proxyURL := fmt.Sprintf("http://%s", listenAddr)
+			addr := resolveAddr(cmd)
+			proxyURL := fmt.Sprintf("http://%s", addr)
 			resp, err := http.Get(proxyURL + "/ca.pem")
 			if err != nil {
-				return fmt.Errorf("proxy not reachable at %s — is 'charon serve' running?\n  %w", listenAddr, err)
+				return fmt.Errorf("proxy not reachable at %s — is 'charon serve' running?\n  %w", addr, err)
 			}
 			caPEM, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
@@ -177,7 +201,7 @@ Without arguments, prints the proxy environment variables for debugging.`,
 			env = setEnv(env, "NODE_EXTRA_CA_CERTS", caPath)                   // Node.js (additive)
 			env = setEnv(env, "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH", bundlePath)  // gRPC
 
-			fmt.Fprintf(os.Stderr, "charon: proxying through %s\n", listenAddr)
+			fmt.Fprintf(os.Stderr, "charon: proxying through %s\n", addr)
 
 			// Exec replaces this process with the child.
 			return syscall.Exec(binary, args, env)
@@ -188,12 +212,13 @@ Without arguments, prints the proxy environment variables for debugging.`,
 
 func printProxyInfo(cmd *cobra.Command) error {
 	out := cmd.OutOrStdout()
-	proxyURL := fmt.Sprintf("http://%s", listenAddr)
+	addr := resolveAddr(cmd)
+	proxyURL := fmt.Sprintf("http://%s", addr)
 
 	// Check if proxy is running.
 	resp, err := http.Get(proxyURL + "/healthz")
 	if err != nil {
-		fmt.Fprintf(out, "Proxy: not running (cannot reach %s)\n", listenAddr)
+		fmt.Fprintf(out, "Proxy: not running (cannot reach %s)\n", addr)
 		return nil
 	}
 	resp.Body.Close()
@@ -357,7 +382,7 @@ Headless removal: 'charon vault delete --provider X --account Y'.`,
 				supplier := tokenSupplierFromVault(v, gp, "google", account)
 				return gcp.New(supplier), nil
 			}
-			return tui.Run(v, "", listenAddr, gp, gcpFactory, openaiProv)
+			return tui.Run(v, "", resolveAddr(cmd), gp, gcpFactory, openaiProv)
 		},
 	}
 }
@@ -375,13 +400,39 @@ func setEnv(env []string, key, value string) []string {
 }
 
 // notifyProxyCacheClear tells a running proxy to clear its credential cache.
-// Best-effort — if proxy isn't running, silently ignored.
-func notifyProxyCacheClear() {
-	resp, err := http.Post(fmt.Sprintf("http://%s/cache/clear", listenAddr), "", nil)
+// Best-effort — if proxy isn't running, silently ignored. addr is the
+// resolved proxy address; pass empty to use listenAddr verbatim (callers
+// without a *cobra.Command in scope).
+func notifyProxyCacheClear(addr string) {
+	if addr == "" {
+		addr = listenAddr
+	}
+	resp, err := http.Post(fmt.Sprintf("http://%s/cache/clear", addr), "", nil)
 	if err != nil {
 		return // proxy not running, fine
 	}
 	resp.Body.Close()
+}
+
+// resolveAddr decides which proxy address to talk to. Order:
+//  1. Explicit --addr flag wins.
+//  2. Otherwise, read the runtime discovery file (written by
+//     `charon serve` on startup) and use whatever's there.
+//  3. Otherwise fall back to the compile-time default (which is
+//     also the value of listenAddr when the flag wasn't passed).
+//
+// Step 2 means a `charon serve --addr 127.0.0.1:9000` followed by
+// a plain `charon manifest` works without the user specifying
+// --addr twice.
+func resolveAddr(cmd *cobra.Command) string {
+	if cmd.Flags().Changed("addr") {
+		return listenAddr
+	}
+	info, err := charonruntime.Read()
+	if err == nil && info != nil && info.Addr != "" {
+		return info.Addr
+	}
+	return listenAddr
 }
 
 // manifestCmd returns everything an agent needs to use charon: where the
@@ -422,7 +473,7 @@ Loading per-credential data triggers one keychain access per account,
 which may prompt for permission on the first access.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			payload, err := manifestPayload(newVault(), listenAddr)
+			payload, err := manifestPayload(newVault(), resolveAddr(cmd))
 			if err != nil {
 				return err
 			}
@@ -602,10 +653,11 @@ func statusCmd() *cobra.Command {
 		Short: "Show proxy status",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
-			proxyURL := fmt.Sprintf("http://%s/healthz", listenAddr)
+			addr := resolveAddr(cmd)
+			proxyURL := fmt.Sprintf("http://%s/healthz", addr)
 			resp, err := http.Get(proxyURL)
 			if err != nil {
-				fmt.Fprintf(out, "Proxy: not running (cannot reach %s)\n", listenAddr)
+				fmt.Fprintf(out, "Proxy: not running (cannot reach %s)\n", addr)
 				return nil
 			}
 			defer resp.Body.Close()
@@ -658,7 +710,7 @@ func vaultSetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			notifyProxyCacheClear()
+			notifyProxyCacheClear(resolveAddr(cmd))
 			fmt.Fprintf(cmd.OutOrStdout(), "Stored token for %s/%s\n", provider, account)
 			return nil
 		},
@@ -683,7 +735,7 @@ func vaultDeleteCmd() *cobra.Command {
 			if err := v.Delete(provider, account); err != nil {
 				return err
 			}
-			notifyProxyCacheClear()
+			notifyProxyCacheClear(resolveAddr(cmd))
 			fmt.Fprintf(cmd.OutOrStdout(), "Deleted credential for %s/%s\n", provider, account)
 			return nil
 		},
