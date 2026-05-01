@@ -5,9 +5,9 @@ deps: []
 github_issue:
 created: 2026-04-28
 updated: 2026-05-01
-estimate_hours: 5
+estimate_hours: 7.5
 estimate_method: estimate-logic-v2.md (Method A)
-prior_estimate_hours: 25  # v1 estimate; superseded by v2 after #13 actuals
+prior_estimate_hours: 5  # v2 pre-amendment estimate; superseded after M3 added (project management)
 ---
 
 # Google AI providers: Gemini AI Studio + Vertex AI
@@ -102,14 +102,60 @@ Mostly free with the existing Google OAuth flow. Adds:
 Per Google account (e.g. `xianxu@gmail.com`):
 
 - `google:xianxu@gmail.com` — OAuth refresh token (existing)
+- `google:xianxu@gmail.com:gcp` — `{project_id, project_name,
+  vertex_region}` (NEW; populated when `cloud-platform` scope is
+  granted — see M3). Required by Vertex (URL contains project +
+  region) and by the AI Studio key-mint URL.
 - `google:xianxu@gmail.com:aistudio` — minted AI Studio API key +
-  key_id metadata (NEW; only when AI Studio path is used)
+  key_id metadata (NEW; only when AI Studio path is used).
 
-Vertex needs no new entries; uses the existing OAuth token.
+The `:gcp` entry is the bridge: OAuth gives us *who you are*, but
+Vertex's URLs are `/v1/projects/{PROJECT_ID}/locations/{REGION}/...`
+and the AI Studio mint URL is
+`apikeys.googleapis.com/v2/projects/{project_id}/...`. Without it
+agents have to discover the project out-of-band, defeating the
+manifest-as-onestop goal.
+
+### Manifest impact
+
+The new `:gcp` entry surfaces in `charon manifest` so agents can
+construct Vertex URLs without environment variables. Permissions
+shape extends from `{account: [scopes]}` to
+`{account: {scopes: [...], gcp: {project_id, project_name, vertex_region}}}`
+when `cloud-platform` is granted. Backward shape (just a scope list)
+is preserved for accounts without GCP setup.
+
+### Lifecycle of GCP artifacts
+
+Following the same "if charon didn't create it, charon doesn't delete
+it" principle from #13, **and additionally: charon does not delete
+projects it did create**. Rationale:
+
+- Projects can hold non-charon resources the user added (Vertex
+  models, datasets, keys, billing data). Bulk-deleting on
+  `accounts rm` would be destructive beyond charon's scope.
+- Google Cloud Console offers safer deletion semantics
+  (30-day soft delete, billing review, dependency check).
+- The AI Studio key minted under the project still gets
+  revoked on `accounts rm` (M6) — that's a charon-owned
+  artifact and follows the standard rule.
+
+Charon's project actions (M3) are create-and-track only:
+- create project (recorded so future revoke flows can reference it),
+- enable required APIs in it (idempotent),
+- store project_id alongside the credential.
+
+When the user removes the `cloud-platform` scope or revokes the
+account, charon deletes the `:gcp` keychain entry but leaves the
+GCP project standing. Logged in audit so the user can find it
+later if they want to clean up.
 
 ## Estimate
 
-**Range: 2.4–7.3 hr. Best guess: ~4.5 hr.**
+**Range: 3.9–11.0 hr. Best guess: ~7.5 hr.** (Pre-amendment: 2.4–7.6
+hr / ~4.5 hr; the new M3 milestone for GCP project management adds
+~2 hr to the midpoint and a third external API to the v2 discovery
+budget.)
 
 Produced via `brain/data/life/42shots/velocity/estimate-logic-v2.md` against `baseline-v2.md`. Method A only.
 
@@ -121,21 +167,23 @@ This estimate **assumes #13 has shipped** — `internal/providers/` interface, `
 |---|---|---|---|---|---|
 | M1 — Add `cloud-platform` scope to Google catalog | Atlas/docs + tiny code | spec pre-resolved | 0.05–0.2 | 0.05–0.2 | 0.1–0.4 |
 | M2 — Vertex routing (per-host + OAuth bearer + smoke test) | Smaller Go module (mirror M5 from #13) | ×0.2 (mirror existing) | 0–0.06 | 0.2–0.5 | 0.2–0.56 |
-| M3 — AI Studio key mint (API Keys API client + Keychain + project/API-enablement detection) | Greenfield Go module (mirror OpenAI provider shape) | ×0.2 (#13 set the pattern) | 0.1–0.4 | 0.3–0.8 | 0.4–1.2 |
-| M4 — AI Studio routing (URL-param key attach) | Smaller Go module + new auth method | ×0.5 (URL-param is genuinely novel auth) | 0.1–0.5 | 0.2–0.5 | 0.3–1.0 |
-| M5 — Revoke flow (API Keys DELETE on `accounts rm`) | Smaller Go module (mirror) | ×0.2 | 0–0.06 | 0.2–0.5 | 0.2–0.56 |
-| M6 — Docs (README, agent-protocol, threat-model touch-up) | Atlas/docs ×3 | n/a | 0.15–0.6 | 0.15–0.6 | 0.3–1.2 |
+| M3 — GCP project management (list + create + API-enable + region picker, TUI integration, store `:gcp` entry, manifest surface) | Greenfield Go module + new TUI flow | ×0.5 (some pattern reuse from #13 entity-list, but cross-API orchestration is new) | 0.3–0.8 | 0.5–1.4 | 0.8–2.2 |
+| M4 — AI Studio key mint (API Keys API client + Keychain) | Greenfield Go module (mirror OpenAI provider shape; project_id now resolved by M3) | ×0.2 (#13 + M3 set the pattern) | 0.1–0.3 | 0.3–0.7 | 0.4–1.0 |
+| M5 — AI Studio routing (URL-param key attach) | Smaller Go module + new auth method | ×0.5 (URL-param is genuinely novel auth) | 0.1–0.5 | 0.2–0.5 | 0.3–1.0 |
+| M6 — Revoke flow (API Keys DELETE on `accounts rm`; `:gcp` entry deleted, project preserved) | Smaller Go module (mirror) | ×0.2 | 0–0.06 | 0.2–0.5 | 0.2–0.56 |
+| M7 — Docs (README, agent-protocol, threat-model touch-up) | Atlas/docs ×3 | n/a | 0.15–0.6 | 0.15–0.6 | 0.3–1.2 |
 | Code review × 1–2 chunks | Process overhead | n/a | 0–0.4 | 0.4–1 | 0.4–1.4 |
-| Real-API discovery (1 external API: Google AI Studio API Keys) | NEW v2 primitive | n/a | 0 | 0.3–0.6 | 0.3–0.6 |
-| **Subtotal (design / impl)** | | | **0.4–2.2** | **1.85–4.7** | **2.25–6.9** |
-| **+30% on design subtotal** | | | +0.12–0.66 | n/a | +0.12–0.66 |
-| **Total** | | | | | **2.4–7.6** |
+| Real-API discovery (3 external APIs: API Keys, Cloud Resource Manager, Service Usage) | NEW v2 primitive | n/a | 0 | 0.9–1.8 | 0.9–1.8 |
+| **Subtotal (design / impl)** | | | **0.7–2.92** | **2.95–7.2** | **3.65–10.12** |
+| **+30% on design subtotal** | | | +0.21–0.88 | n/a | +0.21–0.88 |
+| **Total** | | | | | **3.86–11.0** |
 
 Caveats:
 - Assumes #13 shipped (it has — closed 2026-04-30). The mirror-pattern discount applies.
-- M4's URL-param auth is genuinely novel — Google AI Studio uses `?key=` query param, not Bearer header. New `AuthMethod` const + injection codepath. Wider design range than other M-numbers.
+- **M3 is the heaviest add since the original spec.** It orchestrates three APIs (Cloud Resource Manager for list/create, Service Usage for API enablement, and the Service Usage operation polling for create completion) plus a new TUI flow. Triggered when the user grants `cloud-platform` — until that point the cost is zero.
+- M5's URL-param auth is genuinely novel — Google AI Studio uses `?key=` query param, not Bearer header. New `AuthMethod` const + injection codepath. Wider design range than other M-numbers.
 - Open question on scope granularity (`cloud-platform` broad, narrower might exist) is bounded research — ~5 min, absorbed in M1.
-- Region selection for Vertex: assumed config or per-request, not a TUI feature. If full TUI support added, +0.5 hr design + 0.3 hr impl on M2.
+- Vertex region selection is now first-class (part of M3) rather than a config or per-request decision. Default `us-central1`; user picks at project-setup time.
 
 ## Plan
 
@@ -152,15 +200,50 @@ Sketch milestones:
    with a Gemini request via Vertex endpoint. **[done 2026-05-01;
    no code change needed — existing `.googleapis.com` suffix rule
    already routes Vertex regional hosts. Added regression test.]**
-3. **M3** — AI Studio key mint flow. New `aistudio` subcommand or
-   account-level mint trigger. Integrates with API Keys API.
-4. **M4** — AI Studio routing. Add
+3. **M3** — Google Cloud project management. Triggered when the user
+   grants `cloud-platform` in the TUI. After the OAuth grant
+   completes, charon:
+   1. Calls `cloudresourcemanager.googleapis.com/v1/projects` to
+      list projects the user has access to.
+   2. Presents a TUI picker:
+      - existing projects (id + display name + lifecycle state),
+      - "+ Create new project" → prompts for display name; charon
+        generates a project id (`charon-gemini-<random>` or
+        user-typed); calls `projects.create`; polls the returned
+        long-running operation until ACTIVE.
+   3. Region picker: list of supported Vertex regions (`us-central1`
+      default, `us-east1`, `europe-west4`, `asia-northeast1`, etc.);
+      can be edited later.
+   4. Enable required APIs in the chosen project via
+      `serviceusage.googleapis.com/v1/projects/{id}/services:batchEnable`:
+      `aiplatform.googleapis.com` (Vertex data plane),
+      `apikeys.googleapis.com` (M4 key mint),
+      `generativelanguage.googleapis.com` (AI Studio data plane).
+      Idempotent.
+   5. Stores `{project_id, project_name, vertex_region, created_by_charon}`
+      under `google:<account>:gcp`. The `created_by_charon` flag
+      is informational only — see Lifecycle of GCP artifacts above
+      (charon never deletes projects regardless).
+   6. Surfaces in `charon manifest` under
+      `permissions.google.<account>.gcp`.
+
+   Recovery flow: if the user already has a `:gcp` entry but it's
+   stale (project deleted upstream, or APIs disabled), `charon auth`
+   detects the failure on next OAuth refresh / Vertex call and
+   offers to re-run the project picker.
+
+4. **M4** — AI Studio key mint flow. New `aistudio` subcommand or
+   account-level mint trigger. Uses the project_id from the `:gcp`
+   entry (set by M3). Integrates with API Keys API.
+5. **M5** — AI Studio routing. Add
    `generativelanguage.googleapis.com` to routing; attach the
    minted key (URL param or bearer).
-5. **M5** — Revoke flow on `accounts rm`: if the account has an
+6. **M6** — Revoke flow on `accounts rm`: if the account has an
    `:aistudio` key, call the API Keys API DELETE to revoke before
-   deletion from Keychain.
-6. **M6** — Docs: update README, agent-protocol, threat model.
+   deletion from Keychain. The `:gcp` entry is also deleted from
+   Keychain; the GCP project itself is preserved (see Lifecycle
+   of GCP artifacts).
+7. **M7** — Docs: update README, agent-protocol, threat model.
 
 ## Relationship to #000013
 
@@ -179,7 +262,9 @@ independently.
   GCP APIs). Worth investigating whether Google offers narrower
   scopes (e.g. `apikeys.admin` + `aiplatform.user`) and using
   those instead. The audit is more honest about what charon can
-  do if scopes are minimized.
+  do if scopes are minimized. **[resolved during M1: Google does
+  not publish narrower OAuth scopes for Vertex AI or the API Keys
+  API. `cloud-platform` is the documented requirement for both.]**
 - **Service accounts vs OAuth user accounts**: Vertex commonly
   uses GCP service accounts (JSON key file) for production. For
   personal-use charon, OAuth user accounts are fine. If charon
@@ -187,8 +272,20 @@ independently.
   credential-storage shape (private key file content rather than
   refresh token).
 - **Region defaults**: should the user pick a Vertex region at
-  account-add time, or per-request? Probably account-add (sensible
-  default; agent can override via URL).
+  account-add time, or per-request? **[resolved: account-add time,
+  via M3's region picker. Stored in `:gcp` entry. Agents can still
+  override per-request via URL — that takes precedence.]**
+- **Project under organization vs no-org**: charon-created projects
+  default to *no parent organization*. Users with a GCP org may
+  prefer projects nested under it; deferred to a later iteration
+  (org listing requires extra `cloudresourcemanager.organizations.get`
+  permission).
+- **Quota / billing**: project-create on a personal Google account
+  with no billing attached works for AI Studio (free tier) but
+  Vertex calls will fail with `BILLING_DISABLED`. M3 should detect
+  and surface this; deferred whether to also automate billing
+  attachment (probably no — billing is sensitive and the user
+  should consciously hook up a billing account in Cloud Console).
 
 ## Notes
 
@@ -230,3 +327,15 @@ independently.
   Added explicit hosts to `routing_test.go` as a regression guard.
   Atlas updated. Smoke test deferred to user (requires real account
   with `cloud-platform` granted + a real Gemini call).
+
+- **2026-05-01 — Spec amended: new M3 = GCP project management.**
+  Smoke-testing M2 surfaced that OAuth tokens alone are insufficient
+  for Vertex (URLs need project+region) and for AI Studio key minting
+  (mint URL needs project_id). Added a full project-management
+  milestone: list/create projects, enable APIs, pick region, store
+  metadata under `google:<account>:gcp`, surface in `charon manifest`.
+  Old M3–M6 renumbered to M4–M7. Storage shape, manifest impact, and
+  GCP-artifact lifecycle (charon doesn't delete projects, even ones
+  it created) documented. Estimate revised from 2.4–7.6 to 3.86–11.0
+  hr; the additional ~2 hr is M3 itself plus two new external APIs
+  (Cloud Resource Manager, Service Usage) for v2-method discovery.
