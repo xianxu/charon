@@ -130,28 +130,41 @@ if resp.status_code == 407:
 Knowing *what* to put in `X-Charon-Scope` is the harder problem. A few
 strategies:
 
-### Programmatic: query charon's catalog and granted scopes
+### Programmatic: query charon's manifest and scope catalog
 
 ```bash
-charon scopes                              # what scopes EXIST per provider
-charon permissions                         # what scopes are GRANTED per account
-charon permissions google                  # filter to one provider
-charon permissions google user@gmail.com   # exact account
+charon manifest    # what charon offers right now: proxy addr + granted scopes
+charon scopes      # what scopes EXIST per provider (catalog of grantables)
 ```
+
+`charon manifest` is the single call an agent needs to start using
+charon. Shape:
+
+```json
+{
+  "proxy": {
+    "addr":       "127.0.0.1:8230",
+    "url":        "http://127.0.0.1:8230",
+    "ca_pem_url": "http://127.0.0.1:8230/ca.pem"
+  },
+  "permissions": {
+    "google": {"a@gmail.com": ["scopes..."], "b@gmail.com": ["scopes..."]},
+    "dropbox": {"...": [...]}
+  }
+}
+```
+
+The `proxy` section tells the agent where to send traffic (use `url`
+as `HTTPS_PROXY`) and where to fetch the trust root (`GET ca_pem_url`).
+The `permissions` section tells it which accounts exist and what each
+one currently has granted.
 
 `charon scopes` outputs a JSON object keyed by provider name. Each
 value is the provider's scope catalog with `short` (e.g.
 `gmail.readonly`), `full` (the URL the provider uses), `description`,
-and `required` (always-granted by charon).
-
-`charon permissions` queries the keychain — different shape per arg
-count:
-- no args: `{"google":{"a@gmail.com":[scopes...],...},"dropbox":{...}}`
-- one arg (provider): `{"a@gmail.com":[scopes...],...}`
-- two args (provider, account): `[scopes...]`
-
-Use these at code-write time or runtime to discover providers and map
-"I want to read Gmail" to a concrete scope short name.
+and `required` (always-granted by charon). Use it at code-write time
+or runtime to map "I want to read Gmail" to a concrete scope short
+name.
 
 ```bash
 $ charon scopes | jq 'keys'

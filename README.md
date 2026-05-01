@@ -130,11 +130,13 @@ Full spec: [`docs/agent-protocol.md`](docs/agent-protocol.md).
 ## Introspection commands for agents
 
 ```bash
-charon scopes                              # JSON: catalog of known scopes per provider
-charon permissions                         # JSON: granted scopes per provider/account
-charon permissions google user@gmail.com   # JSON: one account's granted scopes
-charon accounts                            # plain list of stored accounts
+charon manifest    # JSON: proxy {addr,url,ca_pem_url} + granted scopes per provider/account
+charon scopes      # JSON: catalog of known scopes per provider (what's grantable)
 ```
+
+`charon manifest` is the one call an agent needs to start using charon:
+it returns the proxy address (default `127.0.0.1:8230`), where to fetch
+the CA cert, and the set of accounts with each one's granted scopes.
 
 ## CLI reference
 
@@ -142,9 +144,8 @@ charon accounts                            # plain list of stored accounts
 charon serve [-v] [--audit-log path]   # start the proxy (port 8230 by default)
 charon run -- <cmd>                     # run a child process with proxy env set
 charon auth                             # scope-management TUI
-charon accounts                         # list stored credentials
-charon scopes                           # catalog (JSON)
-charon permissions [provider [account]] # granted scopes (JSON)
+charon manifest                         # full snapshot for agents (JSON)
+charon scopes                           # scope catalog (JSON)
 charon status                           # health-check the running proxy
 charon vault set/delete                 # manual token management
 charon service install/uninstall/...    # macOS launchd integration

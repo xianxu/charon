@@ -122,13 +122,19 @@ attached and the boundary is broken.
 ### Run
 
 ```bash
-~/.local/bin/charon accounts
+~/.local/bin/charon manifest
 ```
 
 ### Expect
 
-```
-google / testuser@example.com
+A JSON document including:
+
+```json
+{
+  "permissions": {
+    "google": {"testuser@example.com": [...]}
+  }
+}
 ```
 
 No dialog, no prompt. (May see a one-time "Always Allow / Allow / Deny"
@@ -139,7 +145,7 @@ runs are silent. This is independent of the ACL — the OS just confirms
 
 ### Pass criteria
 
-After at most one one-time confirmation, repeated `charon accounts`
+After at most one one-time confirmation, repeated `charon manifest`
 invocations succeed silently.
 
 ---
@@ -214,7 +220,7 @@ security find-generic-password -s charon -a "google:testuser@example.com" -w
 # (Click Deny — confirms ACL still gating.)
 
 # Charon-side read should still be silent
-~/.local/bin/charon accounts
+~/.local/bin/charon manifest
 ```
 
 ### Expect
@@ -252,8 +258,8 @@ security find-generic-password -s charon     -a "google:devtest@example.com" 2>&
 # First should print a fresh cdat. Second should say "could not be found".
 
 # Signed binary's view of accounts should NOT include devtest
-~/.local/bin/charon accounts
-# Should NOT include devtest@example.com.
+~/.local/bin/charon manifest
+# permissions.google should NOT include devtest@example.com.
 
 # Cleanup
 /tmp/charon-unsigned vault delete --provider google --account devtest@example.com
@@ -263,7 +269,7 @@ rm /tmp/charon-unsigned
 ### Expect
 
 The dev write is in `charon-dev` only, invisible to the signed binary's
-`accounts` enumeration.
+`manifest` enumeration.
 
 ### Pass criteria
 
@@ -293,7 +299,7 @@ codesign -dv ~/.local/bin/charon 2>&1 | grep -E "Identifier|Authority"
 # Expect: Identifier=com.charon.cli, Authority=Charon Self-Signed
 
 # Read entries written before this rebuild
-~/.local/bin/charon accounts
+~/.local/bin/charon manifest
 # Should include testuser@example.com without prompting (or with at most
 # one-time first-access confirmation; click Always Allow).
 ```
@@ -305,7 +311,7 @@ first-access confirmation. The ACL didn't break despite the new cdhash.
 
 ### Pass criteria
 
-`charon accounts` succeeds. If reads now prompt every time, the ACL is
+`charon manifest` succeeds. If reads now prompt every time, the ACL is
 pinned too tightly (e.g. by cdhash) and `make install` is broken.
 
 ---

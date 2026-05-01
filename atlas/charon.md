@@ -261,9 +261,8 @@ Apply paths:
 charon serve [-v] [--audit-log path]                  # start proxy
 charon run -- <cmd>                                    # run child with proxy env
 charon auth                                            # scope-management TUI
-charon accounts                                        # list credentials (provider/account)
-charon scopes                                          # JSON: catalog of known scopes per provider
-charon permissions [provider [account]]                # JSON: granted scopes per provider/account
+charon manifest                                        # JSON: proxy {addr,url,ca_pem_url} + granted scopes (single-shot snapshot for agents)
+charon scopes                                          # JSON: catalog of known scopes per provider (what's grantable)
 charon status                                          # check proxy
 charon vault set/delete                                # manual token management
 charon service install/uninstall/start/stop/status     # OS service management

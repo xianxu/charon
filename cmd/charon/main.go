@@ -40,12 +40,11 @@ func main() {
 	root.AddCommand(serveCmd())
 	root.AddCommand(runCmd())
 	root.AddCommand(authCmd())
-	root.AddCommand(accountsCmd())
+	root.AddCommand(manifestCmd())
 	root.AddCommand(statusCmd())
 	root.AddCommand(serviceCmd())
 	root.AddCommand(vaultCmd())
 	root.AddCommand(scopesCmd())
-	root.AddCommand(permissionsCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -377,61 +376,39 @@ func notifyProxyCacheClear() {
 	resp.Body.Close()
 }
 
-func accountsCmd() *cobra.Command {
+// manifestCmd returns everything an agent needs to use charon: where the
+// proxy listens, where to fetch the CA cert, and the set of accounts plus
+// each account's granted scopes. Single-shot snapshot, JSON-shaped.
+func manifestCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "accounts",
-		Short: "List stored credential accounts",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			v := newVault()
-			creds, err := v.List()
-			if err != nil {
-				return err
-			}
-			out := cmd.OutOrStdout()
-			if len(creds) == 0 {
-				fmt.Fprintln(out, "No accounts stored.")
-				return nil
-			}
-			for _, c := range creds {
-				if len(c.Scopes) > 0 {
-					fmt.Fprintf(out, "  %s / %s (scopes: %s)\n", c.Provider, c.Account, strings.Join(c.Scopes, ", "))
-				} else {
-					fmt.Fprintf(out, "  %s / %s\n", c.Provider, c.Account)
-				}
-			}
-			return nil
-		},
-	}
-}
+		Use:   "manifest",
+		Short: "Print full manifest: proxy address + accounts with granted scopes (JSON)",
+		Long: `Outputs everything an agent needs to use charon as one JSON object:
 
-func permissionsCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "permissions [provider] [account]",
-		Short: "Print granted scopes per provider and account (JSON)",
-		Long: `Outputs granted scopes from the keychain as JSON. Variants:
+  {
+    "proxy": {
+      "addr":       "127.0.0.1:8230",
+      "url":        "http://127.0.0.1:8230",
+      "ca_pem_url": "http://127.0.0.1:8230/ca.pem"
+    },
+    "permissions": {
+      "google": {
+        "user@gmail.com": ["openid", "https://...userinfo.email", ...]
+      }
+    }
+  }
 
-  charon permissions
-    All providers, all accounts. Shape:
-      {"google":{"a@gmail.com":[...],"b@gmail.com":[...]}, ...}
-
-  charon permissions <provider>
-    One provider, all accounts. Shape:
-      {"a@gmail.com":[...],"b@gmail.com":[...]}
-
-  charon permissions <provider> <account>
-    Exact account. Shape:
-      ["openid","https://...userinfo.email","https://...gmail.readonly"]
-
-Each scope string is in the form charon stores it (typically the full
-URL the provider issued tokens against).
+The proxy section reflects the configured --addr (default
+127.0.0.1:8230). The permissions section is keyed by provider then
+account, with each value the list of granted scopes (in the form
+charon stores them — typically the full URL the provider issued
+tokens against).
 
 Loading per-credential data triggers one keychain access per account,
-which may prompt for permission on the first access and is slower
-than 'charon accounts'. Use 'charon accounts' if you only need the
-account list without scopes.`,
-		Args: cobra.MaximumNArgs(2),
+which may prompt for permission on the first access.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			payload, err := permissionsPayload(newVault(), args)
+			payload, err := manifestPayload(newVault(), listenAddr)
 			if err != nil {
 				return err
 			}
@@ -445,30 +422,38 @@ account list without scopes.`,
 	}
 }
 
-// permissionsPayload builds the JSON-shaped value for `charon permissions`,
-// scoped to the given args. Pure function — vault is the only IO.
-//
-//	args=[]                  → map[provider]map[account][]scopes
-//	args=[provider]          → map[account][]scopes
-//	args=[provider account]  → []scopes
-func permissionsPayload(v vault.Store, args []string) (any, error) {
+// manifestPayload composes the manifest JSON object. Pure function modulo
+// the vault read in permissionsPayload.
+func manifestPayload(v vault.Store, addr string) (map[string]any, error) {
+	perms, err := permissionsPayload(v)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("http://%s", addr)
+	return map[string]any{
+		"proxy": map[string]string{
+			"addr":       addr,
+			"url":        url,
+			"ca_pem_url": url + "/ca.pem",
+		},
+		"permissions": perms,
+	}, nil
+}
+
+// permissionsPayload returns granted scopes keyed by provider then account,
+// the shape used in the `charon manifest` permissions section. nil-scope
+// credentials normalize to an empty slice so JSON renders [] not null.
+// Per-credential read failures (e.g. keychain ACL denied for one entry)
+// are skipped so a partial snapshot is still returned.
+func permissionsPayload(v vault.Store) (map[string]map[string][]string, error) {
 	summaries, err := v.List()
 	if err != nil {
 		return nil, err
 	}
-
 	byProvider := map[string]map[string][]string{}
 	for _, c := range summaries {
-		if len(args) >= 1 && c.Provider != args[0] {
-			continue
-		}
-		if len(args) >= 2 && c.Account != args[1] {
-			continue
-		}
 		cred, err := v.Get(c.Provider, c.Account)
 		if err != nil {
-			// Skip individual failures; partial output is more useful than
-			// none. Common cause: keychain entry exists but read denied.
 			continue
 		}
 		if _, ok := byProvider[c.Provider]; !ok {
@@ -480,24 +465,7 @@ func permissionsPayload(v vault.Store, args []string) (any, error) {
 		}
 		byProvider[c.Provider][c.Account] = scopes
 	}
-
-	switch len(args) {
-	case 0:
-		return byProvider, nil
-	case 1:
-		accounts := byProvider[args[0]]
-		if accounts == nil {
-			accounts = map[string][]string{}
-		}
-		return accounts, nil
-	default: // 2
-		if accounts, ok := byProvider[args[0]]; ok {
-			if scopes, ok := accounts[args[1]]; ok {
-				return scopes, nil
-			}
-		}
-		return nil, fmt.Errorf("no credential for %s/%s", args[0], args[1])
-	}
+	return byProvider, nil
 }
 
 // providerCatalogs maps each supported OAuth provider to its scope

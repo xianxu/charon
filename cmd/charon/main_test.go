@@ -33,7 +33,7 @@ func buildRoot() *cobra.Command {
 	root.PersistentFlags().StringVar(&listenAddr, "addr", "127.0.0.1:8230", "proxy listen address")
 	root.AddCommand(serveCmd())
 	root.AddCommand(runCmd())
-	root.AddCommand(accountsCmd())
+	root.AddCommand(manifestCmd())
 	root.AddCommand(statusCmd())
 	root.AddCommand(vaultCmd())
 	return root
@@ -81,7 +81,7 @@ func TestRootHelp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"serve", "run", "accounts", "status", "vault"} {
+	for _, want := range []string{"serve", "run", "manifest", "status", "vault"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("root help missing subcommand %q", want)
 		}

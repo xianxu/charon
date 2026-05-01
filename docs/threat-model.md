@@ -455,7 +455,7 @@ zero weakening entitlements:
 - `Charon Security.app` (audit bundle) — hardened from inception.
 - `charon` proper (`~/.local/bin/charon`) — hardened as of
   2026-04-28 ([#000012 item G](../workshop/issues/000012-audit-evolution.md)).
-  Verified functionally: `charon serve`, `charon accounts list`,
+  Verified functionally: `charon serve`, `charon manifest`,
   and proxied requests all work under hardened-runtime defaults.
 
 Defaults in effect: `DYLD_INSERT_LIBRARIES` blocked, debugger attach
