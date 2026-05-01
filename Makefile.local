@@ -41,9 +41,10 @@ run: build
 # the file-backed dev vault at ~/.local/share/charon/, so dev work
 # does not touch prod keychain entries.
 #
-# Production is NOT restored on exit — Ctrl+C just kills the dev
-# proxy. Run `make install` (or `make reinstall`) when you're done
-# to bring the launchd service back up.
+# An EXIT trap prints a reminder when Ctrl+C / kill / normal exit
+# fires, so the user is loudly told that production is still down.
+# Production is NOT auto-restored — the trap only complains. Run
+# `make install` (or `make reinstall`) when you're done.
 dev: build
 	@echo "==> Stopping production charon service..."
 	@~/.local/bin/charon service uninstall 2>/dev/null || true
@@ -52,8 +53,12 @@ dev: build
 	@echo "    Vault: ~/.local/share/charon/ (separate from prod keychain)"
 	@echo "    Listen: 127.0.0.1:8230"
 	@echo ""
-	@echo "    When done, run 'make install' to restore production."
-	@echo ""
+	@trap 'echo ""; \
+	       echo "================================================================"; \
+	       echo "  Production charon proxy is NOT running."; \
+	       echo "  Run:  make install"; \
+	       echo "  to restore the launchd service."; \
+	       echo "================================================================"' EXIT; \
 	./bin/charon serve -v
 
 test-integration:
