@@ -158,6 +158,7 @@ func TestRefresh_PreservesSidecars(t *testing.T) {
 	}
 
 	in := &vault.Credential{
+		Type:         vault.TypeOAuth,
 		Provider:     "google",
 		Account:      "alice@gmail.com",
 		AccessToken:  "stale",
@@ -165,6 +166,8 @@ func TestRefresh_PreservesSidecars(t *testing.T) {
 		Scopes:       []string{"openid"},
 		GCP:          &vault.GCPData{ProjectID: "p", VertexRegion: "us-central1"},
 		AIStudio:     &vault.AIStudioData{UID: "uid", KeyMaterial: "AIzaSy_FAKE"},
+		AdminKey:     &vault.AdminKeyData{OrgID: "org-x", KeyMaterial: "sk-xxx"},
+		Catalog:      &vault.CatalogData{KeyMaterial: "paste-key"},
 	}
 	out, err := gp.Refresh(in)
 	if err != nil {
@@ -173,17 +176,25 @@ func TestRefresh_PreservesSidecars(t *testing.T) {
 	if out.AccessToken != "new-tok" {
 		t.Errorf("AccessToken = %q, want new-tok", out.AccessToken)
 	}
-	if out.GCP == nil {
-		t.Fatal("GCP sidecar dropped during Refresh — token rotation must not wipe GCP metadata")
+	if out.Type != vault.TypeOAuth {
+		t.Errorf("Type = %q, want %q", out.Type, vault.TypeOAuth)
 	}
-	if out.GCP.ProjectID != "p" {
-		t.Errorf("GCP.ProjectID = %q, want p", out.GCP.ProjectID)
+	if out.GCP == nil || out.GCP.ProjectID != "p" {
+		t.Errorf("GCP sidecar dropped or modified: %+v", out.GCP)
 	}
-	if out.AIStudio == nil {
-		t.Fatal("AIStudio sidecar dropped during Refresh — token rotation must not wipe minted key")
+	if out.AIStudio == nil || out.AIStudio.KeyMaterial != "AIzaSy_FAKE" {
+		t.Errorf("AIStudio sidecar dropped or modified: %+v", out.AIStudio)
 	}
-	if out.AIStudio.KeyMaterial != "AIzaSy_FAKE" {
-		t.Errorf("AIStudio.KeyMaterial = %q, want AIzaSy_FAKE", out.AIStudio.KeyMaterial)
+	// AdminKey/Catalog aren't typical on a Google OAuth credential
+	// in practice — but Refresh should preserve any sidecar a caller
+	// passed in, regardless of whether it makes semantic sense for
+	// this provider. Future-proofs against a refactor that drops
+	// fields it "doesn't think apply".
+	if out.AdminKey == nil || out.AdminKey.OrgID != "org-x" {
+		t.Errorf("AdminKey sidecar dropped or modified: %+v", out.AdminKey)
+	}
+	if out.Catalog == nil || out.Catalog.KeyMaterial != "paste-key" {
+		t.Errorf("Catalog sidecar dropped or modified: %+v", out.Catalog)
 	}
 }
 

@@ -45,7 +45,7 @@ Example:
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			account := args[0]
-			return runGCPSetup(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), newVault(), account)
+			return runGCPSetup(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), newVault(), account, resolveAddr(cmd))
 		},
 	}
 }
@@ -53,7 +53,7 @@ Example:
 // runGCPSetup is the CLI entry: builds the production gcp.Client
 // and a stdin Picker, then defers to executeGCPSetup. Production
 // path lives here; tests target executeGCPSetup directly.
-func runGCPSetup(ctx context.Context, in io.Reader, out io.Writer, v vault.Store, account string) error {
+func runGCPSetup(ctx context.Context, in io.Reader, out io.Writer, v vault.Store, account string, addr string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -73,7 +73,15 @@ func runGCPSetup(ctx context.Context, in io.Reader, out io.Writer, v vault.Store
 	tokens := tokenSupplierFromVault(v, gp, "google", account)
 	client := gcp.New(tokens)
 
-	return executeGCPSetup(ctx, v, account, client, newStdinPicker(in, out), out)
+	if err := executeGCPSetup(ctx, v, account, client, newStdinPicker(in, out), out); err != nil {
+		return err
+	}
+	// Proxy cache invalidation: the credential we just persisted
+	// has new GCP/AIStudio sidecars; a still-running proxy may have
+	// cached tokens that predate the change. Best-effort flush
+	// (silent if proxy isn't running).
+	notifyProxyCacheClear(addr)
+	return nil
 }
 
 // executeGCPSetup runs the orchestrator and persists the result.

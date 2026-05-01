@@ -215,7 +215,7 @@ func TestRunGCPSetup_RejectsAccountMissingCloudPlatform(t *testing.T) {
 			"https://www.googleapis.com/auth/gmail.readonly",
 		},
 	})
-	err := runGCPSetup(context.Background(), strings.NewReader(""), &bytes.Buffer{}, v, "x@gmail.com")
+	err := runGCPSetup(context.Background(), strings.NewReader(""), &bytes.Buffer{}, v, "x@gmail.com", "")
 	if err == nil {
 		t.Fatal("expected error when cloud-platform scope is missing")
 	}
@@ -226,7 +226,7 @@ func TestRunGCPSetup_RejectsAccountMissingCloudPlatform(t *testing.T) {
 
 func TestRunGCPSetup_RejectsUnknownAccount(t *testing.T) {
 	v := memory.New()
-	err := runGCPSetup(context.Background(), strings.NewReader(""), &bytes.Buffer{}, v, "ghost@gmail.com")
+	err := runGCPSetup(context.Background(), strings.NewReader(""), &bytes.Buffer{}, v, "ghost@gmail.com", "")
 	if err == nil {
 		t.Fatal("expected error for unknown account")
 	}

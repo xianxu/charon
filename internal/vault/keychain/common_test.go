@@ -38,6 +38,22 @@ func TestStoredCredentialRoundTripsAllPayloads(t *testing.T) {
 			ProjectID:   "alice-charon",
 			CreatedAt:   time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
 		},
+		// AdminKey / Catalog typically don't co-exist with TypeOAuth
+		// in production, but storedCredential's job is to round-trip
+		// every payload faithfully — adding a new field to
+		// vault.Credential without matching it here silently drops
+		// data on the production keychain path.
+		AdminKey: &vault.AdminKeyData{
+			OrgID:       "org-x",
+			OrgLabel:    "alice@gmail.com",
+			ProjectID:   "proj-y",
+			KeyID:       "key_z",
+			KeyMaterial: "sk-fake",
+		},
+		Catalog: &vault.CatalogData{
+			KeyMaterial: "paste-key-fake",
+			AddedAt:     time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
+		},
 	}
 
 	// Marshal → unmarshal mirrors the production write/read path.
@@ -75,5 +91,17 @@ func TestStoredCredentialRoundTripsAllPayloads(t *testing.T) {
 	}
 	if out.AIStudio.UID != in.AIStudio.UID {
 		t.Errorf("UID = %q, want %q", out.AIStudio.UID, in.AIStudio.UID)
+	}
+	if out.AdminKey == nil {
+		t.Fatalf("AdminKey sidecar lost in keychain round-trip; serialized form: %s", data)
+	}
+	if out.AdminKey.OrgID != in.AdminKey.OrgID {
+		t.Errorf("AdminKey.OrgID = %q, want %q", out.AdminKey.OrgID, in.AdminKey.OrgID)
+	}
+	if out.Catalog == nil {
+		t.Fatalf("Catalog sidecar lost in keychain round-trip; serialized form: %s", data)
+	}
+	if out.Catalog.KeyMaterial != in.Catalog.KeyMaterial {
+		t.Errorf("Catalog.KeyMaterial = %q, want %q", out.Catalog.KeyMaterial, in.Catalog.KeyMaterial)
 	}
 }

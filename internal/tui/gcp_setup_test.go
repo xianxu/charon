@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -288,6 +289,23 @@ func TestGCPSetup_CtrlCQuitsFromAnyState(t *testing.T) {
 				return m
 			},
 		},
+		{
+			name: "billingBlocked",
+			setup: func() gcpSetupModel {
+				m := newGCPSetupModel(&fakeGCPClient{
+					listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
+					billing:    &gcp.BillingInfo{BillingEnabled: false},
+				}, "u@gmail.com", nil, false)
+				m, _ = m.Update(runCmd(m.initCmd()))
+				m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				m, _ = m.Update(runCmd(cmd))
+				m, _ = m.Update(m.checkBillingCmd()())
+				if m.state != gcpStateBillingBlocked {
+					panic(fmt.Sprintf("setup wrong: state = %d, want billingBlocked", m.state))
+				}
+				return m
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -302,6 +320,99 @@ func TestGCPSetup_CtrlCQuitsFromAnyState(t *testing.T) {
 				t.Errorf("expected tea.QuitMsg from ctrl+c, got %T", cmd())
 			}
 		})
+	}
+}
+
+// Billing disabled blocks the flow at gcpStateBillingBlocked
+// instead of falling through to region pick. The user can:
+//   - press 'r' to re-check (transitions to billingCheck and
+//     re-issues the cmd; if billing is now enabled, advance);
+//   - press 'c' to continue without billing;
+//   - press 'esc' to cancel the whole flow.
+func TestGCPSetup_BillingDisabledTransitionsToBlocked(t *testing.T) {
+	fake := &fakeGCPClient{
+		listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
+		billing:    &gcp.BillingInfo{BillingEnabled: false},
+	}
+	m := newGCPSetupModel(fake, "u@gmail.com", nil, false)
+	m, _ = m.Update(runCmd(m.initCmd()))
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // pick project → enabling
+	m, _ = m.Update(runCmd(cmd))                       // enable result → billingCheck
+	m, _ = m.Update(m.checkBillingCmd()())             // billing result → blocked
+	if m.state != gcpStateBillingBlocked {
+		t.Fatalf("state = %d, want billingBlocked (billing returned false)", m.state)
+	}
+	if !strings.Contains(m.View(), "Billing setup required") {
+		t.Errorf("view should announce blocked state: %s", m.View())
+	}
+}
+
+// Pressing 'r' on the blocked screen re-checks billing. If billing
+// is now linked, the flow advances to region pick.
+func TestGCPSetup_BillingBlocked_RetryAfterLink_Advances(t *testing.T) {
+	fake := &fakeGCPClient{
+		listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
+		billing:    &gcp.BillingInfo{BillingEnabled: false},
+	}
+	m := newGCPSetupModel(fake, "u@gmail.com", nil, false)
+	m, _ = m.Update(runCmd(m.initCmd()))
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = m.Update(runCmd(cmd))
+	m, _ = m.Update(m.checkBillingCmd()())
+	if m.state != gcpStateBillingBlocked {
+		t.Fatalf("setup wrong, state=%d", m.state)
+	}
+
+	// User links billing in another tab — flip the fake server's
+	// billing response to true, then press 'r'.
+	fake.billing.BillingEnabled = true
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if m.state != gcpStateBillingCheck {
+		t.Fatalf("after r, state = %d, want billingCheck", m.state)
+	}
+	m, _ = m.Update(runCmd(cmd)) // re-check fires checkBillingCmd
+	if m.state != gcpStatePickingRegion {
+		t.Fatalf("after re-check, state = %d, want pickingRegion (billing now enabled)", m.state)
+	}
+}
+
+// Pressing 'c' on the blocked screen proceeds without billing —
+// transitions to region pick with a warning notice.
+func TestGCPSetup_BillingBlocked_ContinueWithoutBilling(t *testing.T) {
+	fake := &fakeGCPClient{
+		listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
+		billing:    &gcp.BillingInfo{BillingEnabled: false},
+	}
+	m := newGCPSetupModel(fake, "u@gmail.com", nil, false)
+	m, _ = m.Update(runCmd(m.initCmd()))
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = m.Update(runCmd(cmd))
+	m, _ = m.Update(m.checkBillingCmd()())
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if m.state != gcpStatePickingRegion {
+		t.Fatalf("after c, state = %d, want pickingRegion", m.state)
+	}
+	if !strings.Contains(m.notice, "Proceeding without billing") {
+		t.Errorf("expected proceeding-without-billing notice, got %q", m.notice)
+	}
+}
+
+// Esc on the blocked screen cancels the whole setup flow.
+func TestGCPSetup_BillingBlocked_EscCancels(t *testing.T) {
+	fake := &fakeGCPClient{
+		listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
+		billing:    &gcp.BillingInfo{BillingEnabled: false},
+	}
+	m := newGCPSetupModel(fake, "u@gmail.com", nil, false)
+	m, _ = m.Update(runCmd(m.initCmd()))
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = m.Update(runCmd(cmd))
+	m, _ = m.Update(m.checkBillingCmd()())
+
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if _, ok := runCmd(cmd).(gcpSetupCancelMsg); !ok {
+		t.Errorf("expected gcpSetupCancelMsg from esc on blocked screen, got %T", runCmd(cmd))
 	}
 }
 
