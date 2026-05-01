@@ -131,6 +131,71 @@ func TestLoadRowsGrantedFirstPreservesCatalogOrder(t *testing.T) {
 	}
 }
 
+// Enter on a realized cloud-platform row must emit gcpSetupRequestMsg
+// (carrying the account) instead of the default apply/quit. The user
+// found the previous "quit silently" behavior confusing — granting
+// the scope authorizes API calls but doesn't get them a usable
+// project, so enter is repurposed here as the natural "manage
+// project" affordance.
+func TestEnterOnRealizedCloudPlatformLaunchesGCPSetup(t *testing.T) {
+	v := vaultWithBase("alice@gmail.com",
+		"https://www.googleapis.com/auth/cloud-platform",
+	)
+	rows, _ := loadScopeRows(v, "alice@gmail.com", nil)
+	m := newScopesModel("alice@gmail.com", rows, nil)
+	m.focus = focusList
+
+	// Move cursor to the cloud-platform row.
+	for i, idx := range m.filtered {
+		if m.rows[idx].full == "https://www.googleapis.com/auth/cloud-platform" {
+			m.cursor = i
+			break
+		}
+	}
+	if m.rows[m.filtered[m.cursor]].full != "https://www.googleapis.com/auth/cloud-platform" {
+		t.Fatal("test setup: cursor not on cloud-platform row")
+	}
+
+	updated, cmd := m.updateList(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a tea.Cmd; got nil")
+	}
+	msg := cmd()
+	req, ok := msg.(gcpSetupRequestMsg)
+	if !ok {
+		t.Fatalf("expected gcpSetupRequestMsg, got %T (state=%d)", msg, updated.state)
+	}
+	if req.account != "alice@gmail.com" {
+		t.Errorf("account = %q", req.account)
+	}
+}
+
+// Enter on a non-realized cloud-platform row falls through to the
+// default behavior — toggling cloud-platform off then back on must
+// not accidentally trigger setup.
+func TestEnterOnUngrantedCloudPlatformDoesNotLaunchSetup(t *testing.T) {
+	v := vaultWithBase("alice@gmail.com")
+	rows, _ := loadScopeRows(v, "alice@gmail.com", nil)
+	m := newScopesModel("alice@gmail.com", rows, nil)
+	m.focus = focusList
+
+	for i, idx := range m.filtered {
+		if m.rows[idx].full == "https://www.googleapis.com/auth/cloud-platform" {
+			m.cursor = i
+			break
+		}
+	}
+
+	_, cmd := m.updateList(tea.KeyMsg{Type: tea.KeyEnter})
+	// With no pending changes and no realized cloud-platform, enter
+	// is the legacy "quit" path. Specifically NOT a gcpSetupRequest.
+	if cmd != nil {
+		if _, ok := cmd().(gcpSetupRequestMsg); ok {
+			t.Error("did not expect gcpSetupRequestMsg for unrealized row")
+		}
+	}
+}
+
 func TestLoadRowsAppendsCustomScopes(t *testing.T) {
 	v := memory.New()
 	v.Set(&vault.Credential{

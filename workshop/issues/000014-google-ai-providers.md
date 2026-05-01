@@ -430,3 +430,30 @@ independently.
   stdin picker tested via in-memory readers (covers existing
   pick by number, new-project with name, default region,
   numeric region, free-form region, out-of-range rejection).
+
+- **2026-05-01 — M3 chunk-4: TUI integration (enter on cloud-platform).**
+  User report: "hitting return on cloud-platform quits to parent
+  level when permission's already granted, this is confusing." Fix:
+  enter on a realized cloud-platform row now triggers the GCP
+  project setup flow, not the default apply/quit.
+
+  New `gcpSetupModel` (state machine: loading → pickProject →
+  [editingNewName → creatingProject] → enabling → billingCheck →
+  pickingRegion → done). All async ops emit messages handled by
+  Update; ctrl+c / esc cancels from any state. Top-level model adds
+  `screenGCPSetup` and handles `gcpSetupRequestMsg` /
+  `gcpSetupDoneMsg` / `gcpSetupCancelMsg`. On done, persists the
+  result onto the existing `google:<account>` credential as a
+  `GCPData` sidecar and flushes the proxy cache.
+
+  `tui.Run` accepts an optional `gcpFactory func(account) (GCPSetupClient, error)`;
+  `cmd/charon authCmd` wires it from the existing
+  `tokenSupplierFromVault` helper. Without the factory, enter on
+  cloud-platform falls back to a status hint pointing at
+  `charon gcp setup`.
+
+  Tests cover: existing-pick → done message, list error → error
+  state, new-project flow with sync-Done op, billing read failure
+  non-fatal, esc cancel, region picker numeric nav, and the
+  scope-view enter-on-cloud-platform behavior (positive +
+  negative cases).

@@ -136,7 +136,7 @@ func Setup(ctx context.Context, c *Client, picker Picker) (*Result, error) {
 	case choice.NewName != "":
 		id := choice.NewID
 		if id == "" {
-			id = generateProjectID()
+			id = GenerateProjectID()
 		}
 		picker.Notify("Creating project %q (id: %s) — this typically takes 5-30 seconds.", choice.NewName, id)
 		op, err := c.CreateProject(ctx, id, choice.NewName, nil)
@@ -188,12 +188,12 @@ func Setup(ctx context.Context, c *Client, picker Picker) (*Result, error) {
 	return res, nil
 }
 
-// generateProjectID returns a globally-unique project id starting
+// GenerateProjectID returns a globally-unique project id starting
 // with `charon-gemini-` so the user can identify charon-created
 // projects in Cloud Console. 8 hex chars = 32 bits of entropy,
 // adequate for the per-user namespace where collisions are
-// vanishingly unlikely.
-func generateProjectID() string {
+// vanishingly unlikely. Exported for the TUI's parallel orchestrator.
+func GenerateProjectID() string {
 	var buf [4]byte
 	if _, err := rand.Read(buf[:]); err != nil {
 		// crypto/rand failing on Darwin/Linux is "machine is

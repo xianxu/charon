@@ -18,6 +18,12 @@ import (
 	"golang.org/x/term"
 )
 
+// cloudPlatformScope is the full URL form of the Google Cloud
+// "all GCP APIs" scope. The scope view treats a realized row with
+// this URL specially: enter triggers the GCP project setup flow
+// (#14 M3) instead of the default apply/quit.
+const cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
+
 // scopeRow is one displayable row in the scope view.
 type scopeRow struct {
 	short           string
@@ -523,6 +529,23 @@ func (m scopesModel) updateList(msg tea.KeyMsg) (scopesModel, tea.Cmd) {
 			}
 		}
 	case "enter":
+		// Special-case: enter on a realized cloud-platform row launches
+		// the Google Cloud project setup flow rather than the
+		// default apply/quit. The cloud-platform scope by itself only
+		// authorizes API calls; project_id + region are also required
+		// for Vertex / AI Studio. Tying the two flows together at the
+		// row keeps the user from getting stuck on "I granted it,
+		// nothing changed". Pending changes elsewhere are not
+		// dropped — they stay pending while the GCP flow runs.
+		if len(m.filtered) > 0 {
+			i := m.filtered[m.cursor]
+			r := m.rows[i]
+			if r.full == cloudPlatformScope && r.realized {
+				account := m.account
+				return m, func() tea.Msg { return gcpSetupRequestMsg{account: account} }
+			}
+		}
+
 		if !m.pendingChanges() {
 			return m, func() tea.Msg { return scopesQuitMsg{} }
 		}

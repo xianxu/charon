@@ -309,7 +309,7 @@ func TestSetup_RejectsEmptyRegion(t *testing.T) {
 func TestGenerateProjectID_FormatAndUniqueness(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 100; i++ {
-		id := generateProjectID()
+		id := GenerateProjectID()
 		if !strings.HasPrefix(id, "charon-gemini-") {
 			t.Errorf("id %q missing prefix", id)
 		}

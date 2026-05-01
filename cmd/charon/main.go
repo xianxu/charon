@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/xianxu/charon/internal/oauth"
+	"github.com/xianxu/charon/internal/providers/gcp"
 	"github.com/xianxu/charon/internal/providers/openai"
 	"github.com/xianxu/charon/internal/proxy"
 	"github.com/xianxu/charon/internal/service"
@@ -350,7 +351,12 @@ Headless removal: 'charon vault delete --provider X --account Y'.`,
 			// anthropic package stays in the tree for future use by the
 			// catalog flow's optional revoke pathway. See charon#13 Log.
 			openaiProv := openai.New()
-			return tui.Run(newVault(), "", listenAddr, gp, openaiProv)
+			v := newVault()
+			gcpFactory := func(account string) (tui.GCPSetupClient, error) {
+				supplier := tokenSupplierFromVault(v, gp, "google", account)
+				return gcp.New(supplier), nil
+			}
+			return tui.Run(v, "", listenAddr, gp, gcpFactory, openaiProv)
 		},
 	}
 }

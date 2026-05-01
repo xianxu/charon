@@ -16,7 +16,11 @@ import (
 // provider), addr (badges + cache-clear), auth (OAuth apply), and
 // admin-key providers via WithAdminKeyProvider for OpenAI/Anthropic
 // flows.
-func Run(v vault.Store, account, addr string, auth Authenticator, adminProviders ...providers.Provider) error {
+//
+// gcpFactory is optional: when non-nil, the TUI offers Google Cloud
+// project setup from a realized cloud-platform row in the scope
+// view. When nil, that path falls back to a status hint.
+func Run(v vault.Store, account, addr string, auth Authenticator, gcpFactory func(account string) (GCPSetupClient, error), adminProviders ...providers.Provider) error {
 	var opts []Option
 	if addr != "" {
 		opts = append(opts, WithDenialFetcher(httpDenialFetcher(addr)))
@@ -24,6 +28,9 @@ func Run(v vault.Store, account, addr string, auth Authenticator, adminProviders
 	}
 	if auth != nil {
 		opts = append(opts, WithAuthenticator(auth))
+	}
+	if gcpFactory != nil {
+		opts = append(opts, WithGCPClientFactory(gcpFactory))
 	}
 	for _, p := range adminProviders {
 		opts = append(opts, WithAdminKeyProvider(p))

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/xianxu/charon/internal/oauth"
@@ -31,6 +32,7 @@ const (
 	screenAdminMint                     // mint a new project key (+ optional create-project step)
 	screenAdminRevoke                   // revoke confirmation modal (project or admin-key cascade)
 	screenAdminKeyDetail                // per-key drill-in (Screen 3b)
+	screenGCPSetup                      // Google Cloud project setup (#14 M3)
 )
 
 // model is the top-level bubbletea model.
@@ -44,6 +46,7 @@ type model struct {
 	adminMint      adminMintModel
 	adminRevoke    adminRevokeModel
 	adminDetail    adminKeyDetailModel
+	gcpSetup       gcpSetupModel
 
 	vault       vault.Store
 	auth        Authenticator
@@ -55,6 +58,13 @@ type model struct {
 	// picker still renders, just without those rows.
 	adminProviders map[string]providers.Provider
 	adminStores    map[string]*providers.AdminKeyStore
+
+	// gcpClientFactory builds a GCP setup client for the given Google
+	// account. nil means GCP setup is unavailable (`charon auth`
+	// invocations from older code paths that haven't wired the
+	// factory) — enter on cloud-platform falls through to a status
+	// hint instead of launching the flow.
+	gcpClientFactory func(account string) (GCPSetupClient, error)
 
 	// activeAdminProvider is the provider whose entity list is on
 	// screen when current==screenAdminKeyList. Used for re-rendering
@@ -87,6 +97,16 @@ func WithAuthenticator(a Authenticator) Option {
 // granted. Empty addr is fine — caller may not be running the proxy.
 func WithProxyAddr(addr string) Option {
 	return func(m *model) { m.proxyAddr = addr }
+}
+
+// WithGCPClientFactory wires the per-account GCP setup client builder
+// used when the user triggers Google Cloud project setup from the
+// scope view. The factory takes the Google account email and returns
+// a client backed by a token supplier that refreshes the OAuth
+// credential as needed. Without this option, "manage project" hints
+// from the scope view are inert — set it from cmd/charon's authCmd.
+func WithGCPClientFactory(f func(account string) (GCPSetupClient, error)) Option {
+	return func(m *model) { m.gcpClientFactory = f }
 }
 
 // WithAdminKeyProvider registers an admin-key provider (OpenAI,
@@ -286,6 +306,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.current = screenScopes
 		return m, nil
 
+	case gcpSetupRequestMsg:
+		return m.openGCPSetup(msg)
+
+	case gcpSetupDoneMsg:
+		return m.handleGCPSetupDone(msg)
+
+	case gcpSetupCancelMsg:
+		// User cancelled out of GCP setup — return to scope view
+		// unchanged. The scope view's row state hasn't moved.
+		m.current = screenScopes
+		return m, nil
+
 	case scopesQuitMsg:
 		// scopesQuitMsg used to terminate the program. With the
 		// provider picker as the new top-level, exiting the scope
@@ -447,7 +479,61 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.scopes, cmd = m.scopes.Update(msg)
 		return m, cmd
+	case screenGCPSetup:
+		var cmd tea.Cmd
+		m.gcpSetup, cmd = m.gcpSetup.Update(msg)
+		return m, cmd
 	}
+	return m, nil
+}
+
+// openGCPSetup constructs a GCP setup model for the requested account
+// and routes the screen there. If no factory is wired (factory is
+// optional), drop a status hint into the scope view and stay there.
+func (m model) openGCPSetup(req gcpSetupRequestMsg) (tea.Model, tea.Cmd) {
+	if m.gcpClientFactory == nil {
+		m.scopes.applyStatus = "GCP setup not wired in this build — run 'charon gcp setup " + req.account + "' from the shell."
+		return m, nil
+	}
+	client, err := m.gcpClientFactory(req.account)
+	if err != nil {
+		m.scopes.applyStatus = fmt.Sprintf("GCP setup unavailable: %v", err)
+		return m, nil
+	}
+	gs := newGCPSetupModel(client, req.account)
+	m.gcpSetup = gs
+	m.current = screenGCPSetup
+	return m, gs.initCmd()
+}
+
+// handleGCPSetupDone persists the result onto the existing OAuth
+// credential and returns to the scope view. Errors during persistence
+// surface as a scope-view status; the upstream GCP state already
+// landed (project created, APIs enabled, etc.) so the user can
+// retry without losing that work.
+func (m model) handleGCPSetupDone(msg gcpSetupDoneMsg) (tea.Model, tea.Cmd) {
+	cred, err := m.vault.Get("google", msg.account)
+	if err != nil {
+		m.scopes.applyStatus = fmt.Sprintf("GCP setup completed upstream but persistence failed: %v", err)
+		m.current = screenScopes
+		return m, nil
+	}
+	cred.GCP = &vault.GCPData{
+		ProjectID:       msg.projectID,
+		ProjectName:     msg.projectName,
+		VertexRegion:    msg.region,
+		CreatedByCharon: msg.createdNew,
+		BillingEnabled:  msg.billing,
+		UpdatedAt:       time.Now().UTC(),
+	}
+	if err := m.vault.Set(cred); err != nil {
+		m.scopes.applyStatus = fmt.Sprintf("GCP setup completed upstream but vault.Set failed: %v", err)
+		m.current = screenScopes
+		return m, nil
+	}
+	m.notifyProxyCacheClear()
+	m.scopes.applyStatus = fmt.Sprintf("Stored project %s (region: %s)", msg.projectID, msg.region)
+	m.current = screenScopes
 	return m, nil
 }
 
@@ -651,6 +737,8 @@ func (m model) View() string {
 			"  Complete the consent flow there. (ctrl+c to abort)\n"
 	case screenScopes:
 		return m.scopes.View()
+	case screenGCPSetup:
+		return m.gcpSetup.View()
 	}
 	return ""
 }
