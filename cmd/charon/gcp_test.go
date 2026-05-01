@@ -89,6 +89,12 @@ func (s *stubPickerCmd) PickProject(ctx context.Context, existing []gcp.Project)
 }
 func (s *stubPickerCmd) PickRegion(ctx context.Context) (string, error) { return s.region, nil }
 func (s *stubPickerCmd) Notify(format string, args ...any)              {}
+func (s *stubPickerCmd) HandleBillingBlock(ctx context.Context, projectID, fixURL string, recheck func(context.Context) (bool, error)) (bool, error) {
+	// Default for cmd-package tests: proceed without blocking.
+	// Tests that exercise the block can replace this stub with a
+	// custom impl as needed.
+	return true, nil
+}
 
 func TestExecuteGCPSetup_PersistsGCPSidecarOnExistingProject(t *testing.T) {
 	srv := happyGCPServer(t, "alpha")

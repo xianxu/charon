@@ -33,6 +33,7 @@ const (
 	gcpStateCreatingProject
 	gcpStateEnabling
 	gcpStateBillingCheck
+	gcpStateBillingBlocked
 	gcpStatePickingRegion
 	gcpStateMintingAIStudio
 	gcpStateError
@@ -244,14 +245,20 @@ func (m gcpSetupModel) Update(msg tea.Msg) (gcpSetupModel, tea.Cmd) {
 		return m, m.checkBillingCmd()
 
 	case gcpBillingCheckedMsg:
-		// Billing read failure is non-fatal — record and proceed.
 		m.billingEnabled = msg.enabled
-		m.state = gcpStatePickingRegion
-		if msg.err != nil {
+		switch {
+		case msg.err != nil:
+			// Read failed (permission, network) — non-fatal.
+			m.state = gcpStatePickingRegion
 			m.notice = fmt.Sprintf("Couldn't read billing info (%v) — proceeding anyway.", msg.err)
-		} else if !msg.enabled {
-			m.notice = "Billing not linked. Vertex calls return BILLING_DISABLED until you link a billing account."
-		} else {
+		case !msg.enabled:
+			// Block here so the user fixes billing before they end
+			// up with calls that fail. Both Vertex and AI Studio
+			// (charon-created projects) need billing.
+			m.state = gcpStateBillingBlocked
+			m.notice = ""
+		default:
+			m.state = gcpStatePickingRegion
 			m.notice = ""
 		}
 		return m, nil
@@ -279,6 +286,8 @@ func (m gcpSetupModel) Update(msg tea.Msg) (gcpSetupModel, tea.Cmd) {
 		return m.updateEditingNewName(keyMsg)
 	case gcpStatePickingRegion:
 		return m.updatePickingRegion(keyMsg)
+	case gcpStateBillingBlocked:
+		return m.updateBillingBlocked(keyMsg)
 	case gcpStateError:
 		// Any key dismisses the error and cancels.
 		return m, func() tea.Msg { return gcpSetupCancelMsg{} }
@@ -343,6 +352,25 @@ func (m gcpSetupModel) updateEditingNewName(msg tea.KeyMsg) (gcpSetupModel, tea.
 	var cmd tea.Cmd
 	m.nameInput, cmd = m.nameInput.Update(msg)
 	return m, cmd
+}
+
+// updateBillingBlocked drives the billing-required screen. r
+// re-checks (calls cloudbilling again); c continues without
+// billing; esc cancels the whole flow.
+func (m gcpSetupModel) updateBillingBlocked(msg tea.KeyMsg) (gcpSetupModel, tea.Cmd) {
+	switch msg.String() {
+	case "r", "R":
+		m.notice = "Re-checking billing..."
+		m.state = gcpStateBillingCheck
+		return m, m.checkBillingCmd()
+	case "c", "C":
+		m.state = gcpStatePickingRegion
+		m.notice = "Proceeding without billing — calls may fail."
+		return m, nil
+	case "esc":
+		return m, func() tea.Msg { return gcpSetupCancelMsg{} }
+	}
+	return m, nil
 }
 
 func (m gcpSetupModel) updatePickingRegion(msg tea.KeyMsg) (gcpSetupModel, tea.Cmd) {
@@ -514,6 +542,16 @@ func (m gcpSetupModel) View() string {
 		b.WriteString(m.notice)
 		b.WriteString("\n\n")
 		b.WriteString(helpStyle.Render("  esc: cancel"))
+	case gcpStateBillingBlocked:
+		b.WriteString("  ")
+		b.WriteString(rowDelStyle.Render("Billing setup required"))
+		b.WriteString("\n\n")
+		fmt.Fprintf(&b, "  Project %s has no billing account linked.\n", m.chosenProject.ProjectID)
+		b.WriteString("  Vertex calls will return BILLING_DISABLED, and AI Studio's free-tier\n")
+		b.WriteString("  quota is 0 for charon-created projects. Both fail until billing is linked.\n\n")
+		b.WriteString("  Open this URL in a browser, link a billing account, then press [r]:\n\n")
+		fmt.Fprintf(&b, "    %s\n\n", gcp.BillingFixURL(m.chosenProject.ProjectID))
+		b.WriteString(helpStyle.Render("  [r] re-check    [c] continue without billing    [esc] cancel"))
 	case gcpStatePickingRegion:
 		b.WriteString(fmt.Sprintf("  Project: %s (%s)\n", m.chosenProject.ProjectID, m.chosenProject.Name))
 		if m.notice != "" {

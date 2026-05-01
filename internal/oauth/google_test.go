@@ -2,8 +2,13 @@ package oauth
 
 import (
 	"encoding/base64"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/xianxu/charon/internal/vault"
 )
 
 func TestParseIDTokenEmail(t *testing.T) {
@@ -123,6 +128,62 @@ func TestRequiredScopesIncluded(t *testing.T) {
 	}
 	if !seen["https://www.googleapis.com/auth/userinfo.email"] {
 		t.Error("requiredGoogleScopes missing userinfo.email")
+	}
+}
+
+// Refresh must carry every non-OAuth sidecar (GCP project metadata,
+// AI Studio key, admin-key/catalog payloads, Type discriminator)
+// from the input credential into the refreshed credential. Without
+// this, every token rotation wipes the user's configured project
+// and minted keys — discovered when an account showed `vertex` but
+// not `ai-studio` in `charon manifest` after a long-running session.
+//
+// Drives the actual HTTP refresh against a stub token endpoint via
+// reflection-free indirection: we override googleTokenURL just for
+// the duration of this test.
+func TestRefresh_PreservesSidecars(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"access_token":"new-tok","expires_in":3600,"token_type":"Bearer"}`)
+	}))
+	defer srv.Close()
+
+	orig := googleTokenURL
+	googleTokenURL = srv.URL
+	defer func() { googleTokenURL = orig }()
+
+	gp, err := NewGoogleProvider()
+	if err != nil {
+		t.Fatalf("NewGoogleProvider: %v", err)
+	}
+
+	in := &vault.Credential{
+		Provider:     "google",
+		Account:      "alice@gmail.com",
+		AccessToken:  "stale",
+		RefreshToken: "rt",
+		Scopes:       []string{"openid"},
+		GCP:          &vault.GCPData{ProjectID: "p", VertexRegion: "us-central1"},
+		AIStudio:     &vault.AIStudioData{UID: "uid", KeyMaterial: "AIzaSy_FAKE"},
+	}
+	out, err := gp.Refresh(in)
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if out.AccessToken != "new-tok" {
+		t.Errorf("AccessToken = %q, want new-tok", out.AccessToken)
+	}
+	if out.GCP == nil {
+		t.Fatal("GCP sidecar dropped during Refresh — token rotation must not wipe GCP metadata")
+	}
+	if out.GCP.ProjectID != "p" {
+		t.Errorf("GCP.ProjectID = %q, want p", out.GCP.ProjectID)
+	}
+	if out.AIStudio == nil {
+		t.Fatal("AIStudio sidecar dropped during Refresh — token rotation must not wipe minted key")
+	}
+	if out.AIStudio.KeyMaterial != "AIzaSy_FAKE" {
+		t.Errorf("AIStudio.KeyMaterial = %q, want AIzaSy_FAKE", out.AIStudio.KeyMaterial)
 	}
 }
 

@@ -18,10 +18,19 @@ type stubPicker struct {
 	region  string
 	pickErr error // returned from PickProject when non-nil
 
-	mu       sync.Mutex
-	notices  []string
-	regCalls int
-	pickCalls int
+	// Billing-block behavior. Defaults are: HandleBillingBlock
+	// returns proceed=true (so most tests don't have to opt in).
+	billingProceed     bool  // honored when billingProceedSet=true
+	billingProceedSet  bool
+	billingErr         error // returned from HandleBillingBlock when non-nil
+	billingRecheckOnce bool  // call recheck() once before returning
+
+	mu                sync.Mutex
+	notices           []string
+	regCalls          int
+	pickCalls         int
+	billingCalls      int
+	lastBillingFixURL string
 }
 
 func (s *stubPicker) PickProject(ctx context.Context, existing []Project) (Choice, error) {
@@ -45,6 +54,29 @@ func (s *stubPicker) Notify(format string, args ...any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.notices = append(s.notices, fmt.Sprintf(format, args...))
+}
+
+// HandleBillingBlock for stub: by default returns proceed=true so
+// existing tests don't have to opt in. Tests that exercise the
+// billing-block flow override stubPicker.billingProceed /
+// billingErr / and consult billingCalls.
+func (s *stubPicker) HandleBillingBlock(ctx context.Context, projectID, fixURL string, recheck func(context.Context) (bool, error)) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.billingCalls++
+	s.lastBillingFixURL = fixURL
+	if s.billingErr != nil {
+		return false, s.billingErr
+	}
+	if s.billingRecheckOnce {
+		// One re-check call for tests that want to exercise the
+		// recheck path; ignore result.
+		_, _ = recheck(ctx)
+	}
+	if s.billingProceedSet {
+		return s.billingProceed, nil
+	}
+	return true, nil
 }
 
 func (s *stubPicker) noticesJoined() string {
@@ -168,12 +200,15 @@ func TestSetup_CreateNewProject(t *testing.T) {
 	if res.Region != "us-east1" {
 		t.Errorf("region = %q", res.Region)
 	}
-	notices := picker.noticesJoined()
-	if !strings.Contains(notices, "BILLING_DISABLED") {
-		t.Errorf("expected BILLING_DISABLED warning in notices, got:\n%s", notices)
+	if picker.billingCalls != 1 {
+		t.Errorf("expected exactly one HandleBillingBlock call, got %d", picker.billingCalls)
 	}
-	if !strings.Contains(notices, "console.cloud.google.com/billing/linkedaccount?project=test-id") {
-		t.Errorf("expected actionable billing link, got:\n%s", notices)
+	if picker.lastBillingFixURL != "https://console.cloud.google.com/billing/linkedaccount?project=test-id" {
+		t.Errorf("expected billing fix URL with project=test-id, got %q", picker.lastBillingFixURL)
+	}
+	notices := picker.noticesJoined()
+	if !strings.Contains(notices, "Billing not linked on test-id") {
+		t.Errorf("expected billing-not-linked notice, got:\n%s", notices)
 	}
 }
 
@@ -248,6 +283,85 @@ func TestSetup_RejectsEmptyChoice(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "empty choice") {
 		t.Errorf("error message: %v", err)
+	}
+}
+
+// Setup must abort when the picker says cancel (proceed=false) on
+// the billing-block. Vertex/AI Studio depend on billing for
+// charon-created projects, so silently proceeding leaves the user
+// with a setup that won't work.
+func TestSetup_BillingDisabled_PickerCancels_AbortsSetup(t *testing.T) {
+	srv, mux := setupServer(t)
+	mux.HandleFunc("/v1/projects", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(projectsListResponse{
+			Projects: []Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
+		})
+	})
+	mux.HandleFunc("/v1/projects/p/services:batchEnable", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(Operation{Done: true})
+	})
+	mux.HandleFunc("/v1/projects/p/billingInfo", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(BillingInfo{BillingEnabled: false})
+	})
+
+	picker := &stubPicker{
+		choice:            Choice{Existing: &Project{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
+		region:            "us-central1",
+		billingProceedSet: true,
+		billingProceed:    false,
+	}
+	c := newTestClient(srv, "tok")
+
+	_, err := Setup(context.Background(), c, picker)
+	if err == nil {
+		t.Fatal("expected setup to abort when picker cancels billing block")
+	}
+	if !strings.Contains(err.Error(), "setup cancelled") {
+		t.Errorf("error message should explain cancellation: %v", err)
+	}
+}
+
+// When the picker calls recheck and billing is now enabled, Setup
+// updates BillingEnabled in the result so the caller persists the
+// fresh state.
+func TestSetup_BillingDisabled_RecheckAfterLink_UpdatesState(t *testing.T) {
+	srv, mux := setupServer(t)
+	mux.HandleFunc("/v1/projects", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(projectsListResponse{
+			Projects: []Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
+		})
+	})
+	mux.HandleFunc("/v1/projects/p/services:batchEnable", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(Operation{Done: true})
+	})
+	// Billing endpoint flips: false on first call, true on subsequent.
+	billingCalls := 0
+	mux.HandleFunc("/v1/projects/p/billingInfo", func(w http.ResponseWriter, r *http.Request) {
+		billingCalls++
+		json.NewEncoder(w).Encode(BillingInfo{BillingEnabled: billingCalls > 1})
+	})
+
+	picker := &stubPicker{
+		choice:             Choice{Existing: &Project{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
+		region:             "us-central1",
+		billingProceedSet:  true,
+		billingProceed:     true,
+		billingRecheckOnce: true,
+	}
+	c := newTestClient(srv, "tok")
+
+	res, err := Setup(context.Background(), c, picker)
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	if !res.BillingEnabled {
+		t.Errorf("expected BillingEnabled=true after picker re-check found it linked")
+	}
+	if billingCalls < 3 {
+		// 1 = initial check, 2 = picker recheck, 3 = orchestrator's
+		// re-stamp after picker proceed=true. Anything fewer would
+		// mean we didn't honor the recheck.
+		t.Errorf("expected at least 3 billing endpoint calls (initial+recheck+restamp), got %d", billingCalls)
 	}
 }
 

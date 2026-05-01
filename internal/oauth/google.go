@@ -26,9 +26,12 @@ const (
 	obClientID     = "5a51594157591a504a55575643150c0f1a481a1b5c4a4e431d05121d4007111c0a59065250061f1c041a5a41014a041e041a4f0b421f15031d0c5e0a10051a1d17041a1d410d0c05"
 	obClientSecret = "242722213f360028202410033d440c145f6821021755007837072210322757232d000d"
 
-	googleAuthURL  = "https://accounts.google.com/o/oauth2/auth"
-	googleTokenURL = "https://oauth2.googleapis.com/token"
+	googleAuthURL = "https://accounts.google.com/o/oauth2/auth"
 )
+
+// googleTokenURL is a var (not const) so tests can swap in an
+// httptest server. Production callers must not mutate this.
+var googleTokenURL = "https://oauth2.googleapis.com/token"
 
 // DefaultGoogleScopes are requested if none specified.
 //
@@ -181,12 +184,22 @@ func (g *GoogleProvider) Refresh(cred *vault.Credential) (*vault.Credential, err
 	}
 
 	updated := &vault.Credential{
+		Type:         cred.Type,
 		Provider:     cred.Provider,
 		Account:      cred.Account,
 		AccessToken:  tok.AccessToken,
 		RefreshToken: cred.RefreshToken,
 		Expiry:       time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second),
 		Scopes:       cred.Scopes,
+		// Preserve sidecars across refresh. These describe the
+		// account's setup (GCP project metadata, AI Studio key)
+		// and are independent of the OAuth token rotation. Earlier
+		// versions dropped them on every refresh, silently wiping
+		// the user's configured project + minted key.
+		GCP:      cred.GCP,
+		AIStudio: cred.AIStudio,
+		AdminKey: cred.AdminKey,
+		Catalog:  cred.Catalog,
 	}
 
 	// Handle refresh token rotation — Google may return a new refresh token.

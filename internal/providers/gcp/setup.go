@@ -56,10 +56,28 @@ type Picker interface {
 	PickRegion(ctx context.Context) (string, error)
 
 	// Notify is called for status messages the user should see
-	// during setup (e.g. "creating project, this may take 30s",
-	// "billing not enabled — Vertex calls will fail until linked").
+	// during setup (e.g. "creating project, this may take 30s").
 	// Implementations may discard, print, or render in a TUI panel.
 	Notify(format string, args ...any)
+
+	// HandleBillingBlock is called when the project's billing is
+	// not linked. The picker should:
+	//   - surface fixURL prominently to the user,
+	//   - allow the user to call recheck() one or more times after
+	//     linking billing in another tab,
+	//   - return proceed=true if the user is OK going forward
+	//     (either billing is now enabled, or they explicitly chose
+	//     to skip the check).
+	// proceed=false aborts the whole Setup flow.
+	HandleBillingBlock(ctx context.Context, projectID, fixURL string, recheck func(context.Context) (bool, error)) (proceed bool, err error)
+}
+
+// BillingFixURL builds the canonical Cloud Console URL for linking
+// a billing account to a project. Used by the orchestrator when
+// surfacing billing-blocked state, and by manifest output when
+// telling agents how to instruct the user.
+func BillingFixURL(projectID string) string {
+	return fmt.Sprintf("https://console.cloud.google.com/billing/linkedaccount?project=%s", projectID)
 }
 
 // Choice carries the user's PickProject decision back to the
@@ -166,14 +184,38 @@ func Setup(ctx context.Context, c *Client, picker Picker) (*Result, error) {
 
 	billing, err := c.GetBillingInfo(ctx, res.Project.ProjectID)
 	if err != nil {
-		// Non-fatal: billing detection is informational. Surface and
-		// proceed so we still get the user a usable project.
-		picker.Notify("Couldn't read billing info (%v) — proceeding anyway. AI Studio (free tier) will work; Vertex calls may fail until billing is linked.", err)
-	} else {
-		res.BillingEnabled = billing.BillingEnabled
-		if !billing.BillingEnabled {
-			picker.Notify("Billing not linked on %s. AI Studio (free tier) works; Vertex calls return BILLING_DISABLED until you link a billing account at https://console.cloud.google.com/billing/linkedaccount?project=%s", res.Project.ProjectID, res.Project.ProjectID)
+		// Non-fatal: billing detection itself failed (permission
+		// denied, network). Surface and proceed without blocking —
+		// charon doesn't know the actual billing state.
+		picker.Notify("Couldn't read billing info (%v) — proceeding anyway.", err)
+	} else if !billing.BillingEnabled {
+		// Charon-created projects get 0 free-tier AI Studio quota
+		// and Vertex outright rejects calls without billing. Block
+		// here so the user fixes it now rather than discovering
+		// the failure at first call.
+		fixURL := BillingFixURL(res.Project.ProjectID)
+		picker.Notify("Billing not linked on %s. Both Vertex and AI Studio (charon-created projects) require billing.", res.Project.ProjectID)
+		recheck := func(ctx context.Context) (bool, error) {
+			info, err := c.GetBillingInfo(ctx, res.Project.ProjectID)
+			if err != nil {
+				return false, err
+			}
+			return info.BillingEnabled, nil
 		}
+		proceed, err := picker.HandleBillingBlock(ctx, res.Project.ProjectID, fixURL, recheck)
+		if err != nil {
+			return nil, fmt.Errorf("billing block: %w", err)
+		}
+		if !proceed {
+			return nil, fmt.Errorf("setup cancelled: billing not linked on %s — re-run after linking at %s", res.Project.ProjectID, fixURL)
+		}
+		// Picker returned proceed=true. Re-stamp billing state in
+		// case the user actually linked while we waited.
+		if info, err := c.GetBillingInfo(ctx, res.Project.ProjectID); err == nil {
+			res.BillingEnabled = info.BillingEnabled
+		}
+	} else {
+		res.BillingEnabled = true
 	}
 
 	region, err := picker.PickRegion(ctx)

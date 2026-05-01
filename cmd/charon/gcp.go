@@ -254,6 +254,48 @@ func (p *stdinPicker) PickProject(ctx context.Context, existing []gcp.Project) (
 	return gcp.Choice{Existing: &prj}, nil
 }
 
+// HandleBillingBlock prompts the user to link billing in another
+// tab and either retry the check or cancel. Loops until the user
+// presses 'c' to continue or 'esc' to cancel.
+func (p *stdinPicker) HandleBillingBlock(ctx context.Context, projectID, fixURL string, recheck func(context.Context) (bool, error)) (bool, error) {
+	fmt.Fprintln(p.out, "")
+	fmt.Fprintln(p.out, "  Billing setup required")
+	fmt.Fprintln(p.out, "  ─────────────────────")
+	fmt.Fprintf(p.out, "  Project %s has no billing account linked.\n", projectID)
+	fmt.Fprintln(p.out, "  Vertex calls will return BILLING_DISABLED.")
+	fmt.Fprintln(p.out, "  AI Studio's free-tier quota is 0 for charon-created projects.")
+	fmt.Fprintln(p.out, "")
+	fmt.Fprintln(p.out, "  Open this URL in a browser, link a billing account, then come back:")
+	fmt.Fprintf(p.out, "    %s\n", fixURL)
+	fmt.Fprintln(p.out, "")
+	for {
+		fmt.Fprint(p.out, "  [r] re-check    [c] continue without billing    [esc/^C] cancel : ")
+		line, err := p.readLine()
+		if err != nil {
+			return false, err
+		}
+		switch strings.TrimSpace(line) {
+		case "r", "R":
+			enabled, err := recheck(ctx)
+			if err != nil {
+				fmt.Fprintf(p.out, "  re-check failed: %v\n", err)
+				continue
+			}
+			if enabled {
+				fmt.Fprintln(p.out, "  ✓ Billing now linked. Continuing.")
+				return true, nil
+			}
+			fmt.Fprintln(p.out, "  Still not linked. Did you save the change in Cloud Console?")
+		case "c", "C":
+			return true, nil
+		case "esc", "":
+			return false, nil
+		default:
+			fmt.Fprintln(p.out, "  Unknown choice; pick r / c / esc.")
+		}
+	}
+}
+
 func (p *stdinPicker) PickRegion(ctx context.Context) (string, error) {
 	fmt.Fprintln(p.out, "\nVertex AI region:")
 	for i, r := range gcp.SupportedVertexRegions {
