@@ -146,8 +146,12 @@ func TestGCPSetup_CreateNewProjectFlow(t *testing.T) {
 	m := newGCPSetupModel(fake, "user@gmail.com")
 	m, _ = m.Update(runCmd(m.initCmd()))
 
-	// Press n to start new-project flow.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	// Move cursor to the synthetic "+ new project" row (index =
+	// len(projects); 0 with an empty list).
+	for m.projectCur < len(m.projects) {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.state != gcpStateEditingNewName {
 		t.Fatalf("state = %d, want editingNewName", m.state)
 	}

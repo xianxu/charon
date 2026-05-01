@@ -228,22 +228,21 @@ func (m gcpSetupModel) Update(msg tea.Msg) (gcpSetupModel, tea.Cmd) {
 }
 
 func (m gcpSetupModel) updatePickingProject(msg tea.KeyMsg) (gcpSetupModel, tea.Cmd) {
+	// Cursor positions: 0..len(projects)-1 are existing projects;
+	// len(projects) is the synthetic "+ new project" row.
+	maxCur := len(m.projects)
 	switch msg.String() {
 	case "up", "k":
 		if m.projectCur > 0 {
 			m.projectCur--
 		}
 	case "down", "j":
-		if m.projectCur < len(m.projects)-1 {
+		if m.projectCur < maxCur {
 			m.projectCur++
 		}
-	case "n", "N":
-		m.state = gcpStateEditingNewName
-		m.nameInput.SetValue("")
-		m.nameInput.Focus()
 	case "enter":
-		if len(m.projects) == 0 {
-			// Fall through to "n" behavior — no projects to pick.
+		if m.projectCur == maxCur {
+			// "+ new project" row.
 			m.state = gcpStateEditingNewName
 			m.nameInput.SetValue("")
 			m.nameInput.Focus()
@@ -370,19 +369,20 @@ func (m gcpSetupModel) View() string {
 	case gcpStateLoading:
 		b.WriteString("  Loading your Google Cloud projects...\n")
 	case gcpStatePickingProject:
-		if len(m.projects) == 0 {
-			b.WriteString("  You have no Google Cloud projects yet.\n")
-			b.WriteString("  Press [enter] or [n] to create one.\n")
-		} else {
-			b.WriteString("  Pick an existing project or [n] create new:\n\n")
-			for i, p := range m.projects {
-				cursor := "  "
-				if i == m.projectCur {
-					cursor = "> "
-				}
-				fmt.Fprintf(&b, "  %s%-30s  %s\n", cursor, p.ProjectID, p.Name)
+		b.WriteString("  Pick a project:\n\n")
+		for i, p := range m.projects {
+			cursor := "  "
+			if i == m.projectCur {
+				cursor = "> "
 			}
+			fmt.Fprintf(&b, "  %s%-30s  %s\n", cursor, p.ProjectID, p.Name)
 		}
+		// Synthetic "+ new project" row at index len(m.projects).
+		newCursor := "  "
+		if m.projectCur == len(m.projects) {
+			newCursor = "> "
+		}
+		fmt.Fprintf(&b, "  %s+ new project\n", newCursor)
 	case gcpStateEditingNewName:
 		b.WriteString("  New Google Cloud project\n\n")
 		b.WriteString("  ")
@@ -422,7 +422,7 @@ func (m gcpSetupModel) View() string {
 	b.WriteString("\n\n")
 	switch m.state {
 	case gcpStatePickingProject:
-		b.WriteString(helpStyle.Render("  ↑↓ nav   enter pick   n new   esc cancel"))
+		b.WriteString(helpStyle.Render("  ↑↓ nav   enter pick   esc cancel"))
 	case gcpStatePickingRegion:
 		b.WriteString(helpStyle.Render("  ↑↓ nav   enter pick   esc cancel"))
 	}
