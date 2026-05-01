@@ -409,3 +409,24 @@ independently.
   without GCP setup is automatic (`omitempty` on the gcp field).
   Tests cover: GCP surfaces when present, omitted when absent,
   JSON shape with both branches.
+
+- **2026-05-01 — M3 chunk-3: orchestration + CLI driver.**
+  `gcp.Setup(ctx, client, picker)` runs the end-to-end M3 flow:
+  list projects → ask picker → maybe create + WaitOperation →
+  enable RequiredServices → GetBillingInfo (non-fatal on
+  permission error) → ask picker for region → return Result.
+  Project ID generated as `charon-gemini-<8 hex>` when picker
+  doesn't pre-supply one. `Picker` interface keeps the
+  orchestrator UI-agnostic.
+
+  CLI: `charon gcp setup <account>`. Wires a stdin Picker into the
+  orchestrator and persists the Result onto the existing
+  `google:<account>` credential as `cred.GCP`. OAuth fields are
+  preserved (verified by test). Prereq checks: account must
+  exist and have cloud-platform granted.
+
+  Test split: orchestrator tested via httptest+stub picker;
+  CLI orchestration via httptest+memory vault+stub picker;
+  stdin picker tested via in-memory readers (covers existing
+  pick by number, new-project with name, default region,
+  numeric region, free-form region, out-of-range rejection).

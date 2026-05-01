@@ -45,6 +45,7 @@ func main() {
 	root.AddCommand(serviceCmd())
 	root.AddCommand(vaultCmd())
 	root.AddCommand(scopesCmd())
+	root.AddCommand(gcpCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
