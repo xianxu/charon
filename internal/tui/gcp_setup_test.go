@@ -72,7 +72,7 @@ func TestGCPSetup_PickExistingFlowEmitsDoneMsg(t *testing.T) {
 		},
 		billing: &gcp.BillingInfo{BillingEnabled: true},
 	}
-	m := newGCPSetupModel(fake, "user@gmail.com")
+	m := newGCPSetupModel(fake, "user@gmail.com", nil)
 	if msg := runCmd(m.initCmd()); msg != nil {
 		var cmd tea.Cmd
 		m, cmd = m.Update(msg)
@@ -127,7 +127,7 @@ func TestGCPSetup_PickExistingFlowEmitsDoneMsg(t *testing.T) {
 
 func TestGCPSetup_ListErrorTransitionsToError(t *testing.T) {
 	fake := &fakeGCPClient{listErr: errors.New("403 forbidden")}
-	m := newGCPSetupModel(fake, "user@gmail.com")
+	m := newGCPSetupModel(fake, "user@gmail.com", nil)
 	m, _ = m.Update(runCmd(m.initCmd()))
 	if m.state != gcpStateError {
 		t.Fatalf("state = %d, want error", m.state)
@@ -143,7 +143,7 @@ func TestGCPSetup_CreateNewProjectFlow(t *testing.T) {
 		createOp:   &gcp.Operation{Name: "operations/x", Done: true},
 		billing:    &gcp.BillingInfo{BillingEnabled: false},
 	}
-	m := newGCPSetupModel(fake, "user@gmail.com")
+	m := newGCPSetupModel(fake, "user@gmail.com", nil)
 	m, _ = m.Update(runCmd(m.initCmd()))
 
 	// Move cursor to the synthetic "+ new project" row (index =
@@ -183,7 +183,7 @@ func TestGCPSetup_BillingReadFailureNonFatal(t *testing.T) {
 		listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
 		billingErr: errors.New("permission denied"),
 	}
-	m := newGCPSetupModel(fake, "u@gmail.com")
+	m := newGCPSetupModel(fake, "u@gmail.com", nil)
 	m, _ = m.Update(runCmd(m.initCmd()))
 	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // pick project
 	m, _ = m.Update(runCmd(cmd))                       // enable result
@@ -200,7 +200,7 @@ func TestGCPSetup_EscFromPickerCancels(t *testing.T) {
 	fake := &fakeGCPClient{listResult: []gcp.Project{
 		{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"},
 	}}
-	m := newGCPSetupModel(fake, "u@gmail.com")
+	m := newGCPSetupModel(fake, "u@gmail.com", nil)
 	m, _ = m.Update(runCmd(m.initCmd()))
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if _, ok := runCmd(cmd).(gcpSetupCancelMsg); !ok {
@@ -219,7 +219,7 @@ func TestGCPSetup_CtrlCQuitsFromAnyState(t *testing.T) {
 		{
 			name: "loading",
 			setup: func() gcpSetupModel {
-				return newGCPSetupModel(&fakeGCPClient{}, "u@gmail.com")
+				return newGCPSetupModel(&fakeGCPClient{}, "u@gmail.com", nil)
 			},
 		},
 		{
@@ -227,7 +227,7 @@ func TestGCPSetup_CtrlCQuitsFromAnyState(t *testing.T) {
 			setup: func() gcpSetupModel {
 				m := newGCPSetupModel(&fakeGCPClient{
 					listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
-				}, "u@gmail.com")
+				}, "u@gmail.com", nil)
 				m, _ = m.Update(runCmd(m.initCmd()))
 				return m
 			},
@@ -235,7 +235,7 @@ func TestGCPSetup_CtrlCQuitsFromAnyState(t *testing.T) {
 		{
 			name: "editingNewName",
 			setup: func() gcpSetupModel {
-				m := newGCPSetupModel(&fakeGCPClient{}, "u@gmail.com")
+				m := newGCPSetupModel(&fakeGCPClient{}, "u@gmail.com", nil)
 				m, _ = m.Update(runCmd(m.initCmd()))
 				m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // synthetic + new project row
 				return m
@@ -247,7 +247,7 @@ func TestGCPSetup_CtrlCQuitsFromAnyState(t *testing.T) {
 				m := newGCPSetupModel(&fakeGCPClient{
 					listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
 					billing:    &gcp.BillingInfo{BillingEnabled: true},
-				}, "u@gmail.com")
+				}, "u@gmail.com", nil)
 				m, _ = m.Update(runCmd(m.initCmd()))
 				m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 				m, _ = m.Update(runCmd(cmd))
@@ -272,12 +272,53 @@ func TestGCPSetup_CtrlCQuitsFromAnyState(t *testing.T) {
 	}
 }
 
+// Pinned project must appear in the displayed list even when
+// projects.list hasn't returned it (Google's eventual consistency
+// after a fresh create). Regression: previously the user had to
+// restart `charon auth` to see a project they just created.
+func TestGCPSetup_PinnedProjectShownWhenMissingFromList(t *testing.T) {
+	fake := &fakeGCPClient{
+		listResult: []gcp.Project{
+			{ProjectID: "old-1", Name: "Old One", LifecycleState: "ACTIVE"},
+		},
+	}
+	pinned := &gcp.Project{ProjectID: "fresh", Name: "Just Created", LifecycleState: "ACTIVE"}
+	m := newGCPSetupModel(fake, "u@gmail.com", pinned)
+	m, _ = m.Update(runCmd(m.initCmd()))
+
+	if len(m.projects) != 2 {
+		t.Fatalf("expected 2 projects (1 listed + 1 pinned), got %d: %v", len(m.projects), m.projects)
+	}
+	if m.projects[0].ProjectID != "fresh" {
+		t.Errorf("pinned project should be first, got %v", m.projects)
+	}
+}
+
+// Pinned project that's already in the list must not be duplicated
+// — Google's list eventually catches up; the merge is a no-op once
+// it does.
+func TestGCPSetup_PinnedProjectNotDuplicatedWhenAlreadyListed(t *testing.T) {
+	fake := &fakeGCPClient{
+		listResult: []gcp.Project{
+			{ProjectID: "alpha", Name: "Alpha", LifecycleState: "ACTIVE"},
+			{ProjectID: "fresh", Name: "Just Created", LifecycleState: "ACTIVE"},
+		},
+	}
+	pinned := &gcp.Project{ProjectID: "fresh", Name: "Just Created", LifecycleState: "ACTIVE"}
+	m := newGCPSetupModel(fake, "u@gmail.com", pinned)
+	m, _ = m.Update(runCmd(m.initCmd()))
+
+	if len(m.projects) != 2 {
+		t.Errorf("expected 2 projects (no duplicate), got %d: %v", len(m.projects), m.projects)
+	}
+}
+
 func TestGCPSetup_RegionPickerNumericNav(t *testing.T) {
 	fake := &fakeGCPClient{
 		listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
 		billing:    &gcp.BillingInfo{BillingEnabled: true},
 	}
-	m := newGCPSetupModel(fake, "u@gmail.com")
+	m := newGCPSetupModel(fake, "u@gmail.com", nil)
 	m, _ = m.Update(runCmd(m.initCmd()))
 	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m, _ = m.Update(runCmd(cmd))

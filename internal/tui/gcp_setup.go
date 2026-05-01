@@ -65,6 +65,14 @@ type gcpSetupModel struct {
 
 	state gcpSetupState
 
+	// pinnedProject is shown at the top of the picker even if Google's
+	// projects.list doesn't return it. Set when the user already has a
+	// configured project (cred.GCP). Closes the eventual-consistency
+	// gap where a freshly-created project hasn't yet propagated to
+	// projects.list — the user still sees their pick in the list
+	// immediately on re-entry.
+	pinnedProject *gcp.Project
+
 	// Project picker state.
 	projects   []gcp.Project
 	projectCur int
@@ -122,7 +130,7 @@ type gcpSetupRequestMsg struct {
 	account string
 }
 
-func newGCPSetupModel(client GCPSetupClient, account string) gcpSetupModel {
+func newGCPSetupModel(client GCPSetupClient, account string, pinned *gcp.Project) gcpSetupModel {
 	ti := textinput.New()
 	ti.Placeholder = "Charon Gemini"
 	ti.Prompt = "Display name: "
@@ -130,11 +138,12 @@ func newGCPSetupModel(client GCPSetupClient, account string) gcpSetupModel {
 	ti.Width = 40
 
 	return gcpSetupModel{
-		client:    client,
-		account:   account,
-		state:     gcpStateLoading,
-		nameInput: ti,
-		regionCur: 0, // default to first region (us-central1)
+		client:        client,
+		account:       account,
+		state:         gcpStateLoading,
+		nameInput:     ti,
+		regionCur:     0, // default to first region (us-central1)
+		pinnedProject: pinned,
 	}
 }
 
@@ -164,7 +173,7 @@ func (m gcpSetupModel) Update(msg tea.Msg) (gcpSetupModel, tea.Cmd) {
 			m.err = msg.err
 			return m, nil
 		}
-		m.projects = msg.projects
+		m.projects = mergePinned(msg.projects, m.pinnedProject)
 		m.state = gcpStatePickingProject
 		return m, nil
 
@@ -430,6 +439,25 @@ func (m gcpSetupModel) View() string {
 		b.WriteString(helpStyle.Render("  ↑↓ nav   enter pick   esc cancel"))
 	}
 	return b.String()
+}
+
+// mergePinned ensures pinned (if non-nil) appears in the returned
+// list, prepended when projects.list hasn't caught up to a recent
+// create. Already-listed pinned projects are left in place — no
+// duplication, original order preserved.
+func mergePinned(listed []gcp.Project, pinned *gcp.Project) []gcp.Project {
+	if pinned == nil {
+		return listed
+	}
+	for _, p := range listed {
+		if p.ProjectID == pinned.ProjectID {
+			return listed
+		}
+	}
+	out := make([]gcp.Project, 0, len(listed)+1)
+	out = append(out, *pinned)
+	out = append(out, listed...)
+	return out
 }
 
 // generateGCPProjectID mirrors the orchestrator's generator. Defined

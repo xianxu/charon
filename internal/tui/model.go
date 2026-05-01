@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/xianxu/charon/internal/oauth"
 	"github.com/xianxu/charon/internal/providers"
+	"github.com/xianxu/charon/internal/providers/gcp"
 	"github.com/xianxu/charon/internal/vault"
 )
 
@@ -490,6 +491,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // openGCPSetup constructs a GCP setup model for the requested account
 // and routes the screen there. If no factory is wired (factory is
 // optional), drop a status hint into the scope view and stay there.
+//
+// The currently-configured GCP project (cred.GCP) is passed as a pin
+// so it always appears in the picker even when Google's projects.list
+// hasn't propagated a recent create yet.
 func (m model) openGCPSetup(req gcpSetupRequestMsg) (tea.Model, tea.Cmd) {
 	if m.gcpClientFactory == nil {
 		m.scopes.applyStatus = "GCP setup not wired in this build — run 'charon gcp setup " + req.account + "' from the shell."
@@ -500,7 +505,15 @@ func (m model) openGCPSetup(req gcpSetupRequestMsg) (tea.Model, tea.Cmd) {
 		m.scopes.applyStatus = fmt.Sprintf("GCP setup unavailable: %v", err)
 		return m, nil
 	}
-	gs := newGCPSetupModel(client, req.account)
+	var pinned *gcp.Project
+	if cred, err := m.vault.Get("google", req.account); err == nil && cred.GCP != nil {
+		pinned = &gcp.Project{
+			ProjectID:      cred.GCP.ProjectID,
+			Name:           cred.GCP.ProjectName,
+			LifecycleState: "ACTIVE",
+		}
+	}
+	gs := newGCPSetupModel(client, req.account, pinned)
 	m.gcpSetup = gs
 	m.current = screenGCPSetup
 	return m, gs.initCmd()
