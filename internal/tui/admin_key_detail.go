@@ -94,8 +94,8 @@ func (m adminKeyDetailModel) Update(msg tea.Msg) (adminKeyDetailModel, tea.Cmd) 
 
 func (m adminKeyDetailModel) View() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(fmt.Sprintf("Charon › %s › %s",
-		providerLabel(m.provider), m.account)))
+	b.WriteString(titleStyle.Render(fmt.Sprintf("%s › %s › %s",
+		appName(), providerLabel(m.provider), m.account)))
 	b.WriteString("\n")
 	b.WriteString(mutedStyle.Render("Key info"))
 	b.WriteString("\n")

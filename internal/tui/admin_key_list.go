@@ -301,7 +301,7 @@ func (m adminKeyListModel) Update(msg tea.Msg) (adminKeyListModel, tea.Cmd) {
 func (m adminKeyListModel) View() string {
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render(fmt.Sprintf("Charon › %s", providerLabel(m.provider))))
+	b.WriteString(titleStyle.Render(fmt.Sprintf("%s › %s", appName(), providerLabel(m.provider))))
 	b.WriteString("\n")
 	b.WriteString(mutedStyle.Render(m.entityPlural))
 	b.WriteString("\n")

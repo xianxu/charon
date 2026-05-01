@@ -357,7 +357,7 @@ func (m adminKeyPasteModel) View() string {
 
 func (m adminKeyPasteModel) viewEditingLabel() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(fmt.Sprintf("Charon › %s › admin key", providerLabel(m.providerName))))
+	b.WriteString(titleStyle.Render(fmt.Sprintf("%s › %s › admin key", appName(), providerLabel(m.providerName))))
 	b.WriteString("\n")
 	if m.isReplace {
 		b.WriteString(mutedStyle.Render("Replace admin key (1/2 — informational label)"))
@@ -379,7 +379,7 @@ func (m adminKeyPasteModel) viewEditingLabel() string {
 
 func (m adminKeyPasteModel) viewEditingKey() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(fmt.Sprintf("Charon › %s › admin key", providerLabel(m.providerName))))
+	b.WriteString(titleStyle.Render(fmt.Sprintf("%s › %s › admin key", appName(), providerLabel(m.providerName))))
 	b.WriteString("\n")
 	if m.isReplace {
 		b.WriteString(mutedStyle.Render("Replace admin key (2/2 — paste key)"))
@@ -399,7 +399,7 @@ func (m adminKeyPasteModel) viewEditingKey() string {
 
 func (m adminKeyPasteModel) viewDiscovering() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(fmt.Sprintf("Charon › %s › admin key", providerLabel(m.providerName))))
+	b.WriteString(titleStyle.Render(fmt.Sprintf("%s › %s › admin key", appName(), providerLabel(m.providerName))))
 	b.WriteString("\n\n")
 	b.WriteString("  Discovering organization...\n")
 	b.WriteString("\n")
@@ -409,7 +409,7 @@ func (m adminKeyPasteModel) viewDiscovering() string {
 
 func (m adminKeyPasteModel) viewError() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(fmt.Sprintf("Charon › %s › admin key — failed", providerLabel(m.providerName))))
+	b.WriteString(titleStyle.Render(fmt.Sprintf("%s › %s › admin key — failed", appName(), providerLabel(m.providerName))))
 	b.WriteString("\n\n")
 	if m.err != nil {
 		// Surface a friendlier framing for the most common failure

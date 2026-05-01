@@ -1,6 +1,21 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+	"github.com/xianxu/charon/internal/vault/keychain"
+)
+
+// appName returns "Charon" for the production (signed) build, or
+// "Charon-dev" for the unsigned dev build. Used in TUI titles so the
+// user can tell at a glance which binary they're running. Detection
+// reuses keychain.ResolveServiceName so the title and the vault
+// namespace can never disagree.
+func appName() string {
+	if keychain.ResolveServiceName() == keychain.ServiceProd {
+		return "Charon"
+	}
+	return "Charon-dev"
+}
 
 var (
 	titleStyle = lipgloss.NewStyle().

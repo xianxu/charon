@@ -39,7 +39,7 @@ func TestDetail_RendersAllFields(t *testing.T) {
 
 	view := m.View()
 	for _, want := range []string{
-		"Charon › OpenAI › work-key",
+		appName() + " › OpenAI › work-key",
 		"Key info",
 		"Name:",
 		"work-key",

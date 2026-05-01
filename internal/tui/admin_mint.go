@@ -453,8 +453,8 @@ func (m adminMintModel) View() string {
 
 func (m adminMintModel) header(sub string) string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(fmt.Sprintf("Charon › %s › new key",
-		providerLabel(m.providerName))))
+	b.WriteString(titleStyle.Render(fmt.Sprintf("%s › %s › new key",
+		appName(), providerLabel(m.providerName))))
 	b.WriteString("\n")
 	b.WriteString(mutedStyle.Render(sub))
 	b.WriteString("\n")

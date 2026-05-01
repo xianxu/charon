@@ -274,7 +274,7 @@ func (m adminRevokeModel) View() string {
 
 func (m adminRevokeModel) header() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(fmt.Sprintf("Charon › %s › revoke", providerLabel(m.providerName))))
+	b.WriteString(titleStyle.Render(fmt.Sprintf("%s › %s › revoke", appName(), providerLabel(m.providerName))))
 	b.WriteString("\n")
 	b.WriteString(strings.Repeat("─", 60))
 	b.WriteString("\n\n")

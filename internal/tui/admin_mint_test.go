@@ -267,7 +267,7 @@ func TestMint_View_ContainsExpectedChrome(t *testing.T) {
 	m, _, _ := newMintFixture(t)
 
 	view := m.View()
-	for _, want := range []string{"Charon › OpenAI › new key", "Step 1/2", "Name>"} {
+	for _, want := range []string{appName() + " › OpenAI › new key", "Step 1/2", "Name>"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("account-step view missing %q\n%s", want, view)
 		}
@@ -289,7 +289,7 @@ func TestMint_AnthropicWordingInStep2(t *testing.T) {
 
 	// Step 1: header is provider-agnostic.
 	step1 := m.View()
-	if !strings.Contains(step1, "Charon › Anthropic › new key") {
+	if !strings.Contains(step1, appName()+" › Anthropic › new key") {
 		t.Errorf("Step 1 header should be 'new key', got\n%s", step1)
 	}
 

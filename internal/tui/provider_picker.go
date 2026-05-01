@@ -236,7 +236,7 @@ func (m providerPickerModel) Update(msg tea.Msg) (providerPickerModel, tea.Cmd) 
 
 func (m providerPickerModel) View() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Charon"))
+	b.WriteString(titleStyle.Render(appName()))
 	b.WriteString("\n")
 	b.WriteString(mutedStyle.Render("Provider"))
 	b.WriteString("\n")
