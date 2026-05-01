@@ -506,14 +506,18 @@ func (m model) openGCPSetup(req gcpSetupRequestMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	var pinned *gcp.Project
-	if cred, err := m.vault.Get("google", req.account); err == nil && cred.GCP != nil {
-		pinned = &gcp.Project{
-			ProjectID:      cred.GCP.ProjectID,
-			Name:           cred.GCP.ProjectName,
-			LifecycleState: "ACTIVE",
+	hasAIStudio := false
+	if cred, err := m.vault.Get("google", req.account); err == nil {
+		if cred.GCP != nil {
+			pinned = &gcp.Project{
+				ProjectID:      cred.GCP.ProjectID,
+				Name:           cred.GCP.ProjectName,
+				LifecycleState: "ACTIVE",
+			}
 		}
+		hasAIStudio = cred.AIStudio != nil
 	}
-	gs := newGCPSetupModel(client, req.account, pinned)
+	gs := newGCPSetupModel(client, req.account, pinned, hasAIStudio)
 	m.gcpSetup = gs
 	m.current = screenGCPSetup
 	return m, gs.initCmd()
@@ -538,6 +542,16 @@ func (m model) handleGCPSetupDone(msg gcpSetupDoneMsg) (tea.Model, tea.Cmd) {
 		CreatedByCharon: msg.createdNew,
 		BillingEnabled:  msg.billing,
 		UpdatedAt:       time.Now().UTC(),
+	}
+	if msg.aiStudio != nil {
+		cred.AIStudio = &vault.AIStudioData{
+			Name:        msg.aiStudio.Name,
+			UID:         msg.aiStudio.UID,
+			DisplayName: msg.aiStudio.DisplayName,
+			KeyMaterial: msg.aiStudio.KeyString,
+			ProjectID:   msg.projectID,
+			CreatedAt:   time.Now().UTC(),
+		}
 	}
 	if err := m.vault.Set(cred); err != nil {
 		m.scopes.applyStatus = fmt.Sprintf("GCP setup completed upstream but vault.Set failed: %v", err)

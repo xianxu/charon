@@ -52,6 +52,14 @@ type Credential struct {
 	// project setup (issue #14 M3). Independent of the OAuth payload —
 	// can be present or absent regardless of token state.
 	GCP *GCPData `json:"gcp,omitempty"`
+
+	// AIStudio is an optional sidecar carrying a minted Google AI
+	// Studio API key (issue #14 M4). Inline rather than in a sibling
+	// keychain entry for the same reasons GCP is inline: same
+	// account, same lifecycle, same ACL — sibling-entry approach
+	// would cost manifest fold-in / two-write coordination on
+	// creation / two-delete on revoke for no benefit.
+	AIStudio *AIStudioData `json:"aistudio,omitempty"`
 }
 
 // AdminKeyData is the per-account payload for TypeAdminKey credentials
@@ -123,6 +131,33 @@ type GCPData struct {
 type GCPParent struct {
 	Type string `json:"type"` // "organization" or "folder"
 	ID   string `json:"id"`
+}
+
+// AIStudioData is the sidecar payload for Google OAuth credentials
+// that have a minted AI Studio API key (issue #14 M4). One key per
+// Google account — see the issue's M4 design notes for why charon
+// doesn't expose multi-key management (AI Studio keys are fungible
+// across the same account, unlike OpenAI/Anthropic admin keys which
+// scope to a project for cost/identity separation).
+type AIStudioData struct {
+	// Name is the full resource name, used for revoke:
+	// "projects/{project}/locations/global/keys/{uid}".
+	Name string `json:"name"`
+	// UID is the short opaque key id (the part after .../keys/).
+	UID string `json:"uid"`
+	// DisplayName is the label charon set at mint time so the user
+	// can recognize the key in Cloud Console (e.g. "charon-aistudio").
+	DisplayName string `json:"display_name,omitempty"`
+	// KeyMaterial is the actual API key (AIzaSy…) charon attaches
+	// to outbound requests. Captured at mint time and not
+	// refetchable from upstream — must round-trip through the
+	// keychain backend.
+	KeyMaterial string `json:"key_material"`
+	// ProjectID is the GCP project the key was minted under. Stored
+	// for traceability and for the M6 revoke flow (which re-derives
+	// the project for cleanup audits).
+	ProjectID string    `json:"project_id"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
 }
 
 // CatalogData is the per-account payload for TypeCatalog credentials

@@ -188,6 +188,45 @@ func Setup(ctx context.Context, c *Client, picker Picker) (*Result, error) {
 	return res, nil
 }
 
+// AIStudioDisplayName is the label charon stamps on every AI Studio
+// key it mints — chosen so the user can identify charon-created keys
+// in Cloud Console's API Keys list.
+const AIStudioDisplayName = "charon-aistudio"
+
+// AIStudioServiceTarget restricts minted keys to AI Studio's data
+// plane only. Defense in depth: a leaked key cannot be repurposed
+// for other Google APIs.
+const AIStudioServiceTarget = "generativelanguage.googleapis.com"
+
+// MintAIStudio creates a new AI Studio API key under the project,
+// restricted to generativelanguage.googleapis.com only. Returns the
+// minted key including the secret KeyString — captured here on the
+// create response, not refetchable from upstream.
+//
+// Idempotency is the caller's job: this function always mints a
+// new key on call. The CLI and TUI orchestrators check whether
+// cred.AIStudio is already set before calling.
+func MintAIStudio(ctx context.Context, c *Client, projectID string) (*APIKey, error) {
+	op, err := c.CreateAPIKey(ctx, projectID, AIStudioDisplayName, []string{AIStudioServiceTarget})
+	if err != nil {
+		return nil, fmt.Errorf("create api key: %w", err)
+	}
+	if !op.Done {
+		op, err = c.WaitAPIKeyOperation(ctx, op.Name)
+		if err != nil {
+			return nil, fmt.Errorf("wait api key op: %w", err)
+		}
+	}
+	key, err := ExtractAPIKey(op)
+	if err != nil {
+		return nil, fmt.Errorf("extract minted key: %w", err)
+	}
+	if key.KeyString == "" {
+		return nil, fmt.Errorf("minted key has empty KeyString — upstream bug or stale operation response")
+	}
+	return key, nil
+}
+
 // GenerateProjectID returns a globally-unique project id starting
 // with `charon-gemini-` so the user can identify charon-created
 // projects in Cloud Console. 8 hex chars = 32 bits of entropy,

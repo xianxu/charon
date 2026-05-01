@@ -46,6 +46,7 @@ type Client struct {
 	ResourceManager string
 	ServiceUsage    string
 	CloudBilling    string
+	APIKeys         string
 	// PollInterval governs how often long-running operations are
 	// re-queried while waiting for completion. Zero means default
 	// (2s) — tuned for Resource Manager / Service Usage's typical
@@ -61,6 +62,7 @@ func New(tokens TokenSupplier) *Client {
 		ResourceManager: DefaultResourceManager,
 		ServiceUsage:    DefaultServiceUsage,
 		CloudBilling:    DefaultCloudBilling,
+		APIKeys:         DefaultAPIKeys,
 	}
 }
 

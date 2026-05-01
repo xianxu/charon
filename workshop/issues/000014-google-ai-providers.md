@@ -457,3 +457,42 @@ independently.
   non-fatal, esc cancel, region picker numeric nav, and the
   scope-view enter-on-cloud-platform behavior (positive +
   negative cases).
+
+- **2026-05-01 — M3 verified end-to-end.** Smoke test against real
+  Google account: `charon run -- curl ... vertex/.../generateContent`
+  succeeded all the way through the proxy, project routing, and
+  OAuth attachment. Vertex itself returned `BILLING_DISABLED`
+  exactly as pre-flagged — confirms the end-to-end chain (M1 scope,
+  M2 routing, M3 project metadata) is correct.
+
+  Pre-requisite: a one-time setup on the OAuth client's host
+  project (charon's developer project, distinct from the user's
+  projects) — must enable Cloud Resource Manager, Service Usage,
+  and Cloud Billing APIs on the project that owns the OAuth
+  client. Failure mode without this is a confusing "API not used"
+  error referencing the project number.
+
+- **2026-05-01 — M4 chunk-1: AI Studio key mint client + auto-mint.**
+  `gcp.CreateAPIKey` / `gcp.WaitAPIKeyOperation` / `gcp.DeleteAPIKey`
+  for the API Keys v2 endpoint, plus `gcp.MintAIStudio` helper
+  that wraps create+poll+extract. Keys are minted with
+  `restrictions.apiTargets = [generativelanguage.googleapis.com]`
+  so a leaked key cannot reach other Google APIs.
+
+  Storage: inline as `cred.AIStudio` (mirrors the inline-vs-sibling
+  call we made for `cred.GCP` — same account, same lifecycle,
+  same ACL, no benefit to a sibling keychain entry). Keychain
+  round-trip extended; regression test covers both GCP and
+  AIStudio sidecars.
+
+  Wired into both orchestrators (CLI `executeGCPSetup` and TUI
+  `gcpSetupModel`). Auto-mints exactly once: skips when
+  `cred.AIStudio` is already populated (one-key-per-account by
+  design — multi-key cost separation is a future concern).
+  Mint failure is non-fatal: project setup still works for
+  Vertex; user can rerun setup to retry.
+
+  TUI state machine extended: `pickingRegion` enter →
+  `mintingAIStudio` (async) → `done` (or skip mint if pinned key
+  already exists). Tests cover happy mint, mint-failure-non-fatal,
+  and skip-when-key-exists.

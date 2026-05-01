@@ -24,11 +24,19 @@ type fakeGCPClient struct {
 	billing       *gcp.BillingInfo
 	billingErr    error
 
-	listCalls    int
-	createCalls  int
-	waitCalls    int
-	enableCalls  int
-	billingCalls int
+	// AI Studio key mint
+	createAPIKeyOp  *gcp.Operation
+	createAPIKeyErr error
+	waitAPIKeyOp    *gcp.Operation
+	waitAPIKeyErr   error
+
+	listCalls         int
+	createCalls       int
+	waitCalls         int
+	enableCalls       int
+	billingCalls      int
+	createAPIKeyCalls int
+	waitAPIKeyCalls   int
 }
 
 func (f *fakeGCPClient) ListProjects(ctx context.Context) ([]gcp.Project, error) {
@@ -54,6 +62,20 @@ func (f *fakeGCPClient) GetBillingInfo(ctx context.Context, projectID string) (*
 	f.billingCalls++
 	return f.billing, f.billingErr
 }
+func (f *fakeGCPClient) CreateAPIKey(ctx context.Context, projectID, displayName string, restrictedTo []string) (*gcp.Operation, error) {
+	f.createAPIKeyCalls++
+	if f.createAPIKeyErr != nil {
+		return nil, f.createAPIKeyErr
+	}
+	return f.createAPIKeyOp, nil
+}
+func (f *fakeGCPClient) WaitAPIKeyOperation(ctx context.Context, opName string) (*gcp.Operation, error) {
+	f.waitAPIKeyCalls++
+	if f.waitAPIKeyErr != nil {
+		return nil, f.waitAPIKeyErr
+	}
+	return f.waitAPIKeyOp, nil
+}
 
 // runCmd executes a tea.Cmd synchronously and returns the resulting
 // message. Bubbletea normally schedules cmds on the program loop; in
@@ -71,8 +93,19 @@ func TestGCPSetup_PickExistingFlowEmitsDoneMsg(t *testing.T) {
 			{ProjectID: "alpha", Name: "Alpha", LifecycleState: "ACTIVE"},
 		},
 		billing: &gcp.BillingInfo{BillingEnabled: true},
+		createAPIKeyOp: &gcp.Operation{
+			Name: "operations/k.x",
+			Done: true,
+			Response: map[string]any{
+				"name":      "projects/alpha/locations/global/keys/abc",
+				"uid":       "abc",
+				"keyString": "AIzaSy_FAKE",
+			},
+		},
 	}
-	m := newGCPSetupModel(fake, "user@gmail.com", nil)
+	// hasAIStudioKey=true skips mint and emits done directly (simpler
+	// happy-path assertion). The mint-flow test is separate.
+	m := newGCPSetupModel(fake, "user@gmail.com", nil, true)
 	if msg := runCmd(m.initCmd()); msg != nil {
 		var cmd tea.Cmd
 		m, cmd = m.Update(msg)
@@ -127,7 +160,7 @@ func TestGCPSetup_PickExistingFlowEmitsDoneMsg(t *testing.T) {
 
 func TestGCPSetup_ListErrorTransitionsToError(t *testing.T) {
 	fake := &fakeGCPClient{listErr: errors.New("403 forbidden")}
-	m := newGCPSetupModel(fake, "user@gmail.com", nil)
+	m := newGCPSetupModel(fake, "user@gmail.com", nil, false)
 	m, _ = m.Update(runCmd(m.initCmd()))
 	if m.state != gcpStateError {
 		t.Fatalf("state = %d, want error", m.state)
@@ -143,7 +176,7 @@ func TestGCPSetup_CreateNewProjectFlow(t *testing.T) {
 		createOp:   &gcp.Operation{Name: "operations/x", Done: true},
 		billing:    &gcp.BillingInfo{BillingEnabled: false},
 	}
-	m := newGCPSetupModel(fake, "user@gmail.com", nil)
+	m := newGCPSetupModel(fake, "user@gmail.com", nil, false)
 	m, _ = m.Update(runCmd(m.initCmd()))
 
 	// Move cursor to the synthetic "+ new project" row (index =
@@ -183,7 +216,7 @@ func TestGCPSetup_BillingReadFailureNonFatal(t *testing.T) {
 		listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
 		billingErr: errors.New("permission denied"),
 	}
-	m := newGCPSetupModel(fake, "u@gmail.com", nil)
+	m := newGCPSetupModel(fake, "u@gmail.com", nil, false)
 	m, _ = m.Update(runCmd(m.initCmd()))
 	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // pick project
 	m, _ = m.Update(runCmd(cmd))                       // enable result
@@ -200,7 +233,7 @@ func TestGCPSetup_EscFromPickerCancels(t *testing.T) {
 	fake := &fakeGCPClient{listResult: []gcp.Project{
 		{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"},
 	}}
-	m := newGCPSetupModel(fake, "u@gmail.com", nil)
+	m := newGCPSetupModel(fake, "u@gmail.com", nil, false)
 	m, _ = m.Update(runCmd(m.initCmd()))
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if _, ok := runCmd(cmd).(gcpSetupCancelMsg); !ok {
@@ -219,7 +252,7 @@ func TestGCPSetup_CtrlCQuitsFromAnyState(t *testing.T) {
 		{
 			name: "loading",
 			setup: func() gcpSetupModel {
-				return newGCPSetupModel(&fakeGCPClient{}, "u@gmail.com", nil)
+				return newGCPSetupModel(&fakeGCPClient{}, "u@gmail.com", nil, false)
 			},
 		},
 		{
@@ -227,7 +260,7 @@ func TestGCPSetup_CtrlCQuitsFromAnyState(t *testing.T) {
 			setup: func() gcpSetupModel {
 				m := newGCPSetupModel(&fakeGCPClient{
 					listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
-				}, "u@gmail.com", nil)
+				}, "u@gmail.com", nil, false)
 				m, _ = m.Update(runCmd(m.initCmd()))
 				return m
 			},
@@ -235,7 +268,7 @@ func TestGCPSetup_CtrlCQuitsFromAnyState(t *testing.T) {
 		{
 			name: "editingNewName",
 			setup: func() gcpSetupModel {
-				m := newGCPSetupModel(&fakeGCPClient{}, "u@gmail.com", nil)
+				m := newGCPSetupModel(&fakeGCPClient{}, "u@gmail.com", nil, false)
 				m, _ = m.Update(runCmd(m.initCmd()))
 				m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // synthetic + new project row
 				return m
@@ -247,7 +280,7 @@ func TestGCPSetup_CtrlCQuitsFromAnyState(t *testing.T) {
 				m := newGCPSetupModel(&fakeGCPClient{
 					listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
 					billing:    &gcp.BillingInfo{BillingEnabled: true},
-				}, "u@gmail.com", nil)
+				}, "u@gmail.com", nil, false)
 				m, _ = m.Update(runCmd(m.initCmd()))
 				m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 				m, _ = m.Update(runCmd(cmd))
@@ -283,7 +316,7 @@ func TestGCPSetup_PinnedProjectShownWhenMissingFromList(t *testing.T) {
 		},
 	}
 	pinned := &gcp.Project{ProjectID: "fresh", Name: "Just Created", LifecycleState: "ACTIVE"}
-	m := newGCPSetupModel(fake, "u@gmail.com", pinned)
+	m := newGCPSetupModel(fake, "u@gmail.com", pinned, false)
 	m, _ = m.Update(runCmd(m.initCmd()))
 
 	if len(m.projects) != 2 {
@@ -305,11 +338,113 @@ func TestGCPSetup_PinnedProjectNotDuplicatedWhenAlreadyListed(t *testing.T) {
 		},
 	}
 	pinned := &gcp.Project{ProjectID: "fresh", Name: "Just Created", LifecycleState: "ACTIVE"}
-	m := newGCPSetupModel(fake, "u@gmail.com", pinned)
+	m := newGCPSetupModel(fake, "u@gmail.com", pinned, false)
 	m, _ = m.Update(runCmd(m.initCmd()))
 
 	if len(m.projects) != 2 {
 		t.Errorf("expected 2 projects (no duplicate), got %d: %v", len(m.projects), m.projects)
+	}
+}
+
+// Region pick → mint flow: when no AI Studio key exists yet, the
+// region pick transitions to gcpStateMintingAIStudio and the mint
+// result is carried into gcpSetupDoneMsg.
+func TestGCPSetup_MintsAIStudioWhenMissing(t *testing.T) {
+	fake := &fakeGCPClient{
+		listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
+		billing:    &gcp.BillingInfo{BillingEnabled: true},
+		createAPIKeyOp: &gcp.Operation{
+			Name: "operations/k.x",
+			Done: true,
+			Response: map[string]any{
+				"name":      "projects/p/locations/global/keys/uid-1",
+				"uid":       "uid-1",
+				"keyString": "AIzaSy_FAKE",
+			},
+		},
+	}
+	m := newGCPSetupModel(fake, "u@gmail.com", nil, false)
+	m, _ = m.Update(runCmd(m.initCmd()))
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // pick project
+	m, _ = m.Update(runCmd(cmd))                       // enable result
+	m, _ = m.Update(m.checkBillingCmd()())             // billing result
+	if m.state != gcpStatePickingRegion {
+		t.Fatalf("state = %d, want pickingRegion", m.state)
+	}
+	// Press enter on default region — should kick off mint.
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.state != gcpStateMintingAIStudio {
+		t.Fatalf("state = %d, want mintingAIStudio", m.state)
+	}
+	// Run the mint cmd, feed result back. With createAPIKeyOp.Done=true
+	// the wait call is skipped.
+	m, cmd = m.Update(runCmd(cmd))
+	doneMsg, ok := runCmd(cmd).(gcpSetupDoneMsg)
+	if !ok {
+		t.Fatalf("expected gcpSetupDoneMsg, got %T", runCmd(cmd))
+	}
+	if doneMsg.aiStudio == nil {
+		t.Fatal("doneMsg.aiStudio should be populated")
+	}
+	if doneMsg.aiStudio.UID != "uid-1" {
+		t.Errorf("UID = %q", doneMsg.aiStudio.UID)
+	}
+	if doneMsg.aiStudio.KeyString != "AIzaSy_FAKE" {
+		t.Errorf("KeyString = %q", doneMsg.aiStudio.KeyString)
+	}
+	if fake.createAPIKeyCalls != 1 {
+		t.Errorf("expected 1 CreateAPIKey call, got %d", fake.createAPIKeyCalls)
+	}
+}
+
+// Mint failure is non-fatal: gcpSetupDoneMsg still emits, with
+// aiStudio nil. The user keeps Vertex; AI Studio can be retried.
+func TestGCPSetup_MintFailureIsNonFatal(t *testing.T) {
+	fake := &fakeGCPClient{
+		listResult:      []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
+		billing:         &gcp.BillingInfo{BillingEnabled: true},
+		createAPIKeyErr: errors.New("403 forbidden"),
+	}
+	m := newGCPSetupModel(fake, "u@gmail.com", nil, false)
+	m, _ = m.Update(runCmd(m.initCmd()))
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = m.Update(runCmd(cmd))
+	m, _ = m.Update(m.checkBillingCmd()())
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // region → mint
+	m, cmd = m.Update(runCmd(cmd))                    // mint result (error)
+	doneMsg, ok := runCmd(cmd).(gcpSetupDoneMsg)
+	if !ok {
+		t.Fatalf("expected gcpSetupDoneMsg even on mint failure, got %T", runCmd(cmd))
+	}
+	if doneMsg.aiStudio != nil {
+		t.Errorf("aiStudio should be nil on mint failure, got %+v", doneMsg.aiStudio)
+	}
+	if !strings.Contains(m.notice, "AI Studio mint failed") {
+		t.Errorf("expected mint-failed notice, got %q", m.notice)
+	}
+}
+
+// hasAIStudioKey=true → mint state is skipped entirely.
+func TestGCPSetup_SkipsMintWhenKeyAlreadyExists(t *testing.T) {
+	fake := &fakeGCPClient{
+		listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
+		billing:    &gcp.BillingInfo{BillingEnabled: true},
+	}
+	m := newGCPSetupModel(fake, "u@gmail.com", nil, true)
+	m, _ = m.Update(runCmd(m.initCmd()))
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = m.Update(runCmd(cmd))
+	m, _ = m.Update(m.checkBillingCmd()())
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // region pick
+	doneMsg, ok := runCmd(cmd).(gcpSetupDoneMsg)
+	if !ok {
+		t.Fatalf("expected immediate done (no mint), got %T", runCmd(cmd))
+	}
+	if doneMsg.aiStudio != nil {
+		t.Errorf("aiStudio should be nil when skipped, got %+v", doneMsg.aiStudio)
+	}
+	if fake.createAPIKeyCalls != 0 {
+		t.Errorf("CreateAPIKey should not be called when hasAIStudioKey=true, got %d calls", fake.createAPIKeyCalls)
 	}
 }
 
@@ -318,7 +453,9 @@ func TestGCPSetup_RegionPickerNumericNav(t *testing.T) {
 		listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
 		billing:    &gcp.BillingInfo{BillingEnabled: true},
 	}
-	m := newGCPSetupModel(fake, "u@gmail.com", nil)
+	// hasAIStudioKey=true so region pick goes straight to done
+	// without exercising the mint state machine.
+	m := newGCPSetupModel(fake, "u@gmail.com", nil, true)
 	m, _ = m.Update(runCmd(m.initCmd()))
 	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m, _ = m.Update(runCmd(cmd))

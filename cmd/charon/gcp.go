@@ -78,6 +78,13 @@ func runGCPSetup(ctx context.Context, in io.Reader, out io.Writer, v vault.Store
 
 // executeGCPSetup runs the orchestrator and persists the result.
 // Pure modulo the vault and the picker.
+//
+// On success also auto-mints an AI Studio API key under the chosen
+// project — but only if cred.AIStudio is empty (one-key-per-account
+// per #14 design; user re-running setup keeps their existing key).
+// Mint failure is non-fatal: project setup is still useful for
+// Vertex even if AI Studio mint fails (e.g. apikeys API quota,
+// transient network).
 func executeGCPSetup(
 	ctx context.Context,
 	v vault.Store,
@@ -103,6 +110,10 @@ func executeGCPSetup(
 		BillingEnabled:  res.BillingEnabled,
 		UpdatedAt:       time.Now().UTC(),
 	}
+	mintedKey, mintErr := maybeMintAIStudio(ctx, client, picker, cred, res.Project.ProjectID)
+	if mintedKey != nil {
+		cred.AIStudio = mintedKey
+	}
 	if err := v.Set(cred); err != nil {
 		return fmt.Errorf("persist credential: %w", err)
 	}
@@ -111,7 +122,37 @@ func executeGCPSetup(
 	if !res.BillingEnabled {
 		fmt.Fprintln(out, "  Reminder: billing is not linked. Vertex calls will fail until you link a billing account.")
 	}
+	switch {
+	case cred.AIStudio != nil && mintedKey != nil:
+		fmt.Fprintf(out, "  Minted AI Studio key %s (charon-aistudio).\n", mintedKey.UID)
+	case cred.AIStudio != nil:
+		fmt.Fprintf(out, "  AI Studio key already configured (uid: %s) — kept as-is.\n", cred.AIStudio.UID)
+	case mintErr != nil:
+		fmt.Fprintf(out, "  AI Studio key mint failed (%v); Vertex still works. Re-run 'charon auth' to retry.\n", mintErr)
+	}
 	return nil
+}
+
+// maybeMintAIStudio mints a new AI Studio key under projectID iff the
+// credential doesn't already have one. Returns (key, nil) on
+// successful mint, (nil, nil) on skip, or (nil, err) on mint failure.
+func maybeMintAIStudio(ctx context.Context, client *gcp.Client, picker gcp.Picker, cred *vault.Credential, projectID string) (*vault.AIStudioData, error) {
+	if cred.AIStudio != nil {
+		return nil, nil
+	}
+	picker.Notify("Minting AI Studio API key under %s (restricted to generativelanguage.googleapis.com)...", projectID)
+	key, err := gcp.MintAIStudio(ctx, client, projectID)
+	if err != nil {
+		return nil, err
+	}
+	return &vault.AIStudioData{
+		Name:        key.Name,
+		UID:         key.UID,
+		DisplayName: key.DisplayName,
+		KeyMaterial: key.KeyString,
+		ProjectID:   projectID,
+		CreatedAt:   time.Now().UTC(),
+	}, nil
 }
 
 func hasCloudPlatformScope(c *vault.Credential) bool {

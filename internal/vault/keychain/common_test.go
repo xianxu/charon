@@ -30,6 +30,14 @@ func TestStoredCredentialRoundTripsAllPayloads(t *testing.T) {
 			BillingEnabled:  true,
 			UpdatedAt:       time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
 		},
+		AIStudio: &vault.AIStudioData{
+			Name:        "projects/alice-charon/locations/global/keys/abc-uid",
+			UID:         "abc-uid",
+			DisplayName: "charon-aistudio",
+			KeyMaterial: "AIzaSy_FAKE",
+			ProjectID:   "alice-charon",
+			CreatedAt:   time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
+		},
 	}
 
 	// Marshal → unmarshal mirrors the production write/read path.
@@ -57,5 +65,15 @@ func TestStoredCredentialRoundTripsAllPayloads(t *testing.T) {
 	}
 	if !out.GCP.CreatedByCharon {
 		t.Error("CreatedByCharon lost")
+	}
+
+	if out.AIStudio == nil {
+		t.Fatalf("AIStudio sidecar lost in keychain round-trip; serialized form: %s", data)
+	}
+	if out.AIStudio.KeyMaterial != in.AIStudio.KeyMaterial {
+		t.Errorf("KeyMaterial = %q, want %q", out.AIStudio.KeyMaterial, in.AIStudio.KeyMaterial)
+	}
+	if out.AIStudio.UID != in.AIStudio.UID {
+		t.Errorf("UID = %q, want %q", out.AIStudio.UID, in.AIStudio.UID)
 	}
 }

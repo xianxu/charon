@@ -20,6 +20,8 @@ type GCPSetupClient interface {
 	WaitOperation(ctx context.Context, opName string, pollInterval time.Duration) error
 	BatchEnableServices(ctx context.Context, projectID string, services []string) error
 	GetBillingInfo(ctx context.Context, projectID string) (*gcp.BillingInfo, error)
+	CreateAPIKey(ctx context.Context, projectID, displayName string, restrictedTo []string) (*gcp.Operation, error)
+	WaitAPIKeyOperation(ctx context.Context, opName string) (*gcp.Operation, error)
 }
 
 type gcpSetupState int
@@ -32,6 +34,7 @@ const (
 	gcpStateEnabling
 	gcpStateBillingCheck
 	gcpStatePickingRegion
+	gcpStateMintingAIStudio
 	gcpStateError
 )
 
@@ -73,6 +76,17 @@ type gcpSetupModel struct {
 	// immediately on re-entry.
 	pinnedProject *gcp.Project
 
+	// hasAIStudioKey is true when the credential already has an
+	// AI Studio key persisted. Skip the mint step in that case to
+	// honor "one key per account" — re-running setup keeps the
+	// existing key. Re-mint requires explicit revoke first.
+	hasAIStudioKey bool
+
+	// mintedAIStudio carries the freshly-minted key from the mint
+	// state to the done message so the top-level model can persist
+	// it onto the credential.
+	mintedAIStudio *gcp.APIKey
+
 	// Project picker state.
 	projects   []gcp.Project
 	projectCur int
@@ -110,7 +124,9 @@ type gcpBillingCheckedMsg struct {
 }
 
 // gcpSetupDoneMsg signals the top-level model to persist the result
-// and return to scopes view.
+// and return to scopes view. aiStudio is non-nil when this run
+// minted a fresh key; nil means the credential already had one (or
+// mint failed — non-fatal).
 type gcpSetupDoneMsg struct {
 	account     string
 	projectID   string
@@ -118,6 +134,15 @@ type gcpSetupDoneMsg struct {
 	region      string
 	createdNew  bool
 	billing     bool
+	aiStudio    *gcp.APIKey
+}
+
+// gcpAIStudioMintedMsg is the async result of the AI Studio mint
+// operation. err is non-nil only on real failure; mint failure is
+// surfaced as a notice but the flow still proceeds to done.
+type gcpAIStudioMintedMsg struct {
+	key *gcp.APIKey
+	err error
 }
 
 // gcpSetupCancelMsg signals user-initiated cancel from any state.
@@ -130,7 +155,7 @@ type gcpSetupRequestMsg struct {
 	account string
 }
 
-func newGCPSetupModel(client GCPSetupClient, account string, pinned *gcp.Project) gcpSetupModel {
+func newGCPSetupModel(client GCPSetupClient, account string, pinned *gcp.Project, hasAIStudioKey bool) gcpSetupModel {
 	ti := textinput.New()
 	ti.Placeholder = "Charon Gemini"
 	ti.Prompt = "Display name: "
@@ -138,12 +163,13 @@ func newGCPSetupModel(client GCPSetupClient, account string, pinned *gcp.Project
 	ti.Width = 40
 
 	return gcpSetupModel{
-		client:        client,
-		account:       account,
-		state:         gcpStateLoading,
-		nameInput:     ti,
-		regionCur:     0, // default to first region (us-central1)
-		pinnedProject: pinned,
+		client:         client,
+		account:        account,
+		state:          gcpStateLoading,
+		nameInput:      ti,
+		regionCur:      0, // default to first region (us-central1)
+		pinnedProject:  pinned,
+		hasAIStudioKey: hasAIStudioKey,
 	}
 }
 
@@ -225,6 +251,16 @@ func (m gcpSetupModel) Update(msg tea.Msg) (gcpSetupModel, tea.Cmd) {
 			m.notice = ""
 		}
 		return m, nil
+
+	case gcpAIStudioMintedMsg:
+		// Mint failure is non-fatal: project setup still works for
+		// Vertex. Record the result (or absence) and emit done.
+		if msg.err != nil {
+			m.notice = fmt.Sprintf("AI Studio mint failed: %v. Vertex still works; re-run setup to retry.", msg.err)
+			return m, m.emitDoneCmd(nil)
+		}
+		m.mintedAIStudio = msg.key
+		return m, m.emitDoneCmd(msg.key)
 	}
 
 	keyMsg, isKey := msg.(tea.KeyMsg)
@@ -242,7 +278,7 @@ func (m gcpSetupModel) Update(msg tea.Msg) (gcpSetupModel, tea.Cmd) {
 	case gcpStateError:
 		// Any key dismisses the error and cancels.
 		return m, func() tea.Msg { return gcpSetupCancelMsg{} }
-	case gcpStateLoading, gcpStateCreatingProject, gcpStateEnabling, gcpStateBillingCheck:
+	case gcpStateLoading, gcpStateCreatingProject, gcpStateEnabling, gcpStateBillingCheck, gcpStateMintingAIStudio:
 		// Async ops in flight: only esc cancels (ctrl+c handled at top).
 		if keyMsg.String() == "esc" {
 			return m, func() tea.Msg { return gcpSetupCancelMsg{} }
@@ -316,25 +352,68 @@ func (m gcpSetupModel) updatePickingRegion(msg tea.KeyMsg) (gcpSetupModel, tea.C
 			m.regionCur++
 		}
 	case "enter":
-		region := gcp.SupportedVertexRegions[m.regionCur]
-		account := m.account
-		project := m.chosenProject
-		createdNew := m.createdNew
-		billing := m.billingEnabled
-		return m, func() tea.Msg {
-			return gcpSetupDoneMsg{
-				account:     account,
-				projectID:   project.ProjectID,
-				projectName: project.Name,
-				region:      region,
-				createdNew:  createdNew,
-				billing:     billing,
-			}
+		// Region picked. If the credential already has an AI Studio
+		// key, skip the mint step entirely and emit done. Otherwise
+		// transition to mintingAIStudio and kick off the API call.
+		if m.hasAIStudioKey {
+			return m, m.emitDoneCmd(nil)
 		}
+		m.state = gcpStateMintingAIStudio
+		m.notice = fmt.Sprintf("Minting AI Studio API key under %s (restricted to %s)...", m.chosenProject.ProjectID, gcp.AIStudioServiceTarget)
+		return m, m.mintAIStudioCmd()
 	case "esc":
 		return m, func() tea.Msg { return gcpSetupCancelMsg{} }
 	}
 	return m, nil
+}
+
+// emitDoneCmd returns a cmd that emits gcpSetupDoneMsg carrying the
+// orchestrator's accumulated state. Caller passes the (optional)
+// freshly-minted AI Studio key.
+func (m gcpSetupModel) emitDoneCmd(key *gcp.APIKey) tea.Cmd {
+	region := gcp.SupportedVertexRegions[m.regionCur]
+	account := m.account
+	project := m.chosenProject
+	createdNew := m.createdNew
+	billing := m.billingEnabled
+	return func() tea.Msg {
+		return gcpSetupDoneMsg{
+			account:     account,
+			projectID:   project.ProjectID,
+			projectName: project.Name,
+			region:      region,
+			createdNew:  createdNew,
+			billing:     billing,
+			aiStudio:    key,
+		}
+	}
+}
+
+func (m gcpSetupModel) mintAIStudioCmd() tea.Cmd {
+	client := m.client
+	projectID := m.chosenProject.ProjectID
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		op, err := client.CreateAPIKey(ctx, projectID, gcp.AIStudioDisplayName, []string{gcp.AIStudioServiceTarget})
+		if err != nil {
+			return gcpAIStudioMintedMsg{err: err}
+		}
+		if !op.Done {
+			op, err = client.WaitAPIKeyOperation(ctx, op.Name)
+			if err != nil {
+				return gcpAIStudioMintedMsg{err: err}
+			}
+		}
+		key, err := gcp.ExtractAPIKey(op)
+		if err != nil {
+			return gcpAIStudioMintedMsg{err: err}
+		}
+		if key.KeyString == "" {
+			return gcpAIStudioMintedMsg{err: fmt.Errorf("minted key has empty KeyString")}
+		}
+		return gcpAIStudioMintedMsg{key: key}
+	}
 }
 
 func (m gcpSetupModel) createProjectCmd(id, name string) tea.Cmd {
@@ -415,7 +494,7 @@ func (m gcpSetupModel) View() string {
 		b.WriteString(m.nameInput.View())
 		b.WriteString("\n\n")
 		b.WriteString(helpStyle.Render("  enter: create    esc: back"))
-	case gcpStateCreatingProject, gcpStateEnabling, gcpStateBillingCheck:
+	case gcpStateCreatingProject, gcpStateEnabling, gcpStateBillingCheck, gcpStateMintingAIStudio:
 		b.WriteString("  ")
 		b.WriteString(m.notice)
 		b.WriteString("\n\n")
