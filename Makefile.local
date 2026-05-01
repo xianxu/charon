@@ -41,25 +41,13 @@ run: build
 # the file-backed dev vault at ~/.local/share/charon/, so dev work
 # does not touch prod keychain entries.
 #
-# An EXIT trap prints a reminder when Ctrl+C / kill / normal exit
-# fires, so the user is loudly told that production is still down.
-# Production is NOT auto-restored — the trap only complains. Run
-# `make install` (or `make reinstall`) when you're done.
+# Production is NOT auto-restored on exit — scripts/dev/dev-serve.sh
+# prints a loud reminder so the user knows to run `make install`. The
+# trap lives in the script (not in this recipe) because Make aborts
+# the recipe shell on SIGINT before its EXIT trap can run, while a
+# bash script with its own trap fires reliably.
 dev: build
-	@echo "==> Stopping production charon service..."
-	@~/.local/bin/charon service uninstall 2>/dev/null || true
-	@echo ""
-	@echo "==> Dev binary: ./bin/charon"
-	@echo "    Vault: ~/.local/share/charon/ (separate from prod keychain)"
-	@echo "    Listen: 127.0.0.1:8230"
-	@echo ""
-	@trap 'echo ""; \
-	       echo "================================================================"; \
-	       echo "  Production charon proxy is NOT running."; \
-	       echo "  Run:  make install"; \
-	       echo "  to restore the launchd service."; \
-	       echo "================================================================"' EXIT; \
-	./bin/charon serve -v
+	@scripts/dev/dev-serve.sh
 
 test-integration:
 	go test -tags integration ./...
