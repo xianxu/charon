@@ -25,6 +25,11 @@ const (
 //
 // At most one of {flat OAuth fields, AdminKey, Catalog} is populated per
 // credential. Wrong-payload mixes indicate a bug.
+//
+// GCP is a sidecar payload that *augments* TypeOAuth credentials for Google
+// accounts that have granted cloud-platform; it stores the project_id and
+// region needed for Vertex / AI Studio URLs. Lives on the same credential
+// because lifecycle and ACL match the OAuth tokens.
 type Credential struct {
 	Type     string `json:"type,omitempty"`
 	Provider string `json:"provider"`
@@ -41,6 +46,12 @@ type Credential struct {
 	// TypeOAuth.
 	AdminKey *AdminKeyData `json:"admin_key,omitempty"`
 	Catalog  *CatalogData  `json:"catalog,omitempty"`
+
+	// GCP is an optional sidecar on TypeOAuth Google credentials.
+	// Populated when the user grants cloud-platform and runs charon's
+	// project setup (issue #14 M3). Independent of the OAuth payload —
+	// can be present or absent regardless of token state.
+	GCP *GCPData `json:"gcp,omitempty"`
 }
 
 // AdminKeyData is the per-account payload for TypeAdminKey credentials
@@ -69,6 +80,49 @@ type AdminKeyData struct {
 	// mint time and never refetchable upstream.
 	KeyMaterial string    `json:"key_material"`
 	CreatedAt   time.Time `json:"created_at,omitempty"`
+}
+
+// GCPData is the sidecar payload for Google OAuth credentials whose
+// holder has granted cloud-platform and run charon's project setup.
+// Records the GCP project + region needed to construct Vertex /
+// AI Studio URLs and mint API Keys API requests.
+//
+// Lifecycle: charon creates and tracks the project (CreatedByCharon
+// flag captures whether this charon instance ran the create call),
+// but never deletes projects — even ones it created. Users delete
+// in Cloud Console where billing / dependency review happens. See
+// issue #14 § "Lifecycle of GCP artifacts".
+type GCPData struct {
+	// ProjectID is the immutable lowercase-alnum-hyphen identifier
+	// (6-30 chars) used in URL paths.
+	ProjectID string `json:"project_id"`
+	// ProjectName is the human-readable display name. May change
+	// upstream without invalidating ProjectID.
+	ProjectName string `json:"project_name,omitempty"`
+	// Parent is null for personal/no-org projects (the MVP default).
+	// Reserved for a future org-aware UI; the field is present so a
+	// later flow needs zero schema migration. See issue #14 §
+	// "Open questions / Project under organization vs no-org".
+	Parent *GCPParent `json:"parent,omitempty"`
+	// VertexRegion is the default region for Vertex AI URLs (e.g.
+	// "us-central1"). Agents may override per-request.
+	VertexRegion string `json:"vertex_region,omitempty"`
+	// CreatedByCharon is true when this charon instance ran the
+	// projects.create call. Informational only — see Lifecycle.
+	CreatedByCharon bool `json:"created_by_charon,omitempty"`
+	// BillingEnabled mirrors cloudbilling.projects.getBillingInfo at
+	// the time of last sync. Used to drive the "Vertex will fail with
+	// BILLING_DISABLED" warning. Stale after upstream changes; charon
+	// refreshes opportunistically.
+	BillingEnabled bool      `json:"billing_enabled,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at,omitempty"`
+}
+
+// GCPParent identifies a project's containing organization or folder.
+// Mirrors gcp.Parent; lives in vault to avoid the import cycle.
+type GCPParent struct {
+	Type string `json:"type"` // "organization" or "folder"
+	ID   string `json:"id"`
 }
 
 // CatalogData is the per-account payload for TypeCatalog credentials

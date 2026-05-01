@@ -101,17 +101,29 @@ Mostly free with the existing Google OAuth flow. Adds:
 
 Per Google account (e.g. `xianxu@gmail.com`):
 
-- `google:xianxu@gmail.com` — OAuth refresh token (existing)
-- `google:xianxu@gmail.com:gcp` — `{project_id, project_name,
-  parent, vertex_region, created_by_charon, billing_enabled}`
-  (NEW; populated when `cloud-platform` scope is granted — see M3).
+- `google:xianxu@gmail.com` — OAuth refresh token (existing). When
+  the user has run M3's project setup, this credential also carries
+  a `gcp` sidecar payload: `{project_id, project_name, parent,
+  vertex_region, created_by_charon, billing_enabled, updated_at}`.
   Required by Vertex (URL contains project + region) and by the AI
   Studio key-mint URL. `parent` is `{type: "organization"|"folder",
   id: "..."}` or `null`; MVP always writes `null` (no UI to pick
   org), but the field is present so a later org-aware flow needs
   only UI changes, no schema migration.
+
+  *Design note:* GCP metadata lives on the same credential as the
+  OAuth tokens — same Google account, same lifecycle, same ACL.
+  Earlier draft proposed a sibling keychain entry
+  `google:<account>:gcp`; reverted because that pattern requires
+  fold-into-parent logic in `charon manifest`, two-write
+  coordination on creation, and two-delete on revoke for no
+  meaningful benefit when both pieces share a lifecycle.
+
 - `google:xianxu@gmail.com:aistudio` — minted AI Studio API key +
-  key_id metadata (NEW; only when AI Studio path is used).
+  key_id metadata (NEW; only when AI Studio path is used). Stays
+  in a sibling entry because the API key itself is a distinct
+  secret with its own lifecycle (mint / revoke independent of
+  OAuth refresh, separately revocable upstream).
 
 The `:gcp` entry is the bridge: OAuth gives us *who you are*, but
 Vertex's URLs are `/v1/projects/{PROJECT_ID}/locations/{REGION}/...`
@@ -233,14 +245,17 @@ Sketch milestones:
       https://console.cloud.google.com/billing/linkedaccount?project={id}".
       Charon does not attempt to attach billing.
    6. Stores `{project_id, project_name, parent, vertex_region,
-      created_by_charon, billing_enabled}` under
-      `google:<account>:gcp`. `parent` is `null` for MVP (no UI to
-      pick org); the field exists in the schema so a future
-      org-aware flow is a UI-only change. `created_by_charon` and
-      `billing_enabled` are informational — see Lifecycle of GCP
-      artifacts (charon never deletes projects regardless).
+      created_by_charon, billing_enabled, updated_at}` as the
+      `gcp` sidecar on the existing `google:<account>` OAuth
+      credential (same keychain entry, same ACL — see Storage
+      shape for the design note). `parent` is `null` for MVP
+      (no UI to pick org); the field exists in the schema so a
+      future org-aware flow is a UI-only change.
+      `created_by_charon` and `billing_enabled` are informational
+      — see Lifecycle of GCP artifacts (charon never deletes
+      projects regardless).
    7. Surfaces in `charon manifest` under
-      `permissions.google.<account>.gcp`.
+      `permissions.google.<account>.gcp` (sibling to `scopes`).
 
    Recovery flow: if the user already has a `:gcp` entry but it's
    stale (project deleted upstream, or APIs disabled), `charon auth`
@@ -358,9 +373,39 @@ independently.
   for Vertex (URLs need project+region) and for AI Studio key minting
   (mint URL needs project_id). Added a full project-management
   milestone: list/create projects, enable APIs, pick region, store
-  metadata under `google:<account>:gcp`, surface in `charon manifest`.
+  metadata as a sidecar on the `google:<account>` OAuth credential,
+  surface in `charon manifest`.
   Old M3–M6 renumbered to M4–M7. Storage shape, manifest impact, and
   GCP-artifact lifecycle (charon doesn't delete projects, even ones
   it created) documented. Estimate revised from 2.4–7.6 to 3.86–11.0
   hr; the additional ~2 hr is M3 itself plus two new external APIs
   (Cloud Resource Manager, Service Usage) for v2-method discovery.
+
+- **2026-05-01 — M3 chunk-1: GCP API client landed.**
+  `internal/providers/gcp/` package shipped with `Client`, paginated
+  `ListProjects` (filters non-ACTIVE), `CreateProject` +
+  `WaitOperation`, idempotent `BatchEnableServices` (sync + async
+  paths), and `GetBillingInfo`. Auth via `TokenSupplier` callback
+  so the package stays free of refresh logic. PollInterval is a
+  Client field (default 2s, tests override to 1ms). httptest-mocked
+  tests for: token-supplier failure, error-body preservation,
+  pagination + ACTIVE filtering, create-then-poll, operation error
+  propagation, context cancel during poll, sync vs async batch
+  enable, both billing states.
+
+- **2026-05-01 — M3 chunk-2: vault schema + manifest shape.**
+  Added `vault.GCPData` and `vault.GCPParent` types; `Credential`
+  gets an optional `GCP *GCPData` sidecar (augments TypeOAuth, does
+  not displace it). Spec updated: GCP metadata lives **inline on
+  the OAuth credential**, not in a sibling `:gcp` keychain entry.
+  Reasoning: same Google account, same lifecycle, same ACL — sibling
+  entry would force fold-into-parent logic in manifest, two-write
+  coordination on creation, and two-delete on revoke for no
+  benefit. AI Studio key (M4) stays separate because that's a
+  distinct secret with its own lifecycle.
+
+  `manifest`'s permissions shape evolves from `[scopes]` to
+  `{scopes, gcp?}` per account. Backward-compat for accounts
+  without GCP setup is automatic (`omitempty` on the gcp field).
+  Tests cover: GCP surfaces when present, omitted when absent,
+  JSON shape with both branches.

@@ -393,16 +393,23 @@ func manifestCmd() *cobra.Command {
     },
     "permissions": {
       "google": {
-        "user@gmail.com": ["openid", "https://...userinfo.email", ...]
+        "user@gmail.com": {
+          "scopes": ["openid", "https://...userinfo.email", ...],
+          "gcp": {
+            "project_id": "...",
+            "vertex_region": "us-central1",
+            ...
+          }
+        }
       }
     }
   }
 
 The proxy section reflects the configured --addr (default
 127.0.0.1:8230). The permissions section is keyed by provider then
-account, with each value the list of granted scopes (in the form
-charon stores them — typically the full URL the provider issued
-tokens against).
+account; each value carries the granted scopes (full URLs as charon
+stores them) plus an optional gcp object when the user has run
+charon's Google Cloud project setup.
 
 Loading per-credential data triggers one keychain access per account,
 which may prompt for permission on the first access.`,
@@ -440,30 +447,42 @@ func manifestPayload(v vault.Store, addr string) (map[string]any, error) {
 	}, nil
 }
 
-// permissionsPayload returns granted scopes keyed by provider then account,
-// the shape used in the `charon manifest` permissions section. nil-scope
-// credentials normalize to an empty slice so JSON renders [] not null.
-// Per-credential read failures (e.g. keychain ACL denied for one entry)
-// are skipped so a partial snapshot is still returned.
-func permissionsPayload(v vault.Store) (map[string]map[string][]string, error) {
+// AccountPermissions is the per-account value in the manifest's
+// permissions section. Scopes is always present (empty slice when
+// none granted); GCP is omitted when the account has no GCP setup.
+type AccountPermissions struct {
+	Scopes []string       `json:"scopes"`
+	GCP    *vault.GCPData `json:"gcp,omitempty"`
+}
+
+// permissionsPayload returns granted scopes (and GCP metadata when
+// present) keyed by provider then account — the shape used in
+// `charon manifest`'s permissions section. nil-scope credentials
+// normalize to an empty slice so JSON renders [] not null.
+// Per-credential read failures (e.g. keychain ACL denied for one
+// entry) are skipped so a partial snapshot is still returned.
+func permissionsPayload(v vault.Store) (map[string]map[string]AccountPermissions, error) {
 	summaries, err := v.List()
 	if err != nil {
 		return nil, err
 	}
-	byProvider := map[string]map[string][]string{}
+	byProvider := map[string]map[string]AccountPermissions{}
 	for _, c := range summaries {
 		cred, err := v.Get(c.Provider, c.Account)
 		if err != nil {
 			continue
 		}
 		if _, ok := byProvider[c.Provider]; !ok {
-			byProvider[c.Provider] = map[string][]string{}
+			byProvider[c.Provider] = map[string]AccountPermissions{}
 		}
 		scopes := cred.Scopes
 		if scopes == nil {
 			scopes = []string{}
 		}
-		byProvider[c.Provider][c.Account] = scopes
+		byProvider[c.Provider][c.Account] = AccountPermissions{
+			Scopes: scopes,
+			GCP:    cred.GCP,
+		}
 	}
 	return byProvider, nil
 }
