@@ -496,3 +496,35 @@ independently.
   `mintingAIStudio` (async) → `done` (or skip mint if pinned key
   already exists). Tests cover happy mint, mint-failure-non-fatal,
   and skip-when-key-exists.
+
+- **2026-05-01 — M5: AI Studio routing (URL-param auth).** Proxy
+  learns to mutate URLs (first non-header auth method).
+
+  - New `AuthURLParamKey` constant in `internal/proxy/routing.go`.
+  - `Provider.InjectAuth` signature changed: takes `*http.Request`
+    instead of `setHeader func`. AuthBearer keeps writing to
+    headers; AuthURLParamKey appends `?key=<token>` via
+    `req.URL.Query().Set("key", token); req.URL.RawQuery = q.Encode()`.
+    Existing query params are preserved.
+  - New `Provider.VaultProvider` field — when set, credential
+    lookup uses that name instead of `Provider.Name`. AI Studio
+    routes use `Name="google-aistudio"` (distinct from the OAuth
+    Google provider for cache + audit clarity) but
+    `VaultProvider="google"` so the credential is fetched from
+    the existing Google OAuth entry.
+  - Routing entry: exact-match for
+    `generativelanguage.googleapis.com` → `{google-aistudio,
+    AuthURLParamKey, HasScopes:false, VaultProvider:"google"}`.
+    Exact-match precedence over the suffix rule means
+    `*.googleapis.com → {google, bearer}` no longer catches
+    AI Studio.
+  - `proxy.resolveToken` now takes `*Provider` rather than
+    `providerName string`. For `AuthURLParamKey`, returns
+    `cred.AIStudio.KeyMaterial`; cache key is `Provider.Name`-
+    based so AI Studio and OAuth bearer entries don't collide.
+
+  Tests cover: URL-param attach (with and without pre-existing
+  query params), bearer header still works after refactor,
+  AI Studio routing returns the correct provider config.
+
+  Pending: real-call smoke test (requires user-side test).

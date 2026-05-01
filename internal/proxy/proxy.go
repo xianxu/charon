@@ -213,7 +213,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		requestedScopes := req.Header.Get(charonScopeHeader)
 		req.Header.Del(charonScopeHeader)
 
-		token, resolvedAccount, grantedScopes, err := s.resolveToken(provider.Name, account)
+		token, resolvedAccount, grantedScopes, err := s.resolveToken(provider, account)
 		entry := AuditEntry{
 			Timestamp: start,
 			Method:    req.Method,
@@ -270,7 +270,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if err := provider.InjectAuth(req.Header.Set, token); err != nil {
+		if err := provider.InjectAuth(req, token); err != nil {
 			entry.Error = err.Error()
 			s.Audit.Log(entry)
 			return
@@ -364,7 +364,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		requestedScopes := r.Header.Get(charonScopeHeader)
 		r.Header.Del(charonScopeHeader)
 
-		token, resolvedAccount, grantedScopes, err := s.resolveToken(provider.Name, account)
+		token, resolvedAccount, grantedScopes, err := s.resolveToken(provider, account)
 		entry.Account = resolvedAccount
 		if err != nil {
 			entry.Error = err.Error()
@@ -395,7 +395,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if err := provider.InjectAuth(r.Header.Set, token); err != nil {
+		if err := provider.InjectAuth(r, token); err != nil {
 			entry.Error = err.Error()
 			s.Audit.Log(entry)
 			http.Error(w, "charon: unsupported auth method", http.StatusInternalServerError)
@@ -426,11 +426,16 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-// resolveToken gets an access token and granted scopes for the given provider/account.
-func (s *Server) resolveToken(providerName, account string) (token, resolvedAccount string, scopes []string, err error) {
+// resolveToken gets a credential token and granted scopes for the
+// given provider/account. The provider's VaultName() determines
+// where to look up the credential, and Auth determines which field
+// of the credential to use as the token (AccessToken, AdminKey
+// material, or AIStudio key).
+func (s *Server) resolveToken(p *Provider, account string) (token, resolvedAccount string, scopes []string, err error) {
+	vaultName := p.VaultName()
 	if account == "" {
 		// Check account cache first to avoid calling security dump-keychain.
-		if cached, ok := s.accountCache.Load(providerName); ok {
+		if cached, ok := s.accountCache.Load(vaultName); ok {
 			account = cached.(string)
 		} else {
 			creds, err := s.Vault.List()
@@ -439,23 +444,26 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 			}
 			var matches []*vault.Credential
 			for _, c := range creds {
-				if c.Provider == providerName {
+				if c.Provider == vaultName {
 					matches = append(matches, c)
 				}
 			}
 			switch len(matches) {
 			case 0:
-				return "", "", nil, fmt.Errorf("no credentials for provider %q", providerName)
+				return "", "", nil, fmt.Errorf("no credentials for provider %q", vaultName)
 			case 1:
 				account = matches[0].Account
-				s.accountCache.Store(providerName, account)
+				s.accountCache.Store(vaultName, account)
 			default:
-				return "", "", nil, fmt.Errorf("multiple accounts for provider %q, set %s header", providerName, charonAccountHeader)
+				return "", "", nil, fmt.Errorf("multiple accounts for provider %q, set %s header", vaultName, charonAccountHeader)
 			}
 		}
 	}
 
-	cacheKey := providerName + ":" + account
+	// Cache key is keyed on the routing provider name so two routes
+	// onto the same vault entry (Google OAuth bearer vs. Google AI
+	// Studio key) get separate cache slots.
+	cacheKey := p.Name + ":" + account
 	now := s.now()
 	if cached, ok := s.tokenCache.Load(cacheKey); ok {
 		ct := cached.(*cachedToken)
@@ -464,9 +472,21 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 		}
 	}
 
-	cred, err := s.Vault.Get(providerName, account)
+	cred, err := s.Vault.Get(vaultName, account)
 	if err != nil {
 		return "", account, nil, err
+	}
+
+	// AuthURLParamKey routes (Google AI Studio): the credential is
+	// stored under "google" alongside the OAuth tokens; the key
+	// material lives in cred.AIStudio. No scopes, no refresh — the
+	// key is static until rotated/revoked.
+	if p.Auth == AuthURLParamKey {
+		if cred.AIStudio == nil || cred.AIStudio.KeyMaterial == "" {
+			return "", account, nil, fmt.Errorf("no AI Studio key for %s/%s — run 'charon auth' and complete cloud-platform setup", vaultName, account)
+		}
+		s.tokenCache.Store(cacheKey, &cachedToken{token: cred.AIStudio.KeyMaterial})
+		return cred.AIStudio.KeyMaterial, account, nil, nil
 	}
 
 	// Admin-key credentials (OpenAI service-account keys, future
@@ -477,7 +497,7 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 	// short-circuits subsequent reads cheaply.
 	if cred.CredType() == vault.TypeAdminKey {
 		if cred.AdminKey == nil || cred.AdminKey.KeyMaterial == "" {
-			return "", account, nil, fmt.Errorf("admin-key credential %s/%s has no key material — re-mint", providerName, account)
+			return "", account, nil, fmt.Errorf("admin-key credential %s/%s has no key material — re-mint", vaultName, account)
 		}
 		s.tokenCache.Store(cacheKey, &cachedToken{token: cred.AdminKey.KeyMaterial})
 		return cred.AdminKey.KeyMaterial, account, nil, nil
@@ -496,7 +516,7 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 	// Use singleflight to prevent concurrent refreshes for the same account
 	// (thundering herd when multiple requests arrive with an expired token).
 	if cred.RefreshToken != "" && s.Refreshers != nil {
-		if refresher, ok := s.Refreshers[providerName]; ok {
+		if refresher, ok := s.Refreshers[vaultName]; ok {
 			type refreshResult struct {
 				token  string
 				scopes []string
@@ -514,7 +534,7 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 					return nil, err
 				}
 				if storeErr := s.Vault.Set(refreshed); storeErr != nil {
-					log.Printf("failed to store refreshed token for %s/%s: %v", providerName, account, storeErr)
+					log.Printf("failed to store refreshed token for %s/%s: %v", vaultName, account, storeErr)
 				}
 				s.tokenCache.Store(cacheKey, &cachedToken{
 					token:  refreshed.AccessToken,
@@ -524,7 +544,7 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 				return &refreshResult{refreshed.AccessToken, refreshed.Scopes}, nil
 			})
 			if err != nil {
-				log.Printf("token refresh failed for %s/%s: %v", providerName, account, err)
+				log.Printf("token refresh failed for %s/%s: %v", vaultName, account, err)
 			} else {
 				rr := result.(*refreshResult)
 				return rr.token, account, rr.scopes, nil
@@ -537,5 +557,5 @@ func (s *Server) resolveToken(providerName, account string) (token, resolvedAcco
 		return cred.AccessToken, account, cred.Scopes, nil
 	}
 
-	return "", account, nil, fmt.Errorf("no access token for %s/%s and refresh not available", providerName, account)
+	return "", account, nil, fmt.Errorf("no access token for %s/%s and refresh not available", vaultName, account)
 }

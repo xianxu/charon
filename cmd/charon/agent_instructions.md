@@ -161,8 +161,6 @@ Headers:
 
 ### AI Studio (Gemini, free-tier, key-based)
 
-**Currently pending implementation (M5 in issue #14).** When done:
-
 ```
 POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent
 
@@ -170,8 +168,15 @@ Headers:
   X-Charon-Account: user@gmail.com
 ```
 
-Charon will auto-attach the minted `?key=...` URL parameter for
-the account's AI Studio API key. No project info required from you.
+Charon attaches the minted `?key=...` URL parameter automatically
+from the account's AI Studio key (cred.AIStudio). The agent never
+sees the key. No project info required in the URL — AI Studio's
+API doesn't take project paths.
+
+The `ai-studio` block must be present in the manifest for this to
+work. If it isn't, the user hasn't completed cloud-platform setup
+yet; tell them to run `charon auth` and walk through the
+cloud-platform row's project setup flow (which auto-mints the key).
 
 ### OpenAI / Anthropic
 
@@ -222,7 +227,7 @@ manifest), not OpenAI's internal project ID.
 | Pick an account                     | `X-Charon-Account: <account>` header             |
 | Declare required scopes (optional)  | `X-Charon-Scope: <short>,<short>` header         |
 | Vertex URL                          | Build from `manifest.vertex.project_id` + region |
-| AI Studio URL                       | `generativelanguage.googleapis.com` (M5 pending) |
+| AI Studio URL                       | `generativelanguage.googleapis.com` (key auto-attached) |
 
 ---
 
