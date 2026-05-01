@@ -3,7 +3,7 @@
 
 .PHONY: build sign test run clean signing-identity install reinstall print-sign-identity \
         security-build security-install security security-remedy security-uninstall \
-        govulncheck
+        govulncheck dev
 
 # ── Codesigning configuration ────────────────────────────────────────────────
 # CODESIGN_IDENTIFIER must stay in sync with charonCodesignIdentifier in
@@ -35,6 +35,26 @@ test:
 
 run: build
 	./bin/charon serve
+
+# Stop production launchd service, build an unsigned dev binary, and
+# run it in foreground with -v. Unsigned binary routes credentials to
+# the file-backed dev vault at ~/.local/share/charon/, so dev work
+# does not touch prod keychain entries.
+#
+# Production is NOT restored on exit — Ctrl+C just kills the dev
+# proxy. Run `make install` (or `make reinstall`) when you're done
+# to bring the launchd service back up.
+dev: build
+	@echo "==> Stopping production charon service..."
+	@~/.local/bin/charon service uninstall 2>/dev/null || true
+	@echo ""
+	@echo "==> Dev binary: ./bin/charon"
+	@echo "    Vault: ~/.local/share/charon/ (separate from prod keychain)"
+	@echo "    Listen: 127.0.0.1:8230"
+	@echo ""
+	@echo "    When done, run 'make install' to restore production."
+	@echo ""
+	./bin/charon serve -v
 
 test-integration:
 	go test -tags integration ./...
