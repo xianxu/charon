@@ -419,8 +419,8 @@ func TestGCPSetup_MintFailureIsNonFatal(t *testing.T) {
 	if doneMsg.aiStudio != nil {
 		t.Errorf("aiStudio should be nil on mint failure, got %+v", doneMsg.aiStudio)
 	}
-	if !strings.Contains(m.notice, "AI Studio mint failed") {
-		t.Errorf("expected mint-failed notice, got %q", m.notice)
+	if !strings.Contains(doneMsg.aiStudioErr, "403 forbidden") {
+		t.Errorf("expected aiStudioErr to carry the upstream error, got %q", doneMsg.aiStudioErr)
 	}
 }
 

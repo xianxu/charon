@@ -125,16 +125,20 @@ type gcpBillingCheckedMsg struct {
 
 // gcpSetupDoneMsg signals the top-level model to persist the result
 // and return to scopes view. aiStudio is non-nil when this run
-// minted a fresh key; nil means the credential already had one (or
-// mint failed — non-fatal).
+// minted a fresh key; nil means the credential already had one or
+// mint failed (non-fatal). aiStudioErr carries the mint failure
+// message so the scope picker can surface it persistently — the
+// in-flow notice is too brief for users to read before the screen
+// transitions back.
 type gcpSetupDoneMsg struct {
-	account     string
-	projectID   string
-	projectName string
-	region      string
-	createdNew  bool
-	billing     bool
-	aiStudio    *gcp.APIKey
+	account      string
+	projectID    string
+	projectName  string
+	region       string
+	createdNew   bool
+	billing      bool
+	aiStudio     *gcp.APIKey
+	aiStudioErr  string // non-empty iff mint was attempted and failed
 }
 
 // gcpAIStudioMintedMsg is the async result of the AI Studio mint
@@ -254,10 +258,10 @@ func (m gcpSetupModel) Update(msg tea.Msg) (gcpSetupModel, tea.Cmd) {
 
 	case gcpAIStudioMintedMsg:
 		// Mint failure is non-fatal: project setup still works for
-		// Vertex. Record the result (or absence) and emit done.
+		// Vertex. Carry the error string into the done msg so the
+		// scope picker can surface it after this screen exits.
 		if msg.err != nil {
-			m.notice = fmt.Sprintf("AI Studio mint failed: %v. Vertex still works; re-run setup to retry.", msg.err)
-			return m, m.emitDoneCmd(nil)
+			return m, m.emitDoneCmdWithMintErr(msg.err.Error())
 		}
 		m.mintedAIStudio = msg.key
 		return m, m.emitDoneCmd(msg.key)
@@ -371,6 +375,16 @@ func (m gcpSetupModel) updatePickingRegion(msg tea.KeyMsg) (gcpSetupModel, tea.C
 // orchestrator's accumulated state. Caller passes the (optional)
 // freshly-minted AI Studio key.
 func (m gcpSetupModel) emitDoneCmd(key *gcp.APIKey) tea.Cmd {
+	return m.emitDoneCmdWith(key, "")
+}
+
+// emitDoneCmdWithMintErr is the failure-path variant that records
+// the mint error so the scope picker can surface it.
+func (m gcpSetupModel) emitDoneCmdWithMintErr(mintErr string) tea.Cmd {
+	return m.emitDoneCmdWith(nil, mintErr)
+}
+
+func (m gcpSetupModel) emitDoneCmdWith(key *gcp.APIKey, mintErr string) tea.Cmd {
 	region := gcp.SupportedVertexRegions[m.regionCur]
 	account := m.account
 	project := m.chosenProject
@@ -385,6 +399,7 @@ func (m gcpSetupModel) emitDoneCmd(key *gcp.APIKey) tea.Cmd {
 			createdNew:  createdNew,
 			billing:     billing,
 			aiStudio:    key,
+			aiStudioErr: mintErr,
 		}
 	}
 }

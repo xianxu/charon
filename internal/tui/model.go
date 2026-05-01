@@ -559,7 +559,17 @@ func (m model) handleGCPSetupDone(msg gcpSetupDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.notifyProxyCacheClear()
-	m.scopes.applyStatus = fmt.Sprintf("Stored project %s (region: %s)", msg.projectID, msg.region)
+	switch {
+	case msg.aiStudioErr != "":
+		// Mint failed but everything else landed. Surface the error
+		// persistently in the scope picker so the user can act —
+		// the in-flow notice flashed by too quickly to read.
+		m.scopes.applyStatus = fmt.Sprintf("Stored project %s (region: %s). AI Studio mint failed: %s", msg.projectID, msg.region, msg.aiStudioErr)
+	case msg.aiStudio != nil:
+		m.scopes.applyStatus = fmt.Sprintf("Stored project %s (region: %s) and minted AI Studio key %s.", msg.projectID, msg.region, msg.aiStudio.UID)
+	default:
+		m.scopes.applyStatus = fmt.Sprintf("Stored project %s (region: %s).", msg.projectID, msg.region)
+	}
 	m.current = screenScopes
 	return m, nil
 }
