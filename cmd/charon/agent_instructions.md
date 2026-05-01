@@ -44,23 +44,15 @@ this machine.
   "proxy": {
     "addr":       "127.0.0.1:8230",
     "url":        "http://127.0.0.1:8230",
-    "ca_pem_url": "http://127.0.0.1:8230/ca.pem"
+    "ca_pem_url": "http://127.0.0.1:8230/ca.pem",
+    "running":    true
   },
   "permissions": {
     "google": {
       "user@gmail.com": {
-        "scopes": ["openid", "https://www.googleapis.com/auth/gmail.readonly", ...],
-        "gcp": {
-          "project_id":      "my-charon-project",
-          "project_name":    "My Charon Project",
-          "vertex_region":   "us-central1",
-          "billing_enabled": true
-        },
-        "aistudio": {
-          "uid":          "abc-uid",
-          "display_name": "charon-aistudio",
-          "project_id":   "my-charon-project"
-        }
+        "scopes":    ["openid", "https://www.googleapis.com/auth/gmail.readonly", ...],
+        "vertex":    {"project_id": "my-charon-project", "region": "us-central1"},
+        "ai-studio": {}
       }
     },
     "openai":    { "<project>": { "scopes": [] } },
@@ -73,17 +65,23 @@ this machine.
   under `charon run`).
 - `proxy.ca_pem_url` is where your HTTPS client should fetch the CA
   cert it must trust.
-- Each `permissions[provider][account]` is `{scopes, gcp?, aistudio?}`.
+- `proxy.running` is `true` when charon's HTTP healthz responds at
+  `proxy.addr`. If `false`, all outbound API calls will fail with
+  connection refused — tell the user to run `charon serve` (or
+  start the launchd service) before retrying.
+- Each `permissions[provider][account]` is `{scopes, vertex?, ai-studio?}`.
   - `scopes`: full URLs of granted OAuth scopes (Google) or empty list
     (admin-key providers).
-  - `gcp`: present only on Google accounts that have run charon's
-    project setup (`cloud-platform` granted + project picked).
-    Carries `project_id` (used in Vertex URLs) and `vertex_region`
-    (default region; you can override per-request).
-  - `aistudio`: present when an AI Studio key exists for the account.
-    Metadata only — `uid`, `display_name`, `project_id`. The actual
-    key is **not** surfaced; charon's proxy attaches it to outbound
-    AI Studio requests automatically (so agents never see it).
+  - `vertex`: present when the account has a configured GCP project.
+    Carries `project_id` and `region` — the two fields needed to
+    construct a Vertex URL. Region is the default; override per-call
+    by putting a different region in the URL.
+  - `ai-studio`: empty object (`{}`) when an AI Studio key is
+    minted for the account. Empty by design — the proxy attaches
+    the key automatically on calls to
+    `generativelanguage.googleapis.com`. Presence signals the
+    path is available; absence means it isn't yet (run
+    `charon auth` and walk through the cloud-platform setup).
 
 The manifest is the **single source of truth at runtime**. Read it
 once at startup, cache, and re-read after any user-visible change
@@ -136,12 +134,12 @@ Headers:
 
 ### Vertex AI (Gemini via Google Cloud)
 
-Build the URL from `manifest.permissions.google[account].gcp`:
+Build the URL from `manifest.permissions.google[account].vertex`:
 
 ```
-POST https://{vertex_region}-aiplatform.googleapis.com
+POST https://{region}-aiplatform.googleapis.com
        /v1/projects/{project_id}
-       /locations/{vertex_region}
+       /locations/{region}
        /publishers/google/models/gemini-2.0-flash:generateContent
 
 Headers:
@@ -151,8 +149,8 @@ Headers:
 - Required scope: `cloud-platform` (`https://www.googleapis.com/auth/cloud-platform`).
   If missing, charon returns 407 — tell the user to run `charon auth`
   and grant it (which auto-launches project setup).
-- The stored `vertex_region` is a default; you can use any region
-  by putting it in the URL — charon doesn't constrain.
+- The stored `region` is a default; you can use any region by putting
+  it in the URL — charon doesn't constrain.
 - The stored `project_id` is also a default; you can call into a
   different project the user has access to by changing the URL,
   same OAuth token works.
@@ -219,7 +217,7 @@ manifest), not OpenAI's internal project ID.
 | Wrap a child process                | `charon run -- <cmd>`                            |
 | Pick an account                     | `X-Charon-Account: <account>` header             |
 | Declare required scopes (optional)  | `X-Charon-Scope: <short>,<short>` header         |
-| Vertex URL                          | Build from `manifest.gcp.project_id` + region    |
+| Vertex URL                          | Build from `manifest.vertex.project_id` + region |
 | AI Studio URL                       | `generativelanguage.googleapis.com` (M5 pending) |
 
 ---

@@ -10,22 +10,35 @@ import (
 	"github.com/xianxu/charon/internal/vault/memory"
 )
 
+// proxySection extracts the proxy block as map[string]any. Manifest
+// is heterogeneous (string fields + a bool `running`), so we can't
+// type-assert to map[string]string anymore.
+func proxySection(t *testing.T, m map[string]any) map[string]any {
+	t.Helper()
+	p, ok := m["proxy"].(map[string]any)
+	if !ok {
+		t.Fatalf("proxy section wrong type: %T", m["proxy"])
+	}
+	return p
+}
+
 func TestManifestPayload_ProxySectionUsesAddr(t *testing.T) {
 	got, err := manifestPayload(fixtureVault(t), "127.0.0.1:8230")
 	if err != nil {
 		t.Fatalf("manifestPayload: %v", err)
 	}
-	proxy, ok := got["proxy"].(map[string]string)
-	if !ok {
-		t.Fatalf("proxy section wrong type: %T", got["proxy"])
+	proxy := proxySection(t, got)
+	if proxy["addr"] != "127.0.0.1:8230" {
+		t.Errorf("addr = %v", proxy["addr"])
 	}
-	want := map[string]string{
-		"addr":       "127.0.0.1:8230",
-		"url":        "http://127.0.0.1:8230",
-		"ca_pem_url": "http://127.0.0.1:8230/ca.pem",
+	if proxy["url"] != "http://127.0.0.1:8230" {
+		t.Errorf("url = %v", proxy["url"])
 	}
-	if !reflect.DeepEqual(proxy, want) {
-		t.Errorf("proxy section mismatch.\n got=%v\nwant=%v", proxy, want)
+	if proxy["ca_pem_url"] != "http://127.0.0.1:8230/ca.pem" {
+		t.Errorf("ca_pem_url = %v", proxy["ca_pem_url"])
+	}
+	if _, ok := proxy["running"].(bool); !ok {
+		t.Errorf("expected running to be bool, got %T", proxy["running"])
 	}
 }
 
@@ -34,12 +47,29 @@ func TestManifestPayload_HonorsCustomAddr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manifestPayload: %v", err)
 	}
-	proxy := got["proxy"].(map[string]string)
+	proxy := proxySection(t, got)
 	if proxy["url"] != "http://0.0.0.0:9999" {
-		t.Errorf("proxy.url = %q, want http://0.0.0.0:9999", proxy["url"])
+		t.Errorf("proxy.url = %v, want http://0.0.0.0:9999", proxy["url"])
 	}
 	if proxy["ca_pem_url"] != "http://0.0.0.0:9999/ca.pem" {
-		t.Errorf("proxy.ca_pem_url = %q, want http://0.0.0.0:9999/ca.pem", proxy["ca_pem_url"])
+		t.Errorf("proxy.ca_pem_url = %v, want http://0.0.0.0:9999/ca.pem", proxy["ca_pem_url"])
+	}
+}
+
+// Probing a port nothing is listening on must yield running=false
+// rather than an error. The manifest is best-effort agent-facing
+// info; "down" is the actionable signal.
+func TestManifestPayload_RunningFalseWhenProxyDown(t *testing.T) {
+	// 127.0.0.1:1 is reserved (tcpmux) and almost never bound on a
+	// developer machine; if it ever is, the test would falsely pass
+	// with running=true. Acceptable risk for a unit test.
+	got, err := manifestPayload(fixtureVault(t), "127.0.0.1:1")
+	if err != nil {
+		t.Fatalf("manifestPayload: %v", err)
+	}
+	proxy := proxySection(t, got)
+	if proxy["running"] != false {
+		t.Errorf("expected running=false for unreachable addr, got %v", proxy["running"])
 	}
 }
 
@@ -85,9 +115,9 @@ func TestManifestPayload_RoundTripsThroughJSON(t *testing.T) {
 	}
 }
 
-// JSON shape with GCP set: agent reads "scopes" and "gcp" siblings
-// under each account; gcp is omitted when absent (omitempty).
-func TestManifestPayload_GCPInJSON(t *testing.T) {
+// JSON shape with vertex set: agent reads "scopes" and "vertex"
+// siblings under each account; vertex is omitted when absent.
+func TestManifestPayload_VertexInJSON(t *testing.T) {
 	v := memory.New()
 	v.Set(&vault.Credential{
 		Provider: "google",
@@ -111,16 +141,15 @@ func TestManifestPayload_GCPInJSON(t *testing.T) {
 	s := string(b)
 
 	for _, want := range []string{
-		`"alice@gmail.com":{"scopes":["https://www.googleapis.com/auth/cloud-platform"],"gcp":{`,
-		`"project_id":"alice-charon"`,
-		`"vertex_region":"us-central1"`,
+		`"vertex":{"project_id":"alice-charon","region":"us-central1"}`,
+		`"scopes":["https://www.googleapis.com/auth/cloud-platform"]`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("alice manifest fragment missing %q\n%s", want, s)
 		}
 	}
-	// no-gcp account must omit the gcp key entirely (omitempty).
+	// no-gcp account must omit the vertex key entirely (omitempty).
 	if !strings.Contains(s, `"no-gcp@gmail.com":{"scopes":["openid"]}`) {
-		t.Errorf("no-gcp account should not include gcp key:\n%s", s)
+		t.Errorf("no-gcp account should not include vertex key:\n%s", s)
 	}
 }

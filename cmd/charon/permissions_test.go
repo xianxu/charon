@@ -97,17 +97,21 @@ func TestPermissionsPayload_NilScopesNormalizedToEmptySlice(t *testing.T) {
 	if len(entry.Scopes) != 0 {
 		t.Errorf("expected empty scopes, got %v", entry.Scopes)
 	}
-	if entry.GCP != nil {
-		t.Errorf("expected no GCP payload, got %+v", entry.GCP)
+	if entry.Vertex != nil {
+		t.Errorf("expected no Vertex ref, got %+v", entry.Vertex)
+	}
+	if entry.AIStudio != nil {
+		t.Errorf("expected no AIStudio ref, got %+v", entry.AIStudio)
 	}
 }
 
-// AI Studio surfaces in the manifest as a redacted ref — UID + display
-// name + project_id only. The actual KeyMaterial must NOT appear:
-// keeping the key invisible to agents is charon's job. Regression
-// guard for the specific oversight where M4 added cred.AIStudio
-// storage but forgot the projection on the manifest side.
-func TestPermissionsPayload_AIStudioSurfacedRedacted(t *testing.T) {
+// AI Studio surfaces in the manifest as an empty object — its presence
+// signals the path is available; the proxy attaches the key
+// transparently so agents don't need any field. Critically the
+// secret KeyMaterial must NOT leak into the JSON output. Regression
+// guard for both the original "field not surfaced at all" oversight
+// (M4) and the secret-redaction concern.
+func TestPermissionsPayload_AIStudioSurfacedAsEmptyAndRedacted(t *testing.T) {
 	v := memory.New()
 	v.Set(&vault.Credential{
 		Provider: "google",
@@ -128,16 +132,10 @@ func TestPermissionsPayload_AIStudioSurfacedRedacted(t *testing.T) {
 	}
 	entry := got["google"]["alice@gmail.com"]
 	if entry.AIStudio == nil {
-		t.Fatal("expected AIStudio ref in manifest")
-	}
-	if entry.AIStudio.UID != "uid-1" {
-		t.Errorf("UID = %q", entry.AIStudio.UID)
-	}
-	if entry.AIStudio.ProjectID != "alice-charon" {
-		t.Errorf("ProjectID = %q", entry.AIStudio.ProjectID)
+		t.Fatal("expected AIStudio presence in manifest")
 	}
 
-	// The secret must not appear anywhere in the JSON shape.
+	// Secret must not leak through any field.
 	b, err := json.Marshal(got)
 	if err != nil {
 		t.Fatalf("json.Marshal: %v", err)
@@ -148,9 +146,22 @@ func TestPermissionsPayload_AIStudioSurfacedRedacted(t *testing.T) {
 	if bytes.Contains(b, []byte("key_material")) {
 		t.Errorf("manifest should not have a key_material field at all:\n%s", b)
 	}
+	// Internal-only fields must not appear in agent-facing output.
+	for _, field := range []string{"uid", "display_name", "created_at", "project_id"} {
+		// "project_id" appears under "vertex" — only flag if it's
+		// inside the ai-studio block. Easiest is to check the
+		// ai-studio block specifically renders as `{}`.
+		_ = field
+	}
+	if !bytes.Contains(b, []byte(`"ai-studio":{}`)) {
+		t.Errorf("expected ai-studio to render as empty object {}, got:\n%s", b)
+	}
 }
 
-func TestPermissionsPayload_GCPSurfacesWhenPresent(t *testing.T) {
+// Vertex ref carries only the two fields agents need to construct a
+// URL. Internal metadata (project_name, billing_enabled,
+// created_by_charon, updated_at) must not appear in manifest output.
+func TestPermissionsPayload_VertexRefIsMinimal(t *testing.T) {
 	v := memory.New()
 	v.Set(&vault.Credential{
 		Provider: "google",
@@ -173,16 +184,26 @@ func TestPermissionsPayload_GCPSurfacesWhenPresent(t *testing.T) {
 		t.Fatalf("permissionsPayload: %v", err)
 	}
 	entry := got["google"]["alice@gmail.com"]
-	if entry.GCP == nil {
-		t.Fatal("expected GCP payload to be surfaced")
+	if entry.Vertex == nil {
+		t.Fatal("expected Vertex ref to be surfaced")
 	}
-	if entry.GCP.ProjectID != "alice-charon" {
-		t.Errorf("ProjectID = %q, want alice-charon", entry.GCP.ProjectID)
+	if entry.Vertex.ProjectID != "alice-charon" {
+		t.Errorf("ProjectID = %q, want alice-charon", entry.Vertex.ProjectID)
 	}
-	if entry.GCP.VertexRegion != "us-central1" {
-		t.Errorf("VertexRegion = %q", entry.GCP.VertexRegion)
+	if entry.Vertex.Region != "us-central1" {
+		t.Errorf("Region = %q", entry.Vertex.Region)
 	}
-	if !entry.GCP.BillingEnabled {
-		t.Error("expected BillingEnabled=true")
+
+	// Internal-only fields must not leak into manifest JSON.
+	b, _ := json.Marshal(got)
+	for _, want := range []string{
+		"Alice Charon",        // project_name
+		"billing_enabled",
+		"created_by_charon",
+		"updated_at",
+	} {
+		if bytes.Contains(b, []byte(want)) {
+			t.Errorf("internal field %q leaked into manifest:\n%s", want, b)
+		}
 	}
 }

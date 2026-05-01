@@ -24,7 +24,7 @@ func TestInstructionsContainsLoadBearingSections(t *testing.T) {
 		"generativelanguage.googleapis.com",
 		"BILLING_DISABLED",
 		"project_id",
-		"vertex_region",
+		"region",
 	} {
 		if !strings.Contains(agentInstructions, want) {
 			t.Errorf("instructions missing load-bearing string %q", want)

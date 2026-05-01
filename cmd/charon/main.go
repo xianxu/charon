@@ -397,27 +397,26 @@ func manifestCmd() *cobra.Command {
     "proxy": {
       "addr":       "127.0.0.1:8230",
       "url":        "http://127.0.0.1:8230",
-      "ca_pem_url": "http://127.0.0.1:8230/ca.pem"
+      "ca_pem_url": "http://127.0.0.1:8230/ca.pem",
+      "running":    true
     },
     "permissions": {
       "google": {
         "user@gmail.com": {
-          "scopes": ["openid", "https://...userinfo.email", ...],
-          "gcp": {
-            "project_id": "...",
-            "vertex_region": "us-central1",
-            ...
-          }
+          "scopes":    ["openid", "https://...userinfo.email", ...],
+          "vertex":    {"project_id": "...", "region": "us-central1"},
+          "ai-studio": {}
         }
       }
     }
   }
 
-The proxy section reflects the configured --addr (default
-127.0.0.1:8230). The permissions section is keyed by provider then
-account; each value carries the granted scopes (full URLs as charon
-stores them) plus an optional gcp object when the user has run
-charon's Google Cloud project setup.
+Strict agent-facing shape: only fields the caller needs to make
+calls. Internal metadata (project display names, billing flags,
+key UIDs, timestamps) is not surfaced. Presence/absence of vertex
+and ai-studio keys signals which Gemini paths are available for
+the account; ai-studio is empty by design because the proxy
+attaches the key transparently.
 
 Loading per-credential data triggers one keychain access per account,
 which may prompt for permission on the first access.`,
@@ -437,8 +436,8 @@ which may prompt for permission on the first access.`,
 	}
 }
 
-// manifestPayload composes the manifest JSON object. Pure function modulo
-// the vault read in permissionsPayload.
+// manifestPayload composes the manifest JSON object. Vault read for
+// permissions; HTTP probe for proxy reachability.
 func manifestPayload(v vault.Store, addr string) (map[string]any, error) {
 	perms, err := permissionsPayload(v)
 	if err != nil {
@@ -446,54 +445,87 @@ func manifestPayload(v vault.Store, addr string) (map[string]any, error) {
 	}
 	url := fmt.Sprintf("http://%s", addr)
 	return map[string]any{
-		"proxy": map[string]string{
+		"proxy": map[string]any{
 			"addr":       addr,
 			"url":        url,
 			"ca_pem_url": url + "/ca.pem",
+			"running":    proxyReachable(addr),
 		},
 		"permissions": perms,
 	}, nil
 }
 
-// AccountPermissions is the per-account value in the manifest's
-// permissions section. Scopes is always present (empty slice when
-// none granted); GCP is omitted when the account has no GCP setup;
-// AIStudio is omitted when no AI Studio key is minted.
-//
-// AIStudio's KeyMaterial is intentionally NOT surfaced — keeping
-// the key secret from agents is the whole point of charon. Agents
-// see metadata (UID, displayName, project_id) so they can identify
-// the key and recognize whether it exists, but the actual key
-// material gets attached server-side by the proxy.
-type AccountPermissions struct {
-	Scopes   []string             `json:"scopes"`
-	GCP      *vault.GCPData       `json:"gcp,omitempty"`
-	AIStudio *AIStudioManifestRef `json:"aistudio,omitempty"`
+// proxyReachable does a quick HTTP GET to the proxy's healthz endpoint
+// and returns true on a 200 response, false otherwise. Short timeout
+// because charon-on-localhost should respond in milliseconds; if it
+// doesn't, it's effectively down. Errors are squashed — for an agent
+// reading manifest, "running: false" is the actionable signal, not
+// the error class.
+func proxyReachable(addr string) bool {
+	client := http.Client{Timeout: 500 * time.Millisecond}
+	resp, err := client.Get(fmt.Sprintf("http://%s/healthz", addr))
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == 200
 }
 
-// AIStudioManifestRef is the redacted view of vault.AIStudioData
-// for manifest output. Drops KeyMaterial (the secret) and keeps
-// only descriptive fields.
-type AIStudioManifestRef struct {
-	UID         string `json:"uid"`
-	DisplayName string `json:"display_name,omitempty"`
-	ProjectID   string `json:"project_id,omitempty"`
-	CreatedAt   string `json:"created_at,omitempty"`
+// AccountPermissions is the per-account value in the manifest's
+// permissions section. Strict agent-facing shape: only fields a
+// caller needs to make an API call.
+//
+// - Scopes: always present (empty slice when none granted).
+//   Drives X-Charon-Scope declaration.
+// - Vertex: present only when the account has a GCP project
+//   configured. Just project_id + region — exactly what's needed
+//   to construct a Vertex URL.
+// - AIStudio: present (as an empty object) when an AI Studio key
+//   is minted. Empty by design: charon's proxy attaches the key
+//   transparently, so agents need no metadata. The presence of
+//   the field is the signal that the path is available.
+//
+// Fields that exist in the vault but agents don't need (project
+// display names, billing flags, key UIDs, timestamps, etc.) are
+// deliberately not surfaced.
+type AccountPermissions struct {
+	Scopes   []string             `json:"scopes"`
+	Vertex   *VertexManifestRef   `json:"vertex,omitempty"`
+	AIStudio *AIStudioManifestRef `json:"ai-studio,omitempty"`
+}
+
+// VertexManifestRef is the agent-facing shape of GCP project info.
+// Just the two fields needed to construct a Vertex URL:
+//   https://{region}-aiplatform.googleapis.com
+//     /v1/projects/{project_id}/locations/{region}/...
+type VertexManifestRef struct {
+	ProjectID string `json:"project_id"`
+	Region    string `json:"region"`
+}
+
+// AIStudioManifestRef intentionally has no fields. Presence in the
+// manifest signals "this account has an AI Studio key minted; the
+// proxy will attach it on outbound calls to
+// generativelanguage.googleapis.com." Future fields (e.g. quota
+// hints) can be added here without breaking the presence-as-signal
+// semantics.
+type AIStudioManifestRef struct{}
+
+func vertexManifestRef(d *vault.GCPData) *VertexManifestRef {
+	if d == nil || d.ProjectID == "" {
+		return nil
+	}
+	return &VertexManifestRef{
+		ProjectID: d.ProjectID,
+		Region:    d.VertexRegion,
+	}
 }
 
 func aiStudioManifestRef(d *vault.AIStudioData) *AIStudioManifestRef {
 	if d == nil {
 		return nil
 	}
-	r := &AIStudioManifestRef{
-		UID:         d.UID,
-		DisplayName: d.DisplayName,
-		ProjectID:   d.ProjectID,
-	}
-	if !d.CreatedAt.IsZero() {
-		r.CreatedAt = d.CreatedAt.UTC().Format("2006-01-02T15:04:05Z")
-	}
-	return r
+	return &AIStudioManifestRef{}
 }
 
 // permissionsPayload returns granted scopes (and GCP metadata when
@@ -522,7 +554,7 @@ func permissionsPayload(v vault.Store) (map[string]map[string]AccountPermissions
 		}
 		byProvider[c.Provider][c.Account] = AccountPermissions{
 			Scopes:   scopes,
-			GCP:      cred.GCP,
+			Vertex:   vertexManifestRef(cred.GCP),
 			AIStudio: aiStudioManifestRef(cred.AIStudio),
 		}
 	}
