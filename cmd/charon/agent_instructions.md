@@ -42,10 +42,11 @@ this machine.
 ```json
 {
   "proxy": {
+    "default":    "127.0.0.1:8230",
+    "running":    true,
     "addr":       "127.0.0.1:8230",
     "url":        "http://127.0.0.1:8230",
-    "ca_pem_url": "http://127.0.0.1:8230/ca.pem",
-    "running":    true
+    "ca_pem_url": "http://127.0.0.1:8230/ca.pem"
   },
   "permissions": {
     "google": {
@@ -61,14 +62,17 @@ this machine.
 }
 ```
 
-- `proxy.url` is what to set as `HTTPS_PROXY` (already set if you ran
-  under `charon run`).
-- `proxy.ca_pem_url` is where your HTTPS client should fetch the CA
-  cert it must trust.
-- `proxy.running` is `true` when charon's HTTP healthz responds at
-  `proxy.addr`. If `false`, all outbound API calls will fail with
-  connection refused — tell the user to run `charon serve` (or
-  start the launchd service) before retrying.
+- `proxy.default` is always present — the address charon would
+  listen on if started cleanly. Useful to tell the user "start
+  charon and it'll listen on X."
+- `proxy.running` is `true` when charon's healthz responds. When
+  `false`, the connection-info fields below are *not* present —
+  there's nothing to connect to. Tell the user to run
+  `charon serve` (or start the launchd service) before retrying.
+- `proxy.addr` / `proxy.url` / `proxy.ca_pem_url` are present only
+  when `running == true`. `url` is what to set as `HTTPS_PROXY`
+  (already set if you ran under `charon run`). `ca_pem_url` is
+  where your HTTPS client should fetch the CA cert it must trust.
 - Each `permissions[provider][account]` is `{scopes, vertex?, ai-studio?}`.
   - `scopes`: full URLs of granted OAuth scopes (Google) or empty list
     (admin-key providers).

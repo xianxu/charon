@@ -25,6 +25,12 @@ import (
 	"github.com/xianxu/charon/internal/vault/keychain"
 )
 
+// defaultListenAddr is the compile-time default proxy listen address —
+// the value cobra falls back to when --addr isn't given. Surfaced in
+// `charon manifest` as proxy.default so agents can see "this is where
+// charon would listen if started cleanly" regardless of current state.
+const defaultListenAddr = "127.0.0.1:8230"
+
 var (
 	listenAddr string
 	auditPath  string
@@ -38,7 +44,7 @@ func main() {
 		Long:  "Charon is a credential proxy that injects OAuth tokens into HTTPS requests, keeping tokens invisible to AI agents.",
 	}
 
-	root.PersistentFlags().StringVar(&listenAddr, "addr", "127.0.0.1:8230", "proxy listen address")
+	root.PersistentFlags().StringVar(&listenAddr, "addr", defaultListenAddr, "proxy listen address")
 
 	root.AddCommand(serveCmd())
 	root.AddCommand(runCmd())
@@ -446,10 +452,11 @@ func manifestCmd() *cobra.Command {
 
   {
     "proxy": {
+      "default":    "127.0.0.1:8230",
+      "running":    true,
       "addr":       "127.0.0.1:8230",
       "url":        "http://127.0.0.1:8230",
-      "ca_pem_url": "http://127.0.0.1:8230/ca.pem",
-      "running":    true
+      "ca_pem_url": "http://127.0.0.1:8230/ca.pem"
     },
     "permissions": {
       "google": {
@@ -489,19 +496,32 @@ which may prompt for permission on the first access.`,
 
 // manifestPayload composes the manifest JSON object. Vault read for
 // permissions; HTTP probe for proxy reachability.
+//
+// When the proxy is reachable, the proxy section includes
+// {default, running, addr, url, ca_pem_url} so the caller has
+// everything to make requests. When the proxy is down, only
+// {default, running} are emitted — the addr/url/ca_pem_url would
+// point at nothing, so surfacing them would be actively misleading.
+// `default` is always present as a hint for "this is where charon
+// would listen if started cleanly".
 func manifestPayload(v vault.Store, addr string) (map[string]any, error) {
 	perms, err := permissionsPayload(v)
 	if err != nil {
 		return nil, err
 	}
-	url := fmt.Sprintf("http://%s", addr)
+	proxy := map[string]any{
+		"default": defaultListenAddr,
+		"running": false,
+	}
+	if proxyReachable(addr) {
+		url := fmt.Sprintf("http://%s", addr)
+		proxy["running"] = true
+		proxy["addr"] = addr
+		proxy["url"] = url
+		proxy["ca_pem_url"] = url + "/ca.pem"
+	}
 	return map[string]any{
-		"proxy": map[string]any{
-			"addr":       addr,
-			"url":        url,
-			"ca_pem_url": url + "/ca.pem",
-			"running":    proxyReachable(addr),
-		},
+		"proxy":       proxy,
 		"permissions": perms,
 	}, nil
 }

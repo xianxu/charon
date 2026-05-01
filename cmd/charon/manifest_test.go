@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"net"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -22,54 +24,70 @@ func proxySection(t *testing.T, m map[string]any) map[string]any {
 	return p
 }
 
-func TestManifestPayload_ProxySectionUsesAddr(t *testing.T) {
-	got, err := manifestPayload(fixtureVault(t), "127.0.0.1:8230")
+// Helper: spin up a real httptest server bound to 127.0.0.1 with a
+// /healthz route, return its addr (host:port) and a cleanup. Lets us
+// test "running: true" without needing a full proxy stack.
+func liveProxyAddr(t *testing.T) string {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+	return ln.Addr().String()
+}
+
+func TestManifestPayload_RunningTrue_FullConnectionInfo(t *testing.T) {
+	addr := liveProxyAddr(t)
+	got, err := manifestPayload(fixtureVault(t), addr)
 	if err != nil {
 		t.Fatalf("manifestPayload: %v", err)
 	}
 	proxy := proxySection(t, got)
-	if proxy["addr"] != "127.0.0.1:8230" {
-		t.Errorf("addr = %v", proxy["addr"])
+	if proxy["running"] != true {
+		t.Fatalf("running = %v, want true", proxy["running"])
 	}
-	if proxy["url"] != "http://127.0.0.1:8230" {
-		t.Errorf("url = %v", proxy["url"])
+	for _, field := range []string{"default", "addr", "url", "ca_pem_url"} {
+		if proxy[field] == nil {
+			t.Errorf("expected %q present when running, missing", field)
+		}
 	}
-	if proxy["ca_pem_url"] != "http://127.0.0.1:8230/ca.pem" {
-		t.Errorf("ca_pem_url = %v", proxy["ca_pem_url"])
+	if proxy["addr"] != addr {
+		t.Errorf("addr = %v, want %v", proxy["addr"], addr)
 	}
-	if _, ok := proxy["running"].(bool); !ok {
-		t.Errorf("expected running to be bool, got %T", proxy["running"])
-	}
-}
-
-func TestManifestPayload_HonorsCustomAddr(t *testing.T) {
-	got, err := manifestPayload(fixtureVault(t), "0.0.0.0:9999")
-	if err != nil {
-		t.Fatalf("manifestPayload: %v", err)
-	}
-	proxy := proxySection(t, got)
-	if proxy["url"] != "http://0.0.0.0:9999" {
-		t.Errorf("proxy.url = %v, want http://0.0.0.0:9999", proxy["url"])
-	}
-	if proxy["ca_pem_url"] != "http://0.0.0.0:9999/ca.pem" {
-		t.Errorf("proxy.ca_pem_url = %v, want http://0.0.0.0:9999/ca.pem", proxy["ca_pem_url"])
+	if proxy["default"] != defaultListenAddr {
+		t.Errorf("default = %v, want %s", proxy["default"], defaultListenAddr)
 	}
 }
 
-// Probing a port nothing is listening on must yield running=false
-// rather than an error. The manifest is best-effort agent-facing
-// info; "down" is the actionable signal.
-func TestManifestPayload_RunningFalseWhenProxyDown(t *testing.T) {
-	// 127.0.0.1:1 is reserved (tcpmux) and almost never bound on a
-	// developer machine; if it ever is, the test would falsely pass
-	// with running=true. Acceptable risk for a unit test.
+// When the proxy is down, the manifest must not surface addr/url/
+// ca_pem_url for it — those would point at nothing and mislead the
+// caller. Only `default` and `running:false` are emitted.
+func TestManifestPayload_RunningFalse_OmitsConnectionInfo(t *testing.T) {
+	// 127.0.0.1:1 is reserved (tcpmux) and almost never bound. If
+	// it ever is, this test would falsely pass with running=true —
+	// acceptable risk.
 	got, err := manifestPayload(fixtureVault(t), "127.0.0.1:1")
 	if err != nil {
 		t.Fatalf("manifestPayload: %v", err)
 	}
 	proxy := proxySection(t, got)
 	if proxy["running"] != false {
-		t.Errorf("expected running=false for unreachable addr, got %v", proxy["running"])
+		t.Fatalf("running = %v, want false", proxy["running"])
+	}
+	if proxy["default"] != defaultListenAddr {
+		t.Errorf("default should still be present when down, got %v", proxy["default"])
+	}
+	for _, field := range []string{"addr", "url", "ca_pem_url"} {
+		if _, ok := proxy[field]; ok {
+			t.Errorf("expected %q absent when running=false, got %v", field, proxy[field])
+		}
 	}
 }
 
@@ -92,7 +110,8 @@ func TestManifestPayload_PermissionsMatchesHelper(t *testing.T) {
 }
 
 func TestManifestPayload_RoundTripsThroughJSON(t *testing.T) {
-	got, err := manifestPayload(fixtureVault(t), "127.0.0.1:8230")
+	addr := liveProxyAddr(t)
+	got, err := manifestPayload(fixtureVault(t), addr)
 	if err != nil {
 		t.Fatalf("manifestPayload: %v", err)
 	}
@@ -102,9 +121,8 @@ func TestManifestPayload_RoundTripsThroughJSON(t *testing.T) {
 	}
 	s := string(b)
 	for _, want := range []string{
-		`"addr":"127.0.0.1:8230"`,
-		`"url":"http://127.0.0.1:8230"`,
-		`"ca_pem_url":"http://127.0.0.1:8230/ca.pem"`,
+		`"default":"127.0.0.1:8230"`,
+		`"running":true`,
 		`"alice@gmail.com"`,
 		`"scopes":[`,
 		`"https://www.googleapis.com/auth/gmail.readonly"`,
