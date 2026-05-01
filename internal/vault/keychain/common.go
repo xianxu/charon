@@ -36,6 +36,7 @@ type storedCredential struct {
 	Scopes       []string            `json:"scopes,omitempty"`
 	AdminKey     *vault.AdminKeyData `json:"admin_key,omitempty"`
 	Catalog      *vault.CatalogData  `json:"catalog,omitempty"`
+	GCP          *vault.GCPData      `json:"gcp,omitempty"`
 }
 
 func fromCredential(c *vault.Credential) storedCredential {
@@ -49,6 +50,7 @@ func fromCredential(c *vault.Credential) storedCredential {
 		Scopes:       c.Scopes,
 		AdminKey:     c.AdminKey,
 		Catalog:      c.Catalog,
+		GCP:          c.GCP,
 	}
 }
 
@@ -63,5 +65,6 @@ func (sc storedCredential) toCredential() *vault.Credential {
 		Scopes:       sc.Scopes,
 		AdminKey:     sc.AdminKey,
 		Catalog:      sc.Catalog,
+		GCP:          sc.GCP,
 	}
 }

@@ -174,6 +174,16 @@ func (m gcpSetupModel) Update(msg tea.Msg) (gcpSetupModel, tea.Cmd) {
 			return m, nil
 		}
 		m.projects = mergePinned(msg.projects, m.pinnedProject)
+		// Default cursor to the currently-configured project so the
+		// user can re-pick the same one with a single Enter.
+		if m.pinnedProject != nil {
+			for i, p := range m.projects {
+				if p.ProjectID == m.pinnedProject.ProjectID {
+					m.projectCur = i
+					break
+				}
+			}
+		}
 		m.state = gcpStatePickingProject
 		return m, nil
 
@@ -387,14 +397,18 @@ func (m gcpSetupModel) View() string {
 			if i == m.projectCur {
 				cursor = "> "
 			}
-			fmt.Fprintf(&b, "  %s%-30s  %s\n", cursor, p.ProjectID, p.Name)
+			marker := "  "
+			if m.pinnedProject != nil && p.ProjectID == m.pinnedProject.ProjectID {
+				marker = "● " // currently configured
+			}
+			fmt.Fprintf(&b, "  %s%s%-30s  %s\n", cursor, marker, p.ProjectID, p.Name)
 		}
 		// Synthetic "+ new project" row at index len(m.projects).
 		newCursor := "  "
 		if m.projectCur == len(m.projects) {
 			newCursor = "> "
 		}
-		fmt.Fprintf(&b, "  %s+ new project\n", newCursor)
+		fmt.Fprintf(&b, "  %s  + new project\n", newCursor)
 	case gcpStateEditingNewName:
 		b.WriteString("  New Google Cloud project\n\n")
 		b.WriteString("  ")
