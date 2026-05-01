@@ -151,6 +151,12 @@ func (m *gcpSetupModel) initCmd() tea.Cmd {
 }
 
 func (m gcpSetupModel) Update(msg tea.Msg) (gcpSetupModel, tea.Cmd) {
+	// ctrl+c quits the program from any sub-state, matching the rest of
+	// the TUI. esc is the softer "cancel back to scope view" path
+	// handled per-state below.
+	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "ctrl+c" {
+		return m, tea.Quit
+	}
 	switch msg := msg.(type) {
 	case gcpProjectsLoadedMsg:
 		if msg.err != nil {
@@ -218,9 +224,8 @@ func (m gcpSetupModel) Update(msg tea.Msg) (gcpSetupModel, tea.Cmd) {
 		// Any key dismisses the error and cancels.
 		return m, func() tea.Msg { return gcpSetupCancelMsg{} }
 	case gcpStateLoading, gcpStateCreatingProject, gcpStateEnabling, gcpStateBillingCheck:
-		// Async ops in flight: only ctrl+c / esc cancels.
-		switch keyMsg.String() {
-		case "esc", "ctrl+c":
+		// Async ops in flight: only esc cancels (ctrl+c handled at top).
+		if keyMsg.String() == "esc" {
 			return m, func() tea.Msg { return gcpSetupCancelMsg{} }
 		}
 	}
@@ -275,8 +280,6 @@ func (m gcpSetupModel) updateEditingNewName(msg tea.KeyMsg) (gcpSetupModel, tea.
 		m.state = gcpStatePickingProject
 		m.nameInput.Blur()
 		return m, nil
-	case "ctrl+c":
-		return m, func() tea.Msg { return gcpSetupCancelMsg{} }
 	}
 	var cmd tea.Cmd
 	m.nameInput, cmd = m.nameInput.Update(msg)

@@ -208,6 +208,70 @@ func TestGCPSetup_EscFromPickerCancels(t *testing.T) {
 	}
 }
 
+// ctrl+c must quit the program from any sub-state — every TUI
+// screen honors this contract, and the GCP setup screen got it
+// wrong on first cut.
+func TestGCPSetup_CtrlCQuitsFromAnyState(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func() gcpSetupModel
+	}{
+		{
+			name: "loading",
+			setup: func() gcpSetupModel {
+				return newGCPSetupModel(&fakeGCPClient{}, "u@gmail.com")
+			},
+		},
+		{
+			name: "pickingProject",
+			setup: func() gcpSetupModel {
+				m := newGCPSetupModel(&fakeGCPClient{
+					listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
+				}, "u@gmail.com")
+				m, _ = m.Update(runCmd(m.initCmd()))
+				return m
+			},
+		},
+		{
+			name: "editingNewName",
+			setup: func() gcpSetupModel {
+				m := newGCPSetupModel(&fakeGCPClient{}, "u@gmail.com")
+				m, _ = m.Update(runCmd(m.initCmd()))
+				m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // synthetic + new project row
+				return m
+			},
+		},
+		{
+			name: "pickingRegion",
+			setup: func() gcpSetupModel {
+				m := newGCPSetupModel(&fakeGCPClient{
+					listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
+					billing:    &gcp.BillingInfo{BillingEnabled: true},
+				}, "u@gmail.com")
+				m, _ = m.Update(runCmd(m.initCmd()))
+				m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				m, _ = m.Update(runCmd(cmd))
+				m, _ = m.Update(m.checkBillingCmd()())
+				return m
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := tc.setup()
+			_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+			if cmd == nil {
+				t.Fatal("expected a cmd from ctrl+c")
+			}
+			// tea.Quit is a sentinel func; we can't compare directly,
+			// but invoking it returns a tea.QuitMsg.
+			if _, ok := cmd().(tea.QuitMsg); !ok {
+				t.Errorf("expected tea.QuitMsg from ctrl+c, got %T", cmd())
+			}
+		})
+	}
+}
+
 func TestGCPSetup_RegionPickerNumericNav(t *testing.T) {
 	fake := &fakeGCPClient{
 		listResult: []gcp.Project{{ProjectID: "p", Name: "P", LifecycleState: "ACTIVE"}},
