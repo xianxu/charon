@@ -156,7 +156,18 @@ func loadScopeRows(v vault.Store, account string, fetchDenied denialFetcher) ([]
 			})
 		}
 	}
+	sortGrantedFirst(rows)
 	return rows, nil
+}
+
+// sortGrantedFirst stable-sorts rows so realized (granted) scopes appear
+// before non-granted ones, preserving catalog order within each group.
+// Stable preserves construction order, which mirrors GoogleScopeCatalog
+// for catalog rows and append-order for custom rows.
+func sortGrantedFirst(rows []scopeRow) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		return rows[i].realized && !rows[j].realized
+	})
 }
 
 func customShortName(s string) string {
@@ -742,6 +753,7 @@ func (m scopesModel) handleApplyResult(r applyResultMsg) scopesModel {
 				custom:          true,
 			})
 		}
+		sortGrantedFirst(m.rows)
 		m.recomputeFiltered()
 		m.applyStatus = "Applied successfully."
 	}

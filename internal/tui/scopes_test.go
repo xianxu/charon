@@ -75,6 +75,62 @@ func TestLoadRowsMarksRealizedAndTarget(t *testing.T) {
 	}
 }
 
+func TestLoadRowsGrantedFirstPreservesCatalogOrder(t *testing.T) {
+	// Grant calendar.readonly + drive.readonly. They live mid-catalog.
+	// After sort: those two should appear before any non-granted catalog
+	// rows (e.g. gmail.readonly which sits earlier in the catalog), and
+	// among themselves preserve catalog order (calendar.readonly before
+	// drive.readonly per GoogleScopeCatalog).
+	v := vaultWithBase("a@gmail.com",
+		"https://www.googleapis.com/auth/drive.readonly",
+		"https://www.googleapis.com/auth/calendar.readonly",
+	)
+	rows, err := loadScopeRows(v, "a@gmail.com", nil)
+	if err != nil {
+		t.Fatalf("loadScopeRows: %v", err)
+	}
+
+	// Walk: collect realized rows and the first non-realized row index.
+	var realizedShorts []string
+	firstNonRealized := -1
+	for i, r := range rows {
+		if r.realized {
+			realizedShorts = append(realizedShorts, r.short)
+		} else if firstNonRealized < 0 {
+			firstNonRealized = i
+		}
+	}
+
+	// Every realized row must come before every non-realized row.
+	for i, r := range rows {
+		if !r.realized && firstNonRealized < 0 {
+			firstNonRealized = i
+		}
+		if firstNonRealized >= 0 && i > firstNonRealized && r.realized {
+			t.Fatalf("realized row %q at index %d appears after non-realized at %d",
+				r.short, i, firstNonRealized)
+		}
+	}
+
+	// Within the realized group, catalog order is preserved:
+	// openid, email (required) precede calendar.readonly, drive.readonly.
+	idx := func(short string) int {
+		for i, s := range realizedShorts {
+			if s == short {
+				return i
+			}
+		}
+		return -1
+	}
+	if idx("calendar.readonly") < 0 || idx("drive.readonly") < 0 {
+		t.Fatalf("missing realized rows: %v", realizedShorts)
+	}
+	if idx("calendar.readonly") > idx("drive.readonly") {
+		t.Errorf("catalog order broken among realized: calendar.readonly should precede drive.readonly, got %v",
+			realizedShorts)
+	}
+}
+
 func TestLoadRowsAppendsCustomScopes(t *testing.T) {
 	v := memory.New()
 	v.Set(&vault.Credential{
