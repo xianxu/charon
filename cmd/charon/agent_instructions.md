@@ -144,7 +144,7 @@ Build the URL from `manifest.permissions.google[account].vertex`:
 POST https://{region}-aiplatform.googleapis.com
        /v1/projects/{project_id}
        /locations/{region}
-       /publishers/google/models/gemini-2.0-flash:generateContent
+       /publishers/google/models/gemini-flash-latest:generateContent
 
 Headers:
   X-Charon-Account: user@gmail.com
@@ -162,7 +162,7 @@ Headers:
 ### AI Studio (Gemini, free-tier, key-based)
 
 ```
-POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent
+POST https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent
 
 Headers:
   X-Charon-Account: user@gmail.com
