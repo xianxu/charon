@@ -53,7 +53,7 @@ this machine.
       "user@gmail.com": {
         "scopes":    ["openid", "https://www.googleapis.com/auth/gmail.readonly", ...],
         "vertex":    {"project_id": "my-charon-project", "region": "us-central1"},
-        "ai-studio": {}
+        "ai-studio": {"project_id": "my-charon-project"}
       }
     },
     "openai":    { "<project>": { "scopes": [] } },
@@ -80,12 +80,14 @@ this machine.
     Carries `project_id` and `region` — the two fields needed to
     construct a Vertex URL. Region is the default; override per-call
     by putting a different region in the URL.
-  - `ai-studio`: empty object (`{}`) when an AI Studio key is
-    minted for the account. Empty by design — the proxy attaches
-    the key automatically on calls to
-    `generativelanguage.googleapis.com`. Presence signals the
-    path is available; absence means it isn't yet (run
-    `charon auth` and walk through the cloud-platform setup).
+  - `ai-studio`: `{project_id: "..."}` when an AI Studio key is
+    minted for the account. The proxy attaches the key
+    automatically on calls to `generativelanguage.googleapis.com`;
+    the project_id is informational — useful when calls return
+    `RESOURCE_EXHAUSTED` or `BILLING_DISABLED` so you can tell the
+    user *which* project's quota/billing to check. Absence of the
+    block means the path isn't set up; run `charon auth` and walk
+    through the cloud-platform flow.
 
 The manifest is the **single source of truth at runtime**. Read it
 once at startup, cache, and re-read after any user-visible change

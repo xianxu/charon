@@ -574,13 +574,17 @@ type VertexManifestRef struct {
 	Region    string `json:"region"`
 }
 
-// AIStudioManifestRef intentionally has no fields. Presence in the
-// manifest signals "this account has an AI Studio key minted; the
-// proxy will attach it on outbound calls to
-// generativelanguage.googleapis.com." Future fields (e.g. quota
-// hints) can be added here without breaking the presence-as-signal
-// semantics.
-type AIStudioManifestRef struct{}
+// AIStudioManifestRef carries the bare minimum an agent needs to
+// reason about AI Studio calls: which project the key was minted
+// under (drives quota/billing inquiries when calls hit
+// RESOURCE_EXHAUSTED or BILLING_DISABLED). The actual KeyMaterial
+// is intentionally omitted — the proxy attaches it transparently;
+// agents must not see secrets. Internal-only fields (uid,
+// display_name, created_at) are also omitted to keep the surface
+// minimal.
+type AIStudioManifestRef struct {
+	ProjectID string `json:"project_id"`
+}
 
 func vertexManifestRef(d *vault.GCPData) *VertexManifestRef {
 	if d == nil || d.ProjectID == "" {
@@ -596,7 +600,7 @@ func aiStudioManifestRef(d *vault.AIStudioData) *AIStudioManifestRef {
 	if d == nil {
 		return nil
 	}
-	return &AIStudioManifestRef{}
+	return &AIStudioManifestRef{ProjectID: d.ProjectID}
 }
 
 // permissionsPayload returns granted scopes (and GCP metadata when

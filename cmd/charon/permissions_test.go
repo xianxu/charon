@@ -105,13 +105,14 @@ func TestPermissionsPayload_NilScopesNormalizedToEmptySlice(t *testing.T) {
 	}
 }
 
-// AI Studio surfaces in the manifest as an empty object — its presence
-// signals the path is available; the proxy attaches the key
-// transparently so agents don't need any field. Critically the
-// secret KeyMaterial must NOT leak into the JSON output. Regression
-// guard for both the original "field not surfaced at all" oversight
-// (M4) and the secret-redaction concern.
-func TestPermissionsPayload_AIStudioSurfacedAsEmptyAndRedacted(t *testing.T) {
+// AI Studio surfaces in the manifest with project_id only. The
+// proxy attaches the key transparently so agents don't need
+// KeyMaterial; project_id is the one piece an agent or human
+// debugger genuinely needs (quota/billing inquiries on
+// RESOURCE_EXHAUSTED). Critically the secret KeyMaterial must
+// NOT leak into the JSON output, and other internal fields
+// (uid, display_name, created_at) must stay out for cleanliness.
+func TestPermissionsPayload_AIStudioSurfacedWithProjectIDOnly(t *testing.T) {
 	v := memory.New()
 	v.Set(&vault.Credential{
 		Provider: "google",
@@ -134,6 +135,9 @@ func TestPermissionsPayload_AIStudioSurfacedAsEmptyAndRedacted(t *testing.T) {
 	if entry.AIStudio == nil {
 		t.Fatal("expected AIStudio presence in manifest")
 	}
+	if entry.AIStudio.ProjectID != "alice-charon" {
+		t.Errorf("AIStudio.ProjectID = %q, want alice-charon", entry.AIStudio.ProjectID)
+	}
 
 	// Secret must not leak through any field.
 	b, err := json.Marshal(got)
@@ -146,15 +150,15 @@ func TestPermissionsPayload_AIStudioSurfacedAsEmptyAndRedacted(t *testing.T) {
 	if bytes.Contains(b, []byte("key_material")) {
 		t.Errorf("manifest should not have a key_material field at all:\n%s", b)
 	}
-	// Internal-only fields must not appear in agent-facing output.
-	for _, field := range []string{"uid", "display_name", "created_at", "project_id"} {
-		// "project_id" appears under "vertex" — only flag if it's
-		// inside the ai-studio block. Easiest is to check the
-		// ai-studio block specifically renders as `{}`.
-		_ = field
+	// Internal-only fields (debug metadata) must not appear in
+	// agent-facing output.
+	for _, want := range []string{"uid", "display_name", "created_at"} {
+		if bytes.Contains(b, []byte(`"`+want+`"`)) {
+			t.Errorf("internal-only field %q leaked into manifest:\n%s", want, b)
+		}
 	}
-	if !bytes.Contains(b, []byte(`"ai-studio":{}`)) {
-		t.Errorf("expected ai-studio to render as empty object {}, got:\n%s", b)
+	if !bytes.Contains(b, []byte(`"ai-studio":{"project_id":"alice-charon"}`)) {
+		t.Errorf("expected ai-studio to render with project_id only, got:\n%s", b)
 	}
 }
 
