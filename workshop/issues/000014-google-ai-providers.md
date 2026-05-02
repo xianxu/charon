@@ -528,3 +528,34 @@ independently.
   AI Studio routing returns the correct provider config.
 
   Pending: real-call smoke test (requires user-side test).
+
+- **2026-05-01 — M6: revoke flow cleans up AI Studio key upstream.**
+  When the user revokes an account (TUI capital `R` → confirm),
+  charon now unwinds in reverse order of creation:
+  1. If `cred.AIStudio` is set, call
+     `apikeys.googleapis.com DELETE` on `cred.AIStudio.Name` —
+     uses the OAuth bearer for auth, so this happens *before*
+     step 2.
+  2. Revoke the OAuth refresh token at Google's revoke endpoint
+     (existing behavior).
+  3. Delete the local credential entry (existing behavior).
+  4. Notify the running proxy to flush its credential cache
+     (existing behavior).
+
+  AI Studio DELETE is best-effort: failures don't block the local
+  revoke (user wants the account *gone*; charon respects that).
+  The status note records partial-success — agents/users can see
+  whether the key was cleaned upstream:
+  - "Revoked and removed X; AI Studio key revoked"
+  - "Revoked and removed X; AI Studio key may still exist
+     upstream — clean up at console.cloud.google.com/apis/credentials"
+
+  Tests: order pinned (DELETE before Revoke), DELETE failure
+  doesn't block local revoke, and skip-when-no-AIStudio path.
+
+  Notably **not** in M6 (per Lifecycle policy in spec):
+  - The GCP project is preserved, even if charon created it. User
+    deletes in Cloud Console where billing/dependency review
+    happens.
+  - The `cred.GCP` sidecar dies with the credential (same keychain
+    entry) — no separate cleanup needed.

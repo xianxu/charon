@@ -25,19 +25,23 @@ type fakeGCPClient struct {
 	billing       *gcp.BillingInfo
 	billingErr    error
 
-	// AI Studio key mint
+	// AI Studio key mint / revoke
 	createAPIKeyOp  *gcp.Operation
 	createAPIKeyErr error
 	waitAPIKeyOp    *gcp.Operation
 	waitAPIKeyErr   error
+	deleteAPIKeyOp  *gcp.Operation
+	deleteAPIKeyErr error
 
-	listCalls         int
-	createCalls       int
-	waitCalls         int
-	enableCalls       int
-	billingCalls      int
-	createAPIKeyCalls int
-	waitAPIKeyCalls   int
+	listCalls           int
+	createCalls         int
+	waitCalls           int
+	enableCalls         int
+	billingCalls        int
+	createAPIKeyCalls   int
+	waitAPIKeyCalls     int
+	deleteAPIKeyCalls   int
+	lastDeletedAPIKey   string
 }
 
 func (f *fakeGCPClient) ListProjects(ctx context.Context) ([]gcp.Project, error) {
@@ -76,6 +80,17 @@ func (f *fakeGCPClient) WaitAPIKeyOperation(ctx context.Context, opName string) 
 		return nil, f.waitAPIKeyErr
 	}
 	return f.waitAPIKeyOp, nil
+}
+func (f *fakeGCPClient) DeleteAPIKey(ctx context.Context, name string) (*gcp.Operation, error) {
+	f.deleteAPIKeyCalls++
+	f.lastDeletedAPIKey = name
+	if f.deleteAPIKeyErr != nil {
+		return nil, f.deleteAPIKeyErr
+	}
+	if f.deleteAPIKeyOp != nil {
+		return f.deleteAPIKeyOp, nil
+	}
+	return &gcp.Operation{Done: true}, nil
 }
 
 // runCmd executes a tea.Cmd synchronously and returns the resulting

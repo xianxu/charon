@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -362,16 +363,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case revokeAccountMsg:
-		// Look up credential, call Revoke, delete from vault. On success,
-		// rebuild the OAuth picker so the deleted account disappears and
-		// route the user back there (parity with admin-key revoke flow,
-		// see refreshAdminKeyList). Initial-account mode has no picker
-		// to return to — falls back to exit. Errors during revoke
-		// surface via applyResultMsg → existing apply-error overlay.
+		// Look up credential, then unwind in reverse order of creation:
+		//   1. Revoke the AI Studio key upstream (uses OAuth bearer).
+		//   2. Revoke the OAuth refresh token at Google.
+		//   3. Delete the local credential entry.
+		// Order matters: step 1 needs a valid OAuth token, which step
+		// 2 invalidates.
+		//
+		// On success, rebuild the OAuth picker so the deleted account
+		// disappears and route the user back there. Initial-account
+		// mode has no picker to return to — falls back to exit. Errors
+		// during revoke surface via applyResultMsg → existing
+		// apply-error overlay.
 		cred, err := m.vault.Get("google", msg.account)
 		if err != nil {
 			return m, func() tea.Msg {
 				return applyResultMsg{err: err}
+			}
+		}
+		// Step 1 — AI Studio key cleanup. Best-effort: a failure
+		// here does not block the local delete (user wants this
+		// account gone). The status note records partial-success
+		// so the user knows whether to manually clean up the key
+		// at console.cloud.google.com/apis/credentials.
+		aistudioRevoked, aistudioFailed := false, false
+		if cred.AIStudio != nil && cred.AIStudio.Name != "" && m.gcpClientFactory != nil {
+			if client, ferr := m.gcpClientFactory(msg.account); ferr == nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				if _, err := client.DeleteAPIKey(ctx, cred.AIStudio.Name); err == nil {
+					aistudioRevoked = true
+				} else {
+					aistudioFailed = true
+				}
+				cancel()
 			}
 		}
 		// Track whether Google actually revoked the token here, vs. the
@@ -404,10 +428,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notifyProxyCacheClear() // proxy must drop the now-revoked token
 
 		var note string
-		if alreadyRevoked {
+		switch {
+		case alreadyRevoked:
 			note = "Removed " + msg.account + " (already revoked on Google's side)"
-		} else {
+		default:
 			note = "Revoked and removed " + msg.account
+		}
+		switch {
+		case aistudioRevoked:
+			note += "; AI Studio key revoked"
+		case aistudioFailed:
+			note += "; AI Studio key may still exist upstream — clean up at console.cloud.google.com/apis/credentials"
 		}
 
 		// Initial-account short-circuit: there's no picker stack to

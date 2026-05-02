@@ -22,6 +22,7 @@ type GCPSetupClient interface {
 	GetBillingInfo(ctx context.Context, projectID string) (*gcp.BillingInfo, error)
 	CreateAPIKey(ctx context.Context, projectID, displayName string, restrictedTo []string) (*gcp.Operation, error)
 	WaitAPIKeyOperation(ctx context.Context, opName string) (*gcp.Operation, error)
+	DeleteAPIKey(ctx context.Context, name string) (*gcp.Operation, error)
 }
 
 type gcpSetupState int

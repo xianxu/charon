@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -295,6 +296,103 @@ func TestModelHandlesRevokeAccountMsg(t *testing.T) {
 	}
 	if mm.exitNote == "" {
 		t.Error("expected exitNote describing the revoke")
+	}
+}
+
+// #14 M6: revoke must DELETE the account's AI Studio key upstream
+// before invalidating the OAuth token. Order matters because the
+// DELETE call uses the OAuth bearer for auth — revoking the OAuth
+// token first would 401 the upstream cleanup.
+func TestRevokeAccount_DeletesAIStudioKey_BeforeRevoke(t *testing.T) {
+	v := vaultWithBase("a@gmail.com")
+	cred, _ := v.Get("google", "a@gmail.com")
+	cred.RefreshToken = "rt"
+	cred.AIStudio = &vault.AIStudioData{
+		Name:        "projects/p/locations/global/keys/uid-1",
+		UID:         "uid-1",
+		KeyMaterial: "AIzaSy_FAKE",
+		ProjectID:   "p",
+	}
+	v.Set(cred)
+
+	auth := &stubAuth{}
+	fake := &fakeGCPClient{}
+	factory := func(account string) (GCPSetupClient, error) { return fake, nil }
+	m, err := newModel(v, "a@gmail.com",
+		WithAuthenticator(auth),
+		WithGCPClientFactory(factory),
+	)
+	if err != nil {
+		t.Fatalf("newModel: %v", err)
+	}
+
+	_, _ = m.Update(revokeAccountMsg{account: "a@gmail.com"})
+
+	if fake.deleteAPIKeyCalls != 1 {
+		t.Errorf("DeleteAPIKey calls = %d, want 1", fake.deleteAPIKeyCalls)
+	}
+	if fake.lastDeletedAPIKey != "projects/p/locations/global/keys/uid-1" {
+		t.Errorf("DeleteAPIKey arg = %q", fake.lastDeletedAPIKey)
+	}
+	if auth.revokeCalls != 1 {
+		t.Errorf("Revoke calls = %d, want 1", auth.revokeCalls)
+	}
+	if _, err := v.Get("google", "a@gmail.com"); err == nil {
+		t.Error("vault entry should be gone after revoke")
+	}
+}
+
+// AI Studio DELETE failure must NOT block the local revoke. User
+// asked for the account gone; charon respects that and surfaces
+// a partial-failure status note so the user can clean up manually.
+func TestRevokeAccount_AIStudioDeleteFailureNonFatal(t *testing.T) {
+	v := vaultWithBase("a@gmail.com")
+	cred, _ := v.Get("google", "a@gmail.com")
+	cred.RefreshToken = "rt"
+	cred.AIStudio = &vault.AIStudioData{
+		Name:        "projects/p/locations/global/keys/uid-1",
+		KeyMaterial: "AIzaSy_FAKE",
+	}
+	v.Set(cred)
+
+	auth := &stubAuth{}
+	fake := &fakeGCPClient{deleteAPIKeyErr: errors.New("403 forbidden")}
+	factory := func(account string) (GCPSetupClient, error) { return fake, nil }
+	m, _ := newModel(v, "a@gmail.com",
+		WithAuthenticator(auth),
+		WithGCPClientFactory(factory),
+	)
+	_, _ = m.Update(revokeAccountMsg{account: "a@gmail.com"})
+
+	// Local revoke must still have happened.
+	if _, err := v.Get("google", "a@gmail.com"); err == nil {
+		t.Error("local revoke must proceed despite upstream DELETE failure")
+	}
+	if auth.revokeCalls != 1 {
+		t.Error("OAuth Revoke must still happen even when AIStudio DELETE fails")
+	}
+}
+
+// Skipping AIStudio cleanup is correct when the credential has no
+// AIStudio sidecar (typical for accounts pre-M4 or accounts that
+// never granted cloud-platform).
+func TestRevokeAccount_NoAIStudio_SkipsDeleteAPIKey(t *testing.T) {
+	v := vaultWithBase("a@gmail.com")
+	cred, _ := v.Get("google", "a@gmail.com")
+	cred.RefreshToken = "rt"
+	v.Set(cred) // no AIStudio sidecar
+
+	auth := &stubAuth{}
+	fake := &fakeGCPClient{}
+	factory := func(account string) (GCPSetupClient, error) { return fake, nil }
+	m, _ := newModel(v, "a@gmail.com",
+		WithAuthenticator(auth),
+		WithGCPClientFactory(factory),
+	)
+	_, _ = m.Update(revokeAccountMsg{account: "a@gmail.com"})
+
+	if fake.deleteAPIKeyCalls != 0 {
+		t.Errorf("DeleteAPIKey should not be called when no AIStudio sidecar; got %d calls", fake.deleteAPIKeyCalls)
 	}
 }
 
