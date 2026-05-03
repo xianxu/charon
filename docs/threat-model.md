@@ -177,6 +177,7 @@ assumptions and is tracked separately as
 | OAuth refresh tokens | macOS Keychain (`charon` service) | High | Long-lived, per provider × account, mints fresh access tokens until revoked at provider |
 | Provider admin keys | macOS Keychain (`charon` service, `_<provider>:admin` account) | **Highest** | Mint per-account API keys with full org access; list/modify all projects; see all usage; modify rate limits — anything the provider's organization dashboard can do |
 | Per-account minted API keys | macOS Keychain (`charon` service, `<provider>:<account>` account) | High | Long-lived, scoped to one project/workspace. Independent of admin key — keep working until revoked individually or admin-key rotates to a different org |
+| AI Studio API key (sidecar) | macOS Keychain (`charon` service, `google:<account>` entry, `aistudio` payload field) | High | Long-lived API key minted under the user's GCP project, restricted at mint time to `generativelanguage.googleapis.com` only. Independent of OAuth refresh — survives token rotation but tied to the same Google account; revoked along with the account on `accounts rm` (M6 calls `apikeys.googleapis.com DELETE`). Restriction at mint time bounds blast radius if the key leaks: it cannot be repurposed for other Google APIs. |
 | Proxy CA private key | macOS Keychain (`charon` service, `_ca:key` account) | **Highest** | Owning it lets an attacker forge HTTPS for any host the agent trusts via `charon run`'s env vars |
 | Access tokens | In-memory cache only | Low | Short-lived (~1h), never persisted |
 | Charon signing key | macOS Keychain, login | High | Lets attacker produce Mach-O binaries that satisfy charon's M4 ACL predicate |
@@ -186,6 +187,17 @@ get the same M4 ACL treatment as everything else. The CA's blast
 radius is "any host charon proxies for"; an admin key's blast radius
 is "the entire upstream organization." Neither is bounded by a
 single account.
+
+The AI Studio key (#14) is a deliberate exception in shape: it's a
+mintable secret (like an OpenAI service-account key) but it lives
+inline on the OAuth credential rather than in a sibling keychain
+entry. Same lifecycle as the OAuth tokens, same ACL, same blast
+radius bound — *but additionally* charon mints it with
+`restrictions.apiTargets = [generativelanguage.googleapis.com]`,
+so even if the key escapes the keychain (memory dump, log leak),
+upstream will reject calls to any other Google API. This is the
+only place charon can pin restrictions at mint time; OpenAI/
+Anthropic admin APIs don't expose equivalent per-key API gating.
 
 ### Dev mode: file-backed vault, not keychain
 

@@ -1,6 +1,6 @@
 ---
 id: 000014
-status: working
+status: done
 deps: []
 github_issue:
 created: 2026-04-28
@@ -559,3 +559,20 @@ independently.
     happens.
   - The `cred.GCP` sidecar dies with the credential (same keychain
     entry) — no separate cleanup needed.
+
+- **2026-05-01 — M7: docs.** `docs/agent-protocol.md` gains a
+  "Google AI providers — Vertex AI and AI Studio (Gemini)" section
+  that documents the manifest-driven URL build for Vertex,
+  transparent `?key=` attach for AI Studio, scope semantics
+  (`HasScopes:false` on AI Studio routes), and the two main error
+  patterns (`BILLING_DISABLED`, `RESOURCE_EXHAUSTED`) with their
+  fix URLs. `docs/threat-model.md` Assets table gains a row for
+  the AI Studio key, with prose explaining the
+  `apiTargets`-restriction-at-mint defense — the only place
+  charon can bound a minted key's blast radius at the upstream.
+  Atlas was already current from in-stream updates during
+  M2/M5/consumer-project-setup work.
+
+  README and `cmd/charon/agent_instructions.md` (the embedded
+  agent guide) were kept current throughout the session, so M7
+  for those is just a verification pass — no changes needed.

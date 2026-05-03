@@ -281,6 +281,95 @@ Google rewrites the OIDC short scope `email` to its full URL
 catalog uses the full URL for round-trip consistency. You can use either
 form in `X-Charon-Scope`.
 
+### Google AI providers — Vertex AI and AI Studio (Gemini)
+
+Two distinct paths to the same Gemini models, both authenticated via
+the user's existing Google OAuth credential. Both require the
+`cloud-platform` scope and a charon-managed GCP project (set up via
+`charon auth` → enter on the cloud-platform row → walk through
+project picker / API enable / billing check / region pick).
+
+The setup populates two manifest blocks per Google account:
+
+```json
+"google": {
+  "user@gmail.com": {
+    "scopes":    [..., "https://www.googleapis.com/auth/cloud-platform"],
+    "vertex":    {"project_id": "...", "region": "us-central1"},
+    "ai-studio": {"project_id": "..."}
+  }
+}
+```
+
+Read these blocks at agent startup. Their **presence** signals the
+path is available; **absence** means the user hasn't completed
+project setup — surface "run `charon auth`" to them and stop.
+
+#### Vertex AI
+
+URL pattern includes both `region` and `project_id`. Build it from
+the manifest's `vertex` block:
+
+```http
+POST /v1/projects/{project_id}/locations/{region}/publishers/google/models/gemini-flash-latest:generateContent HTTP/1.1
+Host: {region}-aiplatform.googleapis.com
+X-Charon-Account: user@gmail.com
+Content-Type: application/json
+
+{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}
+```
+
+Charon attaches `Authorization: Bearer <oauth_access_token>` to the
+upstream request. Region and project are agent-controlled — you can
+override per-request by changing the URL; charon doesn't constrain.
+
+#### AI Studio
+
+Same prompt models, different endpoint, different auth. URL is just
+the model path; charon attaches `?key=<minted_api_key>` to the URL
+transparently. Agent never sees the key.
+
+```http
+POST /v1beta/models/gemini-flash-latest:generateContent HTTP/1.1
+Host: generativelanguage.googleapis.com
+X-Charon-Account: user@gmail.com
+Content-Type: application/json
+
+{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}
+```
+
+The `ai-studio.project_id` from the manifest is **informational** —
+the agent doesn't put it in the URL — but it's the project consuming
+quota/billing for the call. Surface it to the user when calls return
+`RESOURCE_EXHAUSTED` or `BILLING_DISABLED` so they know which project
+to act on.
+
+#### Common error patterns
+
+- **`403 BILLING_DISABLED` (Vertex)** — project has no billing
+  account linked. Charon's setup flow blocks at this state and
+  surfaces a console link; if the agent receives it at runtime the
+  user must have skipped the block (`[c] continue without billing`)
+  or billing got removed after setup. Tell them to link billing at
+  `https://console.cloud.google.com/billing/linkedaccount?project=<vertex.project_id>`.
+
+- **`429 RESOURCE_EXHAUSTED` with `limit: 0` on free-tier metrics
+  (AI Studio)** — charon-created projects don't get free-tier quota
+  by default; the project needs billing linked to use paid tier.
+  Same fix URL as above, with `<ai-studio.project_id>`.
+
+- **No `vertex` / `ai-studio` block in manifest** — user hasn't
+  completed setup. Tell them to run `charon auth` and toggle on
+  `cloud-platform` (the row's enter key launches setup).
+
+#### Scope semantics
+
+`cloud-platform` is the only scope these paths need. Charon validates
+it against `X-Charon-Scope` if you set the header; otherwise the
+upstream returns 403 if missing. The scope check applies to the
+Vertex path; AI Studio routes have `HasScopes:false` so the header is
+ignored on those (the API key carries the authorization).
+
 ### OpenAI
 
 Admin-key provider (#13). User pastes a one-time admin key in
