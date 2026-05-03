@@ -56,6 +56,8 @@ func main() {
 	root.AddCommand(scopesCmd())
 	root.AddCommand(gcpCmd())
 	root.AddCommand(instructionsCmd())
+	root.AddCommand(armCmd())
+	root.AddCommand(disarmCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -105,6 +107,10 @@ func serveCmd() *cobra.Command {
 				Refreshers:   refreshers,
 				Verbose:      verbose,
 				ScopeTracker: proxy.NewScopeTracker(100, 24*time.Hour),
+				// Boots disarmed (#16 A spec). User must `charon arm`
+				// or click Charon Security.app's menubar to enable
+				// CONNECTs.
+				Session: proxy.NewSession(),
 			}
 
 			// Publish runtime info so other CLI invocations can find
@@ -693,6 +699,7 @@ func statusCmd() *cobra.Command {
 			json.NewDecoder(resp.Body).Decode(&health)
 			fmt.Fprintf(out, "Proxy: %s on %s\n", health.Status, health.Addr)
 			fmt.Fprintf(out, "CA: stored in keychain (service: charon)\n")
+			fmt.Fprintln(out, extendStatusOutput(addr))
 			return nil
 		},
 	}

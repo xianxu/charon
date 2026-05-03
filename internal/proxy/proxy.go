@@ -49,6 +49,11 @@ type Server struct {
 	Now func() time.Time
 	// ScopeTracker tracks scope denials for the fix command. Nil disables tracking.
 	ScopeTracker *ScopeTracker
+	// Session is the proxy's runtime-consent state. nil disables the
+	// gate (legacy permanently-armed behavior — useful for tests
+	// that pre-date the consent work). `charon serve` always wires
+	// a non-nil Session that boots disarmed (#16 A).
+	Session *Session
 
 	// tokenCache caches access tokens in memory keyed by "provider:account".
 	tokenCache sync.Map
@@ -127,6 +132,12 @@ func (s *Server) handleDirect(w http.ResponseWriter, r *http.Request) {
 		s.ClearCache()
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"cleared":true}`)
+	case "/session/arm":
+		s.handleSessionArm(w, r)
+	case "/session/disarm":
+		s.handleSessionDisarm(w, r)
+	case "/session/status":
+		s.handleSessionStatus(w, r)
 	case "/healthz":
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"status":"ok","addr":%q}`, s.Addr)
@@ -151,6 +162,19 @@ func (s *Server) handleDirect(w http.ResponseWriter, r *http.Request) {
 
 // handleConnect handles HTTPS CONNECT tunneling with token injection.
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
+	// Runtime-consent gate: refuse new tunnels while disarmed.
+	// Per spec, the gate fires once at CONNECT — once a tunnel is
+	// up, requests inside drain even if the session expires
+	// mid-flight (agents handle TCP RST poorly, and the next
+	// request inside an open tunnel doesn't ask CONNECT again so
+	// RST mid-tunnel doesn't actually defend more).
+	if s.Session != nil && !s.Session.IsArmed() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusProxyAuthRequired)
+		fmt.Fprint(w, `{"error":"session_disarmed","fix":"charon arm   # or click the menubar dot in Charon Security.app"}`)
+		return
+	}
+
 	host := r.Host
 	if !strings.Contains(host, ":") {
 		host += ":443"

@@ -395,4 +395,36 @@ Caveats:
 
 ## Log
 
-(empty)
+- **2026-05-01 — Phase A done.** Proxy session-state skeleton:
+  - `internal/proxy/session.go` — `Session` struct with armed bit,
+    armedAt / idleExpiresAt / absoluteCapAt timestamps, mutex,
+    injectable clock for tests. Lazy expiry computation (no
+    background goroutine — IsArmed/Status compute on read).
+  - `internal/proxy/session_http.go` — `/session/{arm,disarm,status}`
+    HTTP endpoints on the proxy's direct path. POST-only for
+    arm/disarm; GET for status. Returns structured JSON.
+  - `handleConnect` gates on Session.IsArmed() at the top.
+    Disarmed → 407 with `{"error":"session_disarmed",
+    "fix":"charon arm   # or click the menubar dot..."}`. Once the
+    tunnel is up, in-flight requests drain (per spec: agents
+    handle TCP RST poorly, and once the tunnel is up nothing
+    prevents the next request anyway).
+  - CLI: `charon arm [--ttl 1h]` / `charon disarm` / extended
+    `charon status` shows armed/disarmed + expiry + reason
+    (idle vs absolute).
+  - `charon serve` boots disarmed by default. Power users can
+    `charon arm` from CLI; eventual UX is the menubar (#16 D).
+
+  Tests cover: boot-disarmed, arm-then-armed, default TTL, cap
+  at SessionAbsoluteCap, idle auto-disarm, absolute auto-disarm
+  with continuous activity ("chatty agent" defense), IsArmed
+  refreshes idle, Status doesn't refresh idle, Disarm immediate,
+  re-arm extends, expired→Status returns disarmed. HTTP layer
+  covers: 407+structured-JSON on disarmed CONNECT, default-ttl
+  arm, explicit-ttl arm, disarm via endpoint, status reads,
+  POST-only enforcement, nil-Session no-gate (legacy tests).
+
+  **Behavioral note for the operator**: after `make install` the
+  prod proxy will boot disarmed. Existing agents will see 407s
+  until `charon arm` is called. Phase D's menubar will be the
+  ergonomic path; until then it's CLI.
