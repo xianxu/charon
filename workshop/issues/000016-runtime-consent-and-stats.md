@@ -1,10 +1,10 @@
 ---
 id: 000016
-status: open
+status: working
 deps: []
 github_issue:
 created: 2026-04-29
-updated: 2026-04-29
+updated: 2026-05-01
 estimate_hours: 20
 estimate_method: estimate-logic-v2.md (Method A)
 prior_estimate_hours: 85  # v1 estimate; superseded by v2 after #13 actuals
