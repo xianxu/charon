@@ -49,9 +49,9 @@ type providerSelectedMsg struct {
 	provType string
 }
 
-// addProviderMsg signals the user wanted to add a Tier 3 catalog
-// provider (#15). Phase 1 just shows a "coming soon" status; #15
-// wires the catalog picker.
+// addProviderMsg signals the user wanted to add a Tier-3 catalog
+// provider. The top-level model handles this by transitioning to
+// the catalog picker (#15 M2).
 type addProviderMsg struct{}
 
 // newProviderPickerModel builds the picker by combining what's in
@@ -216,13 +216,9 @@ func (m providerPickerModel) Update(msg tea.Msg) (providerPickerModel, tea.Cmd) 
 		}
 		item := m.items[m.cursor]
 		if item.isAddProvider {
-			// Stub for #15. Catalog (Tier 3 long-tail providers —
-			// Anthropic, Groq, Mistral, etc.) ships in the catalog
-			// issue. For now, surface a status message naming what's
-			// coming so users aren't left wondering why nothing
-			// happened.
-			m.statusMsg = "+ add provider opens the catalog picker — coming in #15. " +
-				"Today: Google (OAuth) + OpenAI (admin key) only."
+			// Transitions to the catalog picker (#15 M2). The selected
+			// catalog entry's paste flow ships in M4; until then the
+			// catalog-picked handler routes back here with a CLI hint.
 			return m, func() tea.Msg { return addProviderMsg{} }
 		}
 		return m, func() tea.Msg {

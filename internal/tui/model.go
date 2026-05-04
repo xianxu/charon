@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/xianxu/charon/internal/oauth"
 	"github.com/xianxu/charon/internal/providers"
+	"github.com/xianxu/charon/internal/providers/catalog"
 	"github.com/xianxu/charon/internal/providers/gcp"
 	"github.com/xianxu/charon/internal/vault"
 )
@@ -35,6 +36,7 @@ const (
 	screenAdminRevoke                   // revoke confirmation modal (project or admin-key cascade)
 	screenAdminKeyDetail                // per-key drill-in (Screen 3b)
 	screenGCPSetup                      // Google Cloud project setup (#14 M3)
+	screenCatalogPicker                 // Tier-3 catalog provider picker (#15 M2)
 )
 
 // model is the top-level bubbletea model.
@@ -49,6 +51,8 @@ type model struct {
 	adminRevoke    adminRevokeModel
 	adminDetail    adminKeyDetailModel
 	gcpSetup       gcpSetupModel
+	catalogPicker  catalogPickerModel
+	catalog        *catalog.Catalog
 
 	vault       vault.Store
 	auth        Authenticator
@@ -166,6 +170,18 @@ func newModel(v vault.Store, initialAccount string, opts ...Option) (model, erro
 		return model{}, err
 	}
 	m.providerPicker = pp
+
+	// Eager-load the catalog so the "+ add provider" path is instant.
+	// Failure here is a build-time bug in the embedded YAML (caught by
+	// catalog tests), not a runtime concern — surface as an error so
+	// the user notices instead of silently dropping the catalog.
+	cat, err := catalog.Load()
+	if err != nil {
+		return model{}, fmt.Errorf("load catalog: %w", err)
+	}
+	m.catalog = cat
+	m.catalogPicker = newCatalogPickerModel(cat)
+
 	m.current = screenProvider
 	return m, nil
 }
@@ -188,11 +204,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleProviderSelected(msg)
 
 	case addProviderMsg:
-		// Phase 1 stub. Catalog (#15) will wire the catalog picker
-		// here. Today: re-render the provider picker with a status
-		// hint baked into the label (no separate flash mechanism yet
-		// — keeping the picker stateless until #15 motivates one).
+		// Reset the catalog picker cursor each entry so the user
+		// always lands at the top of the list. M4 will replace this
+		// transition with a state machine that ends in paste-and-store.
+		m.catalogPicker = newCatalogPickerModel(m.catalog)
+		m.current = screenCatalogPicker
 		return m, nil
+
+	case catalogBackMsg:
+		return m.refreshProviderPicker()
+
+	case catalogSelectedMsg:
+		// M4 lands the paste flow. Today: bounce back to the provider
+		// picker with a CLI hint so users testing M3 can complete the
+		// loop end-to-end without the TUI flow.
+		hint := fmt.Sprintf(
+			"Selected %s. M4 ships the paste flow; for now: "+
+				"charon vault set --type catalog --provider %s --account <name> --token <key>",
+			msg.entry.Name, msg.entry.ID,
+		)
+		return m.refreshProviderPickerWithStatus(hint)
 
 	case adminKeyListBackMsg:
 		return m.refreshProviderPicker()
@@ -476,6 +507,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.providerPicker, cmd = m.providerPicker.Update(msg)
 		return m, cmd
+	case screenCatalogPicker:
+		var cmd tea.Cmd
+		m.catalogPicker, cmd = m.catalogPicker.Update(msg)
+		return m, cmd
 	case screenPicker:
 		var cmd tea.Cmd
 		m.picker, cmd = m.picker.Update(msg)
@@ -641,11 +676,21 @@ func (m model) handleProviderSelected(msg providerSelectedMsg) (tea.Model, tea.C
 // and returns to that screen. Called when navigating back from any
 // per-provider sub-screen.
 func (m model) refreshProviderPicker() (tea.Model, tea.Cmd) {
+	return m.refreshProviderPickerWithStatus("")
+}
+
+// refreshProviderPickerWithStatus rebuilds the provider picker and
+// drops a transient status note onto it (cleared by the user's next
+// keystroke per the picker's existing behavior). Used to surface
+// hints back from sub-screens — e.g. the M2 catalog-picked stub
+// pointing at the CLI shortcut until M4 lands.
+func (m model) refreshProviderPickerWithStatus(status string) (tea.Model, tea.Cmd) {
 	pp, err := newProviderPickerModel(m.vault, m.adminStores)
 	if err != nil {
 		m.err = err
 		return m, tea.Quit
 	}
+	pp.statusMsg = status
 	m.providerPicker = pp
 	m.current = screenProvider
 	return m, nil
@@ -787,6 +832,8 @@ func (m model) View() string {
 	switch m.current {
 	case screenProvider:
 		return m.providerPicker.View()
+	case screenCatalogPicker:
+		return m.catalogPicker.View()
 	case screenPicker:
 		return m.picker.View()
 	case screenAdminKeyList:
