@@ -38,6 +38,8 @@ const (
 	screenGCPSetup                      // Google Cloud project setup (#14 M3)
 	screenCatalogPicker                 // Tier-3 catalog provider picker (#15 M2)
 	screenCatalogPaste                  // Tier-3 catalog add-account flow (#15 M4)
+	screenCatalogAccountList            // Tier-3 catalog per-provider account list (#15 M4b)
+	screenCatalogRevoke                 // Tier-3 catalog revoke confirm modal (#15 M4b)
 )
 
 // model is the top-level bubbletea model.
@@ -52,9 +54,20 @@ type model struct {
 	adminRevoke    adminRevokeModel
 	adminDetail    adminKeyDetailModel
 	gcpSetup       gcpSetupModel
-	catalogPicker  catalogPickerModel
-	catalogPaste   catalogPasteModel
-	catalog        *catalog.Catalog
+	catalogPicker      catalogPickerModel
+	catalogPaste       catalogPasteModel
+	catalogAccountList catalogAccountListModel
+	catalogRevoke      catalogRevokeModel
+	catalog            *catalog.Catalog
+	// catalogPasteOrigin is the screen that launched the active paste
+	// flow — used by catalogPasteCancelMsg to return to either the
+	// catalog picker (first-time add) or the per-provider account list
+	// (existing-provider "+ add account").
+	catalogPasteOrigin screen
+	// activeCatalogEntry is set when current==screenCatalogAccountList
+	// or screenCatalogRevoke; used to rebuild the account list after
+	// a revoke without re-deriving from a stale message.
+	activeCatalogEntry catalog.Entry
 
 	vault       vault.Store
 	auth        Authenticator
@@ -167,12 +180,6 @@ func newModel(v vault.Store, initialAccount string, opts ...Option) (model, erro
 		return m, nil
 	}
 
-	pp, err := newProviderPickerModel(v, m.adminStores)
-	if err != nil {
-		return model{}, err
-	}
-	m.providerPicker = pp
-
 	// Eager-load the catalog so the "+ add provider" path is instant.
 	// Failure here is a build-time bug in the embedded YAML (caught by
 	// catalog tests), not a runtime concern — surface as an error so
@@ -183,6 +190,12 @@ func newModel(v vault.Store, initialAccount string, opts ...Option) (model, erro
 	}
 	m.catalog = cat
 	m.catalogPicker = newCatalogPickerModel(cat)
+
+	pp, err := newProviderPickerModel(v, m.adminStores, cat)
+	if err != nil {
+		return model{}, err
+	}
+	m.providerPicker = pp
 
 	m.current = screenProvider
 	return m, nil
@@ -218,28 +231,89 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case catalogSelectedMsg:
 		m.catalogPaste = newCatalogPasteModel(msg.entry, m.vault)
+		m.catalogPasteOrigin = screenCatalogPicker
+		m.current = screenCatalogPaste
+		return m, nil
+
+	case catalogAccountAddMsg:
+		// "+ add account" inside an existing catalog provider's
+		// account list — re-enter paste flow with the entry pre-set,
+		// so the user doesn't have to traverse the catalog picker
+		// when they already know the provider.
+		m.catalogPaste = newCatalogPasteModel(msg.entry, m.vault)
+		m.catalogPasteOrigin = screenCatalogAccountList
 		m.current = screenCatalogPaste
 		return m, nil
 
 	case catalogPasteCancelMsg:
-		// User backed out of the paste flow before storing — return to
-		// the catalog picker (not the top-level provider picker) so
-		// they can pick a different entry without re-navigating.
-		m.current = screenCatalogPicker
-		return m, nil
+		// User backed out of the paste flow before storing — return
+		// to whichever screen launched the flow. From the catalog
+		// picker, that's the picker; from the account list, that's
+		// the account list (so an esc-to-rethink doesn't kick the
+		// user back to the top-level picker).
+		switch m.catalogPasteOrigin {
+		case screenCatalogAccountList:
+			return m.refreshCatalogAccountList()
+		default:
+			m.current = screenCatalogPicker
+			return m, nil
+		}
 
 	case catalogPasteDoneMsg:
 		// Successfully stored. Notify the proxy to invalidate any
 		// cached lookup (e.g. a stale 407 cache for this provider/
-		// account from before the paste). Then bounce to the provider
-		// picker with a precise "ready to use" hint.
+		// account from before the paste). Then bounce to whichever
+		// screen launched the flow with a precise "ready to use" hint:
+		// from the catalog picker that's the provider picker; from
+		// the account list that's the account list (so the user lands
+		// on the row they just added).
 		m.notifyProxyCacheClear()
 		hint := fmt.Sprintf(
 			"Stored %s/%s — try: charon run -- curl -H \"X-Charon-Account: %s\" https://%s/...",
 			msg.provider, msg.account, msg.account,
 			catalogFirstHost(m.catalog, msg.provider),
 		)
+		if m.catalogPasteOrigin == screenCatalogAccountList {
+			updated, cmd := m.refreshCatalogAccountList()
+			mm := updated.(model)
+			mm.catalogAccountList.statusMsg = hint
+			return mm, cmd
+		}
 		return m.refreshProviderPickerWithStatus(hint)
+
+	case catalogAccountListBackMsg:
+		return m.refreshProviderPicker()
+
+	case catalogRevokeRequestMsg:
+		rm, err := newCatalogRevokeModel(msg.entry, msg.account, m.vault)
+		if err != nil {
+			m.err = err
+			return m, tea.Quit
+		}
+		m.catalogRevoke = rm
+		m.activeCatalogEntry = msg.entry
+		m.current = screenCatalogRevoke
+		return m, nil
+
+	case catalogRevokeDoneMsg:
+		// Vault is consistent. Flush proxy cache so any in-flight
+		// request for this account gets a fresh 407 instead of
+		// trying to inject a now-deleted credential.
+		m.notifyProxyCacheClear()
+		updated, cmd := m.refreshCatalogAccountList()
+		mm := updated.(model)
+		// If the list now has only the trailing "+ add account" row,
+		// the account that was just revoked was the last one — pop
+		// back to the provider picker so the now-empty catalog
+		// provider's row disappears.
+		if len(mm.catalogAccountList.rows) == 1 && mm.catalogAccountList.rows[0].isAddNew {
+			return mm.refreshProviderPickerWithStatus(msg.statusNote)
+		}
+		mm.catalogAccountList.statusMsg = msg.statusNote
+		return mm, cmd
+
+	case catalogRevokeCancelMsg:
+		return m.refreshCatalogAccountList()
 
 	case adminKeyListBackMsg:
 		return m.refreshProviderPicker()
@@ -531,6 +605,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.catalogPaste, cmd = m.catalogPaste.Update(msg)
 		return m, cmd
+	case screenCatalogAccountList:
+		var cmd tea.Cmd
+		m.catalogAccountList, cmd = m.catalogAccountList.Update(msg)
+		return m, cmd
+	case screenCatalogRevoke:
+		var cmd tea.Cmd
+		m.catalogRevoke, cmd = m.catalogRevoke.Update(msg)
+		return m, cmd
 	case screenPicker:
 		var cmd tea.Cmd
 		m.picker, cmd = m.picker.Update(msg)
@@ -687,8 +769,64 @@ func (m model) handleProviderSelected(msg providerSelectedMsg) (tea.Model, tea.C
 		m.activeAdminProvider = msg.name
 		m.current = screenAdminKeyList
 		return m, nil
+	case vault.TypeCatalog:
+		entry, ok := lookupCatalogEntry(m.catalog, msg.name)
+		if !ok {
+			m.err = fmt.Errorf("catalog entry %q not loaded — picker shouldn't have shown the row", msg.name)
+			return m, tea.Quit
+		}
+		l, err := newCatalogAccountListModel(entry, m.vault)
+		if err != nil {
+			m.err = err
+			return m, tea.Quit
+		}
+		m.catalogAccountList = l
+		m.activeCatalogEntry = entry
+		m.current = screenCatalogAccountList
+		return m, nil
 	}
 	return m, nil
+}
+
+// refreshCatalogAccountList rebuilds the active catalog provider's
+// account list (after a paste or revoke) and routes the screen.
+func (m model) refreshCatalogAccountList() (tea.Model, tea.Cmd) {
+	if m.activeCatalogEntry.ID == "" {
+		// No active catalog entry — fall back to provider picker.
+		// Defensive: shouldn't happen since catalog flows are only
+		// reachable through the picker.
+		return m.refreshProviderPicker()
+	}
+	prevCursor := m.catalogAccountList.cursor
+	l, err := newCatalogAccountListModel(m.activeCatalogEntry, m.vault)
+	if err != nil {
+		m.err = err
+		return m, tea.Quit
+	}
+	if prevCursor >= len(l.rows) {
+		prevCursor = len(l.rows) - 1
+	}
+	if prevCursor < 0 {
+		prevCursor = 0
+	}
+	l.cursor = prevCursor
+	m.catalogAccountList = l
+	m.current = screenCatalogAccountList
+	return m, nil
+}
+
+// lookupCatalogEntry returns the catalog entry with the given id, or
+// false when the catalog is nil or the id is unknown.
+func lookupCatalogEntry(c *catalog.Catalog, id string) (catalog.Entry, bool) {
+	if c == nil {
+		return catalog.Entry{}, false
+	}
+	for _, e := range c.Entries {
+		if e.ID == id {
+			return e, true
+		}
+	}
+	return catalog.Entry{}, false
 }
 
 // refreshProviderPicker rebuilds the provider picker (state may have
@@ -705,7 +843,7 @@ func (m model) refreshProviderPicker() (tea.Model, tea.Cmd) {
 // hints back from sub-screens — e.g. the M2 catalog-picked stub
 // pointing at the CLI shortcut until M4 lands.
 func (m model) refreshProviderPickerWithStatus(status string) (tea.Model, tea.Cmd) {
-	pp, err := newProviderPickerModel(m.vault, m.adminStores)
+	pp, err := newProviderPickerModel(m.vault, m.adminStores, m.catalog)
 	if err != nil {
 		m.err = err
 		return m, tea.Quit
@@ -856,6 +994,10 @@ func (m model) View() string {
 		return m.catalogPicker.View()
 	case screenCatalogPaste:
 		return m.catalogPaste.View()
+	case screenCatalogAccountList:
+		return m.catalogAccountList.View()
+	case screenCatalogRevoke:
+		return m.catalogRevoke.View()
 	case screenPicker:
 		return m.picker.View()
 	case screenAdminKeyList:

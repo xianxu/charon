@@ -236,7 +236,7 @@ func TestModel_FullProviderToAdminKeyAndBack(t *testing.T) {
 		adminProviders: map[string]providers.Provider{"openai": providers.NewFake().WithName("openai")},
 		adminStores:    map[string]*providers.AdminKeyStore{"openai": store},
 	}
-	pp, _ := newProviderPickerModel(v, m.adminStores)
+	pp, _ := newProviderPickerModel(v, m.adminStores, nil)
 	m.providerPicker = pp
 	m.current = screenProvider
 

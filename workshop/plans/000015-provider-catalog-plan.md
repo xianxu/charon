@@ -250,9 +250,26 @@ Single end-to-end target: paste a real Anthropic key, hit `https://api.anthropic
 - `catalog_paste_test.go`: teatest — pick anthropic → enter account "personal" → paste fake key → assert vault.Set call with id `anthropic/personal` and key material.
 - Manual e2e checklist captured in issue's `## Plan` section, ticked during execution.
 
-## M4b — Anthropic-style revoke pathway (generic dispatcher)
+## M4b — Catalog list/manage TUI + generic revoke pathway
 
-The catalog `revoke:` schema is in M1. M4b implements the dispatcher that consumes it. Generic code — Anthropic is the first user but the same path serves any future provider with a list+deactivate or direct-delete shape.
+**Scope broadened 2026-05-03 post-M4:** M4's commit explicitly deferred
+the picker-row + account-list TUI surface to M4b ("M4b needs the
+visible row anyway to drive revoke selection"). So M4b now bundles
+three pieces:
+
+1. Picker-row rendering for catalog providers with stored credentials
+   (mirroring how AdminKey rows show a count + glyph).
+2. New per-catalog-provider account-list screen mirroring
+   `adminKeyListModel` shape — rows per stored credential plus a
+   trailing `+ add account` affordance that re-enters the M4 paste flow.
+3. Generic `Entry.Revoke(ctx, pastedKey)` dispatcher consuming the
+   YAML `revoke:` schema (already in M1), plus a `catalogRevokeModel`
+   confirm modal wired into the account list under `r`.
+
+The catalog `revoke:` schema is in M1; M4b implements the dispatcher
+that consumes it. Generic code — Anthropic is the first user but the
+same path serves any future provider with a list+deactivate or
+direct-delete shape.
 
 ### Dispatcher
 
@@ -274,9 +291,89 @@ func (e Entry) Revoke(ctx context.Context, pastedKey string) error {
 
 `lookupKeyID` issues the list-endpoint request authenticated via `e.Auth` and the pasted key, scans the JSON response for an entry whose `partial_key_hint` matches the pasted key's suffix (last 4 chars per Anthropic's hint convention; YAML can override later if another provider uses different hint length).
 
-### TUI revoke wiring
+### TUI surfaces
 
-The existing `internal/tui/admin_revoke.go` modal targets minted credentials. For catalog credentials we add a parallel path: when user hits revoke on a `TypeCatalog` credential, call `entry.Revoke(ctx, key)`; on success or `ErrNoRevokeEndpoint`, delete locally; on other errors, surface but still allow local delete after confirm.
+Three screens / surface changes:
+
+#### Picker-row rendering (provider_picker.go)
+
+New `provType: vault.TypeCatalog` row per catalog entry that has at
+least one stored credential. Mirrors AdminKey shape:
+
+```
+google      OAuth        2 accounts
+openai      Admin key    ● 1 key
+anthropic   API key      ● 1 account
++ add provider
+```
+
+Glyph color: green ● when count > 0; row is omitted when count is 0
+(catalog providers don't have a "configure first" state — paste *is*
+the configuration). Sort order: catalog rows interleaved alphabetically
+within their type group, after AdminKey rows. Per-row count comes from
+`vault.List()` filtered on `Provider == entry.ID && CredType() ==
+TypeCatalog`.
+
+#### Catalog account list (`catalog_account_list.go`)
+
+New `catalogAccountListModel` mirroring `adminKeyListModel` but
+simpler — no admin-key row, no project/workspace breakdown:
+
+```
+charon › Anthropic
+Accounts
+────────────────────────────────────────────────────────────
+> personal              x-…XYZ
+  + add account
+
+↑↓ nav   enter open   r revoke   esc back   q quit
+```
+
+- `enter` on an account row → for now, no-op (or a future detail
+  screen). MVP: route to revoke confirm directly so revoke is reachable
+  via enter *or* `r`. **Decision: enter routes to revoke modal too**;
+  catalog credentials don't have detail content beyond account name +
+  hint, so a separate detail screen would be empty.
+- `r` on an account row → `catalogRevokeRequestMsg{provider, account}`.
+- `enter` on `+ add account` → re-enter M4 catalog paste flow with
+  this provider's catalog entry pre-selected (skip the picker).
+- `esc` → back to provider picker.
+
+#### Catalog revoke modal (`catalog_revoke.go`)
+
+New `catalogRevokeModel` mirroring `adminRevokeModel`'s
+confirm-in-progress-error states. Single shape (no cascade):
+
+```
+charon › Anthropic › revoke
+────────────────────────────────────────────────────────────
+
+  Revoke anthropic/personal
+
+    Hint:  x-…XYZ
+
+  Charon will attempt to deactivate the key upstream and remove
+  the credential from its vault. If upstream revoke fails (e.g.
+  pasted key lacks admin permissions), the credential is removed
+  locally and you can finish revoke at:
+
+    https://console.anthropic.com/settings/keys
+
+[y/enter] proceed    [n/esc] cancel
+```
+
+Behavior in `revokeStateInProgress`:
+
+- Read pasted key from vault → call `entry.Revoke(ctx, key)`.
+- Upstream success → vault.Delete → `catalogRevokeDoneMsg{}`.
+- `ErrNoRevokeEndpoint` (entry has no `revoke:` schema) →
+  vault.Delete → `catalogRevokeDoneMsg{}` with status note pointing
+  at `console_url`.
+- Any other error → state goes to error overlay with message; on
+  any key, fall back to local-delete + status note (the user wants
+  this account *gone* — same posture as the OAuth Google revoke
+  flow at `model.go:revokeAccountMsg`). User can manually clean up
+  at `console_url`.
 
 ### Tests (M4b)
 

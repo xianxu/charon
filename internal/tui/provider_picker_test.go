@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/xianxu/charon/internal/providers"
+	"github.com/xianxu/charon/internal/providers/catalog"
 	"github.com/xianxu/charon/internal/vault"
 	"github.com/xianxu/charon/internal/vault/memory"
 )
@@ -52,7 +53,7 @@ func _testErr(s string) error        { return _testErrType(s) }
 
 func TestProviderPicker_EmptyVault_NoAdminKeys(t *testing.T) {
 	v := memory.New()
-	m, err := newProviderPickerModel(v, nil)
+	m, err := newProviderPickerModel(v, nil, nil)
 	if err != nil {
 		t.Fatalf("newProviderPickerModel: %v", err)
 	}
@@ -84,7 +85,7 @@ func TestProviderPicker_GoogleAccountCount_SingularPlural(t *testing.T) {
 			for _, a := range tc.accounts {
 				_ = v.Set(&vault.Credential{Provider: "google", Account: a})
 			}
-			m, _ := newProviderPickerModel(v, nil)
+			m, _ := newProviderPickerModel(v, nil, nil)
 			if m.items[0].summary != tc.want {
 				t.Errorf("google summary = %q, want %q", m.items[0].summary, tc.want)
 			}
@@ -97,7 +98,7 @@ func TestProviderPicker_AdminKey_RedWhenUnconfigured(t *testing.T) {
 	stores := map[string]*providers.AdminKeyStore{
 		"openai": fakeAdminStore(t, "openai", false, ""),
 	}
-	m, _ := newProviderPickerModel(v, stores)
+	m, _ := newProviderPickerModel(v, stores, nil)
 
 	// Items: google, openai, +add-provider
 	if len(m.items) < 3 {
@@ -132,7 +133,7 @@ func TestProviderPicker_AdminKey_GreenWhenConfigured_WithMintCount(t *testing.T)
 	stores := map[string]*providers.AdminKeyStore{
 		"openai": fakeAdminStore(t, "openai", true, "xianxu@gmail.com"),
 	}
-	m, _ := newProviderPickerModel(v, stores)
+	m, _ := newProviderPickerModel(v, stores, nil)
 
 	openai := m.items[1]
 	if openai.glyph != "●" {
@@ -153,7 +154,7 @@ func TestProviderPicker_View_RendersCleanly(t *testing.T) {
 		"anthropic": fakeAdminStore(t, "anthropic", true, "me@example.com"),
 		"openai":    fakeAdminStore(t, "openai", false, ""),
 	}
-	m, _ := newProviderPickerModel(v, stores)
+	m, _ := newProviderPickerModel(v, stores, nil)
 	view := m.View()
 
 	for _, want := range []string{"Charon", "Provider", "Google", "OpenAI", "Anthropic", "+ add provider"} {
@@ -171,7 +172,7 @@ func TestProviderPicker_NavigationKeys(t *testing.T) {
 	stores := map[string]*providers.AdminKeyStore{
 		"openai": fakeAdminStore(t, "openai", false, ""),
 	}
-	m, _ := newProviderPickerModel(v, stores)
+	m, _ := newProviderPickerModel(v, stores, nil)
 	// Items: google (0), openai (1), + add provider (2).
 
 	if m.cursor != 0 {
@@ -202,7 +203,7 @@ func TestProviderPicker_EnterEmitsSelectedMsg(t *testing.T) {
 	stores := map[string]*providers.AdminKeyStore{
 		"openai": fakeAdminStore(t, "openai", false, ""),
 	}
-	m, _ := newProviderPickerModel(v, stores)
+	m, _ := newProviderPickerModel(v, stores, nil)
 
 	// Enter on google (cursor 0).
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -230,7 +231,7 @@ func TestProviderPicker_EnterEmitsSelectedMsg(t *testing.T) {
 
 func TestProviderPicker_EnterOnAddProvider_EmitsAddMsg(t *testing.T) {
 	v := memory.New()
-	m, _ := newProviderPickerModel(v, nil)
+	m, _ := newProviderPickerModel(v, nil, nil)
 	// Cursor at 0 (google). Move to last (+ add provider).
 	for m.cursor < len(m.items)-1 {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
@@ -249,7 +250,7 @@ func TestProviderPicker_EnterOnAddProvider_EmitsAddMsg(t *testing.T) {
 
 func TestProviderPicker_QuitKey(t *testing.T) {
 	v := memory.New()
-	m, _ := newProviderPickerModel(v, nil)
+	m, _ := newProviderPickerModel(v, nil, nil)
 	for _, key := range []string{"q", "esc", "ctrl+c"} {
 		_, cmd := m.Update(tea.KeyMsg{Runes: []rune(key), Type: tea.KeyRunes})
 		// `esc` and `ctrl+c` arrive as different bubbletea types; just
@@ -265,6 +266,64 @@ func TestProviderPicker_QuitKey(t *testing.T) {
 	// Quit returns a quitMsg; assert by running cmd and checking type.
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Errorf("q should produce tea.QuitMsg, got %T", cmd())
+	}
+}
+
+func TestProviderPicker_CatalogRow_AppearsWhenCatalogCredsExist(t *testing.T) {
+	v := memory.New()
+	storeCatalogCred(t, v, "anthropic", "personal", "sk-ant-AAAA")
+	storeCatalogCred(t, v, "anthropic", "work", "sk-ant-ZZZZ")
+	cat := &catalog.Catalog{Entries: []catalog.Entry{anthropicCatalogEntry()}}
+
+	m, err := newProviderPickerModel(v, nil, cat)
+	if err != nil {
+		t.Fatalf("newProviderPickerModel: %v", err)
+	}
+	// Items: [google, anthropic-catalog, +add]. No admin-key providers.
+	if got, want := len(m.items), 3; got != want {
+		t.Fatalf("items = %d, want %d", got, want)
+	}
+	cat0 := m.items[1]
+	if cat0.name != "anthropic" || cat0.provType != vault.TypeCatalog {
+		t.Errorf("item[1] = %+v, want anthropic catalog", cat0)
+	}
+	if cat0.typeLabel != "API key" {
+		t.Errorf("typeLabel = %q, want 'API key'", cat0.typeLabel)
+	}
+	if cat0.summary != "2 accounts" {
+		t.Errorf("summary = %q, want '2 accounts'", cat0.summary)
+	}
+	if cat0.glyph != "●" {
+		t.Errorf("glyph = %q, want ●", cat0.glyph)
+	}
+
+	// Enter on the catalog row should emit a TypeCatalog providerSelectedMsg.
+	m.cursor = 1
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on catalog row produced no cmd")
+	}
+	sel, ok := cmd().(providerSelectedMsg)
+	if !ok {
+		t.Fatalf("cmd() = %T, want providerSelectedMsg", cmd())
+	}
+	if sel.name != "anthropic" || sel.provType != vault.TypeCatalog {
+		t.Errorf("sel = %+v, want {anthropic, catalog}", sel)
+	}
+}
+
+func TestProviderPicker_CatalogRow_OmittedWhenNoCreds(t *testing.T) {
+	v := memory.New()
+	cat := &catalog.Catalog{Entries: []catalog.Entry{anthropicCatalogEntry()}}
+	m, _ := newProviderPickerModel(v, nil, cat)
+	// Items: [google, +add]. Anthropic catalog row is omitted.
+	if got, want := len(m.items), 2; got != want {
+		t.Fatalf("items = %d, want %d (google + add only)", got, want)
+	}
+	for _, it := range m.items {
+		if it.provType == vault.TypeCatalog {
+			t.Errorf("unexpected TypeCatalog row when no creds stored: %+v", it)
+		}
 	}
 }
 

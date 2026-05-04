@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/xianxu/charon/internal/providers"
+	"github.com/xianxu/charon/internal/providers/catalog"
 	"github.com/xianxu/charon/internal/vault"
 )
 
@@ -56,13 +57,17 @@ type addProviderMsg struct{}
 
 // newProviderPickerModel builds the picker by combining what's in
 // the vault (existing accounts → counts) with what's registered as
-// admin-key providers (stores → glyph state).
+// admin-key providers (stores → glyph state) and the catalog (entries
+// with stored credentials → API-key rows).
 //
 // adminStores is keyed by provider name; passing an empty/nil map is
-// fine — the picker just shows Google (and the catalog "+" row).
+// fine — the picker just shows Google (and the catalog "+" row). cat
+// may be nil; nil means no catalog rows render even if vault has
+// stranded TypeCatalog credentials (test convenience).
 func newProviderPickerModel(
 	v vault.Store,
 	adminStores map[string]*providers.AdminKeyStore,
+	cat *catalog.Catalog,
 ) (providerPickerModel, error) {
 	creds, err := v.List()
 	if err != nil {
@@ -73,7 +78,8 @@ func newProviderPickerModel(
 	// payload across all backends (see vault.Store interface contract);
 	// CredType() is the canonical discriminator.
 	googleAccounts := 0
-	adminCounts := map[string]int{} // provider name → minted-key count
+	adminCounts := map[string]int{}   // provider name → minted-key count
+	catalogCounts := map[string]int{} // catalog entry id → pasted-key count
 	for _, c := range creds {
 		switch c.CredType() {
 		case vault.TypeOAuth:
@@ -82,6 +88,8 @@ func newProviderPickerModel(
 			}
 		case vault.TypeAdminKey:
 			adminCounts[c.Provider]++
+		case vault.TypeCatalog:
+			catalogCounts[c.Provider]++
 		}
 	}
 
@@ -125,6 +133,35 @@ func newProviderPickerModel(
 			item.summary = "admin key not set"
 		}
 		items = append(items, item)
+	}
+
+	// Catalog rows: one per catalog entry with stored credentials.
+	// Sorted alphabetically by id for stable rendering. Entries with
+	// zero stored creds are omitted — the "+ add provider" row is
+	// the path to add the first credential.
+	if cat != nil {
+		var catIDs []string
+		for _, e := range cat.Entries {
+			if catalogCounts[e.ID] > 0 {
+				catIDs = append(catIDs, e.ID)
+			}
+		}
+		sort.Strings(catIDs)
+		entryByID := map[string]catalog.Entry{}
+		for _, e := range cat.Entries {
+			entryByID[e.ID] = e
+		}
+		for _, id := range catIDs {
+			e := entryByID[id]
+			items = append(items, providerPickerItem{
+				name:      e.ID,
+				label:     providerLabel(e.ID),
+				typeLabel: "API key",
+				provType:  vault.TypeCatalog,
+				glyph:     "●",
+				summary:   pluralize(catalogCounts[id], "account", "accounts"),
+			})
+		}
 	}
 
 	items = append(items, providerPickerItem{isAddProvider: true})
