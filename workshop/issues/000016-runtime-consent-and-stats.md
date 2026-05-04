@@ -486,3 +486,33 @@ Caveats:
   which exes, at what volume, returning how many items. Without
   C+D, there's no consent oracle UX yet — but the gate from A
   works via CLI, and the audit story is complete.
+
+- **2026-05-01 — Phase C done.** security.app trust edge.
+  - `internal/proxy/runtime_darwin.go`: CGo helper
+    `verifyPeerDR(pid, requirement)` calling Security framework's
+    `SecRequirementCreateWithString` + `SecCodeCopyGuestWithAttributes`
+    + `SecCodeCheckValidity`. Same pattern as the existing self-
+    check in keychain/codesign_darwin.go.
+  - `internal/proxy/runtime_peer_darwin.go`: peer-PID lookup via
+    `getsockopt(LOCAL_PEEREPID)` on the unix socket. Race window
+    documented (TOCTOU between getsockopt + SecCodeCopyGuest);
+    audit-token hardening deferred.
+  - `internal/proxy/runtime_socket.go`: unix-domain listener at
+    `~/Library/Caches/charon/runtime.sock` (perms 0600). One
+    request-per-connection JSON protocol — connection close after
+    reply keeps the peer DR check fresh.
+  - Ops: `arm` / `disarm` / `status` / `audit_recent` mirror the
+    existing HTTP shape so security.app can choose either path
+    (the socket is the load-bearing one once the DR check is
+    enforced; HTTP stays for CLI ergonomics).
+  - Auto-bypass in dev mode (unsigned binary, ServiceDev
+    namespace): unsigned charon talking to a dev-built menubar
+    can drive arm/disarm without ceremony. Production (signed)
+    always enforces. `CHARON_RUNTIME_ALLOW_UNSIGNED_PEER=1`
+    overrides for any-purpose dev testing.
+  - `charon serve` brings up the listener alongside HTTP; clean
+    shutdown on SIGINT/SIGTERM unlinks the socket file.
+  - Tests: 7 covering arm/disarm/status/audit_recent over the
+    socket plus error paths. Sandbox can't bind unix sockets so
+    they skip rather than fail; production path verified by code
+    inspection + manual smoke.

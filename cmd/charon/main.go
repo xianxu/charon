@@ -126,14 +126,32 @@ func serveCmd() *cobra.Command {
 			} else {
 				log.Printf("runtime file: %s", charonruntime.Path())
 			}
+			// Bring up the runtime-consent unix socket (#16 C). DR-
+			// pinned to com.charon.security so only Charon
+			// Security.app can drive arm/disarm. Best-effort: bind
+			// failure logs but doesn't abort serve — the HTTP
+			// /session/* endpoints still work as a fallback (and
+			// are the only path until #16 D's menubar lands).
+			runtimeSock, sockErr := proxy.StartRuntimeSocket(srv)
+			if sockErr != nil {
+				log.Printf("warning: runtime socket bind failed: %v", sockErr)
+			}
 			sigCh := make(chan os.Signal, 1)
 			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 			go func() {
 				<-sigCh
 				_ = charonruntime.Remove()
+				if runtimeSock != nil {
+					_ = runtimeSock.Close()
+				}
 				os.Exit(0)
 			}()
 			defer charonruntime.Remove()
+			defer func() {
+				if runtimeSock != nil {
+					_ = runtimeSock.Close()
+				}
+			}()
 
 			return srv.ListenAndServe()
 		},
