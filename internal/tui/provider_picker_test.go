@@ -382,6 +382,120 @@ func TestModel_BackNavToProviderPicker_PreservesCursor(t *testing.T) {
 	}
 }
 
+// Re-entering the same sub-screen restores the cursor where the
+// user left it last time. In-session memory only — fresh model
+// starts cursor at 0. Tests the catalog account list path; same
+// logic applies to admin entity list and OAuth account picker.
+func TestModel_ReEntryToCatalogAccountList_RestoresCursor(t *testing.T) {
+	v := memory.New()
+	storeCatalogCred(t, v, "anthropic", "personal", "sk-ant-AAAA")
+	storeCatalogCred(t, v, "anthropic", "work", "sk-ant-ZZZZ")
+	cat := &catalog.Catalog{Entries: []catalog.Entry{anthropicCatalogEntry()}}
+
+	m := model{
+		vault:                 v,
+		catalog:               cat,
+		adminCursors:          map[string]int{},
+		catalogAccountCursors: map[string]int{},
+	}
+	pp, _ := newProviderPickerModel(v, nil, cat)
+	m.providerPicker = pp
+	m.providerPicker.cursor = 1 // anthropic
+	m.current = screenProvider
+
+	// Drill into Anthropic.
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mm := updated.(model)
+	updated, _ = mm.Update(cmd())
+	mm = updated.(model)
+	if mm.current != screenCatalogAccountList {
+		t.Fatalf("expected screenCatalogAccountList, got %v", mm.current)
+	}
+	// Move cursor down to "work" row (index 1).
+	updated, _ = mm.Update(tea.KeyMsg{Type: tea.KeyDown})
+	mm = updated.(model)
+	if mm.catalogAccountList.cursor != 1 {
+		t.Fatalf("after down: cursor = %d, want 1", mm.catalogAccountList.cursor)
+	}
+
+	// Esc back. Should save the cursor.
+	updated, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	mm = updated.(model)
+	updated, _ = mm.Update(cmd())
+	mm = updated.(model)
+	if got := mm.catalogAccountCursors["anthropic"]; got != 1 {
+		t.Errorf("catalogAccountCursors[anthropic] = %d, want 1 (saved on esc-back)", got)
+	}
+
+	// Re-enter Anthropic. Cursor should be restored.
+	updated, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mm = updated.(model)
+	updated, _ = mm.Update(cmd())
+	mm = updated.(model)
+	if mm.current != screenCatalogAccountList {
+		t.Fatalf("after re-entry: current = %v, want screenCatalogAccountList", mm.current)
+	}
+	if mm.catalogAccountList.cursor != 1 {
+		t.Errorf("after re-entry: cursor = %d, want 1 (restored from per-screen memory)",
+			mm.catalogAccountList.cursor)
+	}
+}
+
+// Catalog picker re-entry preserves cursor: the picker model is
+// kept across `+ add provider` re-invocations rather than rebuilt,
+// so cursor naturally persists.
+func TestModel_ReEntryToCatalogPicker_PreservesCursor(t *testing.T) {
+	v := memory.New()
+	cat := &catalog.Catalog{Entries: []catalog.Entry{
+		anthropicCatalogEntry(),
+		{ID: "groq", Name: "Groq", HostnamePatterns: []string{"api.groq.com"}, Auth: catalog.Auth{Style: "bearer"}},
+	}}
+	m := model{
+		vault:                 v,
+		catalog:               cat,
+		catalogPicker:         newCatalogPickerModel(cat),
+		adminCursors:          map[string]int{},
+		catalogAccountCursors: map[string]int{},
+	}
+	pp, _ := newProviderPickerModel(v, nil, cat)
+	m.providerPicker = pp
+	m.current = screenProvider
+
+	// Trigger addProviderMsg manually (the bound + add provider row
+	// emits this).
+	updated, _ := m.Update(addProviderMsg{})
+	mm := updated.(model)
+	if mm.current != screenCatalogPicker {
+		t.Fatalf("expected screenCatalogPicker, got %v", mm.current)
+	}
+	// Move cursor down to row 1 (groq).
+	updated, _ = mm.Update(tea.KeyMsg{Type: tea.KeyDown})
+	mm = updated.(model)
+	if mm.catalogPicker.cursor != 1 {
+		t.Fatalf("catalogPicker cursor = %d, want 1", mm.catalogPicker.cursor)
+	}
+
+	// Esc back to provider picker.
+	updated, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	mm = updated.(model)
+	updated, _ = mm.Update(cmd())
+	mm = updated.(model)
+	if mm.current != screenProvider {
+		t.Fatalf("after esc-back: current = %v, want screenProvider", mm.current)
+	}
+
+	// Re-enter catalog picker. Cursor should still be on row 1.
+	updated, _ = mm.Update(addProviderMsg{})
+	mm = updated.(model)
+	if mm.current != screenCatalogPicker {
+		t.Fatalf("re-entry: current = %v, want screenCatalogPicker", mm.current)
+	}
+	if mm.catalogPicker.cursor != 1 {
+		t.Errorf("re-entry: catalogPicker cursor = %d, want 1 (preserved)",
+			mm.catalogPicker.cursor)
+	}
+}
+
 func TestProviderLabel_KnownAndUnknown(t *testing.T) {
 	cases := map[string]string{
 		"google":    "Google",

@@ -92,6 +92,19 @@ type model struct {
 	// the list after a vault/store mutation lands.
 	activeAdminProvider string
 
+	// In-session cursor memory across drill-out → drill-in. Saved on
+	// back-nav (or other drill-out) and restored when the user re-
+	// enters the same screen, so the TUI remembers where they were
+	// last time without persisting anything across CLI invocations.
+	// Per-key for screens that have multiple instances (admin lists
+	// keyed by provider name; catalog account lists keyed by entry
+	// id); single int for screens with a unique instance (OAuth
+	// picker, since only Google has an OAuth flow today). Maps are
+	// init'd in newModel to keep save sites nil-check-free.
+	oauthCursor           int
+	adminCursors          map[string]int // provider name → cursor
+	catalogAccountCursors map[string]int // catalog entry id → cursor
+
 	width, height int
 
 	// exit signals
@@ -161,7 +174,11 @@ func (m model) notifyProxyCacheClear() {
 }
 
 func newModel(v vault.Store, initialAccount string, opts ...Option) (model, error) {
-	m := model{vault: v}
+	m := model{
+		vault:                 v,
+		adminCursors:          map[string]int{},
+		catalogAccountCursors: map[string]int{},
+	}
 	for _, opt := range opts {
 		opt(&m)
 	}
@@ -219,10 +236,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleProviderSelected(msg)
 
 	case addProviderMsg:
-		// Reset the catalog picker cursor each entry so the user
-		// always lands at the top of the list. M4 will replace this
-		// transition with a state machine that ends in paste-and-store.
-		m.catalogPicker = newCatalogPickerModel(m.catalog)
+		// Re-use the existing catalog picker so cursor is preserved
+		// across re-entries — same in-session "remember where I was"
+		// principle the rest of the screens follow. The catalog
+		// itself is embedded at compile time, so no rebuild needed.
 		m.current = screenCatalogPicker
 		return m, nil
 
@@ -282,6 +299,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.refreshProviderPickerWithStatus(hint)
 
 	case catalogAccountListBackMsg:
+		if m.activeCatalogEntry.ID != "" {
+			if m.catalogAccountCursors == nil {
+				m.catalogAccountCursors = map[string]int{}
+			}
+			m.catalogAccountCursors[m.activeCatalogEntry.ID] = m.catalogAccountList.cursor
+		}
 		return m.refreshProviderPicker()
 
 	case catalogRevokeRequestMsg:
@@ -316,9 +339,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.refreshCatalogAccountList()
 
 	case adminKeyListBackMsg:
+		// Save cursor for this provider before drilling out so re-
+		// entry lands the user back where they were. Lazy-init for
+		// tests that construct model{} directly without newModel.
+		if m.activeAdminProvider != "" {
+			if m.adminCursors == nil {
+				m.adminCursors = map[string]int{}
+			}
+			m.adminCursors[m.activeAdminProvider] = m.adminList.cursor
+		}
 		return m.refreshProviderPicker()
 
 	case pickerBackMsg:
+		m.oauthCursor = m.picker.cursor
 		return m.refreshProviderPicker()
 
 	case adminKeyPasteRequestMsg:
@@ -744,7 +777,11 @@ func (m model) handleGCPSetupDone(msg gcpSetupDoneMsg) (tea.Model, tea.Cmd) {
 
 // handleProviderSelected routes from the provider picker to the
 // per-type screen for the chosen provider. OAuth → existing
-// pickerModel; admin-key → adminKeyListModel.
+// pickerModel; admin-key → adminKeyListModel; catalog → account
+// list. Each sub-screen is rebuilt fresh from the vault (so
+// vault changes since last visit are reflected) but the cursor
+// is restored from the model's per-screen memory so re-entry
+// lands the user where they last were.
 func (m model) handleProviderSelected(msg providerSelectedMsg) (tea.Model, tea.Cmd) {
 	switch msg.provType {
 	case vault.TypeOAuth:
@@ -755,6 +792,7 @@ func (m model) handleProviderSelected(msg providerSelectedMsg) (tea.Model, tea.C
 			m.err = err
 			return m, tea.Quit
 		}
+		p.cursor = clampCursor(m.oauthCursor, len(p.items))
 		m.picker = p
 		m.current = screenPicker
 		return m, nil
@@ -765,6 +803,7 @@ func (m model) handleProviderSelected(msg providerSelectedMsg) (tea.Model, tea.C
 			m.err = err
 			return m, tea.Quit
 		}
+		l.cursor = clampCursor(m.adminCursors[msg.name], len(l.rows))
 		m.adminList = l
 		m.activeAdminProvider = msg.name
 		m.current = screenAdminKeyList
@@ -780,12 +819,29 @@ func (m model) handleProviderSelected(msg providerSelectedMsg) (tea.Model, tea.C
 			m.err = err
 			return m, tea.Quit
 		}
+		l.cursor = clampCursor(m.catalogAccountCursors[entry.ID], len(l.rows))
 		m.catalogAccountList = l
 		m.activeCatalogEntry = entry
 		m.current = screenCatalogAccountList
 		return m, nil
 	}
 	return m, nil
+}
+
+// clampCursor returns desired clamped to [0, max-1]. max==0 yields
+// 0; negative desired yields 0. Centralizes the boilerplate that
+// would otherwise repeat at every cursor-restore site.
+func clampCursor(desired, max int) int {
+	if max <= 0 {
+		return 0
+	}
+	if desired >= max {
+		return max - 1
+	}
+	if desired < 0 {
+		return 0
+	}
+	return desired
 }
 
 // refreshCatalogAccountList rebuilds the active catalog provider's
