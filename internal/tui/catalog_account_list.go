@@ -49,6 +49,15 @@ type catalogRevokeRequestMsg struct {
 // newCatalogAccountListModel builds the row list from vault state for
 // the given catalog entry. Errors propagate from vault.List; missing
 // rows is fine (model just shows the trailing + add row).
+//
+// Cost note: each call invokes vault.List, which on the prod
+// keychain backend issues N keychain reads (one per entry). Typical
+// users have <20 entries and reads from charon's own ACL'd entries
+// are silent (see internal/vault/keychain/keychain_darwin.go:97);
+// per-back-nav refresh is intentional so deletions/additions made in
+// other surfaces (CLI, another TUI session) are reflected. If
+// keychain churn ever shows up in practice, cache vault.List output
+// at the model level and invalidate on vault writes.
 func newCatalogAccountListModel(entry catalog.Entry, v vault.Store) (catalogAccountListModel, error) {
 	creds, err := v.List()
 	if err != nil {

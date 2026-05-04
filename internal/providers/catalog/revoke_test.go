@@ -42,10 +42,9 @@ func anthropicLikeEntry(listURL, revokeURL string) Entry {
 				KeyMatch:   "partial_key_hint",
 				ResultPath: "data[].id",
 			},
-			Method:     "POST",
-			URL:        revokeURL,
-			Body:       `{"status":"inactive"}`,
-			AuthSource: "pasted_key",
+			Method: "POST",
+			URL:    revokeURL,
+			Body:   `{"status":"inactive"}`,
 		},
 	}
 }
@@ -199,9 +198,8 @@ func TestRevoke_DirectRevoke_NoListEndpoint(t *testing.T) {
 		ID: "hypothetical",
 		Auth: Auth{Style: "bearer"},
 		Revoke: &Revoke{
-			Method:     "DELETE",
-			URL:        srv.URL + "/keys/{key_id}",
-			AuthSource: "pasted_key",
+			Method: "DELETE",
+			URL:    srv.URL + "/keys/{key_id}",
 		},
 	}
 	if err := e.RevokeKey(context.Background(), "secret-key-123"); err != nil {

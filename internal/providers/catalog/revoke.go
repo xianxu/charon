@@ -9,7 +9,15 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
+
+// httpClient backs revoke dispatcher calls with a sane timeout
+// even when the caller forgot to thread a deadline through their
+// context. The TUI passes a 30s ctx to RevokeKey already; this
+// is a backstop for any future non-TUI caller (CLI subcommand,
+// test harness, ad-hoc tool) that uses background context.
+var httpClient = &http.Client{Timeout: 30 * time.Second}
 
 // ErrNoRevokeEndpoint is returned by Entry.Revoke when the catalog
 // entry has no revoke schema declared. Callers fall back to local
@@ -26,7 +34,7 @@ var ErrKeyNotFound = errors.New("catalog: pasted key not found in list endpoint"
 // schema. Two shapes:
 //
 //  1. Direct: Method + URL is called with the pasted key substituted
-//     into {key_id} (and used as the bearer if AuthSource=pasted_key).
+//     into {key_id} (and used as the bearer per entry.Auth).
 //  2. List-then-revoke: ListEndpoint is GET'd with the pasted key as
 //     auth, the response is searched for an entry whose
 //     partial_key_hint matches the pasted key's suffix, that entry's
@@ -68,7 +76,7 @@ func lookupKeyID(ctx context.Context, le ListEndpoint, pastedKey string, auth Au
 	}
 	applyAuth(req, auth, pastedKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("list request: %w", err)
 	}
@@ -134,7 +142,7 @@ func callRevoke(ctx context.Context, r Revoke, keyID, pastedKey string, auth Aut
 		req.Header.Set("Content-Type", "application/json")
 	}
 	applyAuth(req, auth, pastedKey)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("revoke request: %w", err)
 	}
@@ -208,15 +216,15 @@ func parseResultPath(p string) (arrayField, idField string, err error) {
 	const sep = "[]."
 	i := strings.Index(p, sep)
 	if i < 0 {
-		return "", "", fmt.Errorf("result_path %q: expected shape <array>[].<field>", p)
+		return "", "", fmt.Errorf("result_path %q: expected shape <array>[].<field> (e.g. \"data[].id\")", p)
 	}
 	arrayField = p[:i]
 	idField = p[i+len(sep):]
 	if arrayField == "" || idField == "" {
-		return "", "", fmt.Errorf("result_path %q: empty array or id segment", p)
+		return "", "", fmt.Errorf("result_path %q: empty array or id segment (use shape <array>[].<field>)", p)
 	}
 	if strings.ContainsAny(idField, ".[]") {
-		return "", "", fmt.Errorf("result_path %q: nested id paths not supported", p)
+		return "", "", fmt.Errorf("result_path %q: nested id paths not supported (use shape <array>[].<field>)", p)
 	}
 	return arrayField, idField, nil
 }

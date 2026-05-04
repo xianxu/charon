@@ -169,25 +169,8 @@ func TestParse_RejectsMalformed(t *testing.T) {
   revoke:
     method: PUT
     url: https://api.example.com/revoke
-    auth_source: pasted_key
 `,
 			wantErr: "revoke.method",
-		},
-		{
-			name: "revoke auth_source bad",
-			yaml: `
-- id: a
-  name: A
-  signup_url: https://example.com
-  key_url: https://example.com/keys
-  hostname_patterns: [api.example.com]
-  auth: { style: bearer }
-  revoke:
-    method: DELETE
-    url: https://api.example.com/revoke
-    auth_source: admin_key
-`,
-			wantErr: "auth_source",
 		},
 		{
 			name: "duplicate hostname across entries",
@@ -219,7 +202,6 @@ func TestParse_RejectsMalformed(t *testing.T) {
   revoke:
     method: POST
     url: https://api.example.com/keys/{key_id}
-    auth_source: pasted_key
 `,
 			wantErr: "{key_id}",
 		},
@@ -238,7 +220,6 @@ func TestParse_RejectsMalformed(t *testing.T) {
       key_match: partial_key_hint
     method: POST
     url: https://api.example.com/keys/{key_id}
-    auth_source: pasted_key
 `,
 			wantErr: "result_path",
 		},

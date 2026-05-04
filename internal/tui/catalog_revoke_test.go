@@ -32,10 +32,9 @@ func anthropicLikeRevokeEntry(listURL, revokeURL, consoleURL string) catalog.Ent
 				KeyMatch:   "partial_key_hint",
 				ResultPath: "data[].id",
 			},
-			Method:     "POST",
-			URL:        revokeURL,
-			Body:       `{"status":"inactive"}`,
-			AuthSource: "pasted_key",
+			Method: "POST",
+			URL:    revokeURL,
+			Body:   `{"status":"inactive"}`,
 		},
 		ConsoleURL: consoleURL,
 	}
@@ -190,12 +189,11 @@ func TestCatalogRevoke_UpstreamFailure_DefaultPreservesCredential(t *testing.T) 
 		t.Errorf("error view help line missing keep/d affordances:\n%s", view)
 	}
 
-	// Each non-`d` key should preserve the credential.
+	// The three explicit cancel keys all preserve the credential.
 	for _, k := range []tea.KeyMsg{
 		{Type: tea.KeyEnter},
 		{Type: tea.KeyEsc},
 		{Runes: []rune{'n'}, Type: tea.KeyRunes},
-		{Runes: []rune{'x'}, Type: tea.KeyRunes}, // any random key
 	} {
 		// Each iteration uses a fresh model so we don't drain state.
 		mc, _ := newCatalogRevokeModel(entry, "personal", v)
@@ -211,6 +209,24 @@ func TestCatalogRevoke_UpstreamFailure_DefaultPreservesCredential(t *testing.T) 
 		if _, err := v.Get("anthropic", "personal"); err != nil {
 			t.Errorf("vault entry missing after key %v on upstream-fail; expected preserved", k)
 		}
+	}
+
+	// Stray keys (not in the explicit cancel/force-delete set) are a
+	// no-op — they don't silently abandon the flow.
+	mc, _ := newCatalogRevokeModel(entry, "personal", v)
+	mc, cmdRaw := mc.Update(tea.KeyMsg{Runes: []rune{'y'}, Type: tea.KeyRunes})
+	mc, _ = mc.Update(cmdRaw())
+	if mc.state != catalogRevokeStateUpstreamFailed {
+		t.Fatalf("setup: state = %d, want upstreamFailed", mc.state)
+	}
+	_, strayCmd := mc.Update(tea.KeyMsg{Runes: []rune{'x'}, Type: tea.KeyRunes})
+	if strayCmd != nil {
+		if _, ok := strayCmd().(catalogRevokeCancelMsg); ok {
+			t.Error("stray key 'x' on upstream-fail emitted cancel — expected no-op")
+		}
+	}
+	if _, err := v.Get("anthropic", "personal"); err != nil {
+		t.Errorf("stray key shouldn't have removed credential")
 	}
 }
 
@@ -247,6 +263,52 @@ func TestCatalogRevoke_UpstreamFailure_DKeyForceLocalDelete(t *testing.T) {
 	}
 	if _, err := v.Get("anthropic", "personal"); err == nil {
 		t.Error("vault entry should have been deleted on `d` (force local delete)")
+	}
+}
+
+func TestCatalogRevoke_DKey_LocalDeleteFailure_ExitsCleanlyNotStuck(t *testing.T) {
+	// Important #1 from chunk-2 review: when vault.Delete fails on
+	// the `[d]` force-delete path, the user must not be left stuck
+	// on the upstream-failed overlay re-pressing `d` against the
+	// same failure. Cancel cleanly with a status note for the
+	// parent screen so the user sees what went wrong; they can
+	// retry from the account list once the underlying issue
+	// (keychain lock, ACL denial) is fixed.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	entry := anthropicLikeRevokeEntry(srv.URL, srv.URL+"/{key_id}", "https://console.anthropic.com/settings/keys")
+
+	mem := memory.New()
+	storeCatalogCred(t, mem, "anthropic", "personal", matchingPastedKey)
+	// failingDeleteVault is shared with admin_revoke_test.go: fails
+	// Delete for any account in failOn.
+	v := &failingDeleteVault{Store: mem, failOn: map[string]bool{"personal": true}}
+
+	m, _ := newCatalogRevokeModel(entry, "personal", v)
+	m, cmd := m.Update(tea.KeyMsg{Runes: []rune{'y'}, Type: tea.KeyRunes})
+	m, _ = m.Update(cmd())
+	if m.state != catalogRevokeStateUpstreamFailed {
+		t.Fatalf("setup: state = %d, want upstreamFailed", m.state)
+	}
+
+	_, dCmd := m.Update(tea.KeyMsg{Runes: []rune{'d'}, Type: tea.KeyRunes})
+	if dCmd == nil {
+		t.Fatal("d on upstream-fail with delete-error produced no cmd — user would be stuck")
+	}
+	done, ok := dCmd().(catalogRevokeDoneMsg)
+	if !ok {
+		t.Fatalf("dCmd() = %T, want catalogRevokeDoneMsg (clean exit, not stuck)", dCmd())
+	}
+	if !strings.Contains(done.statusNote, "Could not remove") {
+		t.Errorf("statusNote = %q, want 'Could not remove' phrasing", done.statusNote)
+	}
+	if !strings.Contains(done.statusNote, "simulated delete failure") {
+		t.Errorf("statusNote = %q, want underlying delete error mentioned", done.statusNote)
+	}
+	if !strings.Contains(done.statusNote, "401") {
+		t.Errorf("statusNote = %q, want upstream cause (401) mentioned", done.statusNote)
 	}
 }
 

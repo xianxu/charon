@@ -258,6 +258,18 @@ Sketch milestones (post-2026-05-03 scope reduction — see `## Log`):
 - **Rate-limit / cost reporting**: out of scope for this issue
   but worth noting for follow-on. A "provider quota dashboard"
   inside the TUI would round out the agentic-workbench framing.
+- **`auth_source: admin_key_ref` for revoke**: today the catalog
+  revoke dispatcher always uses the pasted key itself as the
+  bearer for both list and revoke calls. That's correct for
+  Anthropic when the pasted key has admin permissions, but for a
+  project-scoped pasted key, list returns 401 every time — not
+  transient, structural. Schema should grow
+  `revoke.auth_source: pasted_key | admin_key_ref` (and
+  optionally `admin_key_ref: <provider_id>/<account>`) so the
+  dispatcher can pull a separate admin credential from the vault
+  for the revoke calls. Out of #15's MVP since the
+  default-preserve + `[d]` posture handles the failure
+  gracefully today. See chunk-2 review's load-bearing rec.
 
 ## Relationship to other issues
 
@@ -326,8 +338,84 @@ broader rationale.
 - Curating the catalog is ongoing work (#000012 item I called
   this out for KnownApps; same applies here). Bundle IDs and
   hostname patterns shift annually; PRs happen as needed.
+- **Revoke modal default posture: preserve credential on upstream
+  failure.** Catalog credentials are *handles* — charon's only
+  way to revoke or otherwise touch the upstream key. When the
+  upstream revoke call fails (transient: rate limit, network;
+  fixable: auth-scope error on the pasted key), the default
+  action of any non-`[d]` key is to cancel and keep the local
+  credential so the user can retry without re-pasting. `[d]` is
+  the explicit "force local-delete anyway" affordance for cases
+  where retry will never succeed (key already revoked at
+  provider, provider deprecated, permanent auth-scope mismatch
+  the user accepts). This inverts the original M4b posture
+  ("any key falls back to local-delete") which mirrored the
+  OAuth Google flow — but Google's flow has different shape
+  (the user already wanted the OAuth account gone, AI Studio
+  cleanup is opportunistic). For catalog the credential *is*
+  the handle, so default-preserve is the correct tradeoff.
 
 ## Log
+
+- **2026-05-04 — Chunk-2 review (M4b + 5 followups).**
+  superpowers-code-reviewer subagent against `BASE=6f0baf4` →
+  `HEAD=a7d31f4` (10 commits: M4b proper, design-fix to keep-on-fail
+  with `[d]` force-delete, OSC 8 hyperlinks, action-hint visibility,
+  enter-on-account no-op, in-session cursor memory across screens,
+  Makefile dev-unsign). Verdict: ready to merge with fixes.
+  0 Critical, 3 Important, 9 Minor.
+  Important addressed in `<post-chunk2-commit>`:
+  - **#1 vault.Delete dead-end on `[d]`**: when local-delete fails
+    after an upstream-fail (keychain locked, ACL denial), the user
+    was stuck on the upstream-failed overlay with `[d]` looping
+    against the same failure. Now exits cleanly with a status note
+    naming both the upstream cause and the local-delete error;
+    user can retry from the account list once the underlying issue
+    is fixed. Test
+    `TestCatalogRevoke_DKey_LocalDeleteFailure_ExitsCleanlyNotStuck`.
+  - **#2 dead `AuthSource` field**: `Revoke.AuthSource` was
+    enforced by validator (`pasted_key` only) but ignored by the
+    dispatcher. YAGNI cleanup — field, YAML, validator, comment,
+    and 4 test fixtures dropped. When a real second auth_source
+    arrives (likely `admin_key_ref` for non-admin pasted keys —
+    see Open Questions), schema grows back with a properly-
+    threaded enum and dispatcher branch. Posture decision pinned
+    in `internal/providers/catalog/catalog.go:62-72`.
+  - **#3 no http timeout backstop**: `lookupKeyID` and `callRevoke`
+    were using `http.DefaultClient`. TUI passes a 30s ctx already
+    so the bug is latent, but a future non-TUI caller (CLI, batch
+    tool) using background context would hang on a slow upstream.
+    Replaced with a package-local `httpClient` carrying a 30s
+    timeout.
+  Minors landed opportunistically:
+  - parseResultPath error messages now include the supported shape
+    (`<array>[].<field>`), so a catalog-author hitting validation
+    sees what to write instead of just what's wrong.
+  - Catalog-revoke upstream-failed overlay restricts cancel to
+    explicit `[esc/n/enter]` instead of catch-all "any other key";
+    a stray keystroke no longer silently abandons the flow.
+  - `newCatalogAccountListModel` carries a cost note explaining
+    why per-back-nav vault.List churn is intentional and where the
+    caching seam is if it ever becomes a problem.
+  Other Minors deferred (hyperlink URL escape comment, magic
+  isAddNew check helper extraction, padOrTrunc rune-width).
+
+  Recommendations from the review (architectural, not blocking):
+  - **Latent failure mode for non-admin pasted keys**: when a user
+    pastes a project-scoped Anthropic key, `RevokeKey` will 401
+    on list every time — not transient, structural. Today's
+    posture (best-effort revoke + `[d]` force-delete) handles
+    this gracefully but the schema should grow `auth_source:
+    pasted_key | admin_key_ref` so a separate admin credential
+    can authenticate the revoke when present. Filed as future
+    schema evolution; out of #15's MVP.
+  - **Default-preserve revoke posture**: pin the reasoning
+    ("catalog credential is charon's *handle* on the upstream
+    key; throwing the handle away on transient failure forces
+    re-paste") into the design notes here, not just code
+    comments. (Done — see Notes section.)
+  - **Picker rebuild on every refresh**: acceptable today; revisit
+    if keychain churn shows up in profiling.
 
 - **2026-05-03 — M4 e2e verified.** TUI add-account flow landed in
   `fd4daf2`: `catalogPasteModel` (account-name → masked key paste;

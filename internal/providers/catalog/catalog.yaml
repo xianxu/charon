@@ -26,7 +26,6 @@
     method: POST
     url: https://api.anthropic.com/v1/organizations/api_keys/{key_id}
     body: '{"status":"inactive"}'
-    auth_source: pasted_key
   console_url: https://console.anthropic.com/settings/keys
   verify_url: https://api.anthropic.com/v1/models
   notes: |

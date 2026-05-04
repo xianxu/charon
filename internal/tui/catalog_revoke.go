@@ -175,26 +175,44 @@ func (m catalogRevokeModel) updateUpstreamFailed(msg tea.Msg) (catalogRevokeMode
 		// the user accepts). Non-default key on purpose: the user is
 		// abandoning charon's handle on an upstream credential that
 		// might still be active.
+		//
+		// Capture the upstream error first; vault.Delete may
+		// overwrite m.err on its own failure, and we want the status
+		// note to surface the original upstream cause.
+		upstreamErr := m.err
 		if err := m.v.Delete(m.entry.ID, m.account); err != nil {
-			m.err = fmt.Errorf("local delete failed: %w", err)
-			return m, nil
+			// Local delete failed too (keychain locked, ACL denial,
+			// etc.). Don't leave the user stuck on this overlay
+			// re-pressing `d` against the same failure. Cancel the
+			// flow with a status note for the parent screen so the
+			// user sees what went wrong; retry is reachable from the
+			// account list (`r` again) once they fix the underlying
+			// issue.
+			return m, func() tea.Msg {
+				return catalogRevokeDoneMsg{
+					statusNote: fmt.Sprintf("Could not remove %s/%s — upstream revoke failed (%v); local delete also failed: %v",
+						m.entry.ID, m.account, upstreamErr, err),
+				}
+			}
 		}
 		note := fmt.Sprintf("Removed %s/%s locally — upstream revoke failed (%v); clean up at %s",
-			m.entry.ID, m.account, m.err, m.entry.ConsoleURL)
+			m.entry.ID, m.account, upstreamErr, m.entry.ConsoleURL)
 		if m.entry.ConsoleURL == "" {
 			note = fmt.Sprintf("Removed %s/%s locally — upstream revoke failed (%v)",
-				m.entry.ID, m.account, m.err)
+				m.entry.ID, m.account, upstreamErr)
 		}
 		return m, func() tea.Msg { return catalogRevokeDoneMsg{statusNote: note} }
-	default:
-		// Any other key (including esc, n, enter) → cancel and
-		// preserve the credential. Catalog credentials are only
-		// useful as charon's handle on the upstream key; throwing
-		// away the handle on a transient failure (network blip, rate
-		// limit, scope-fixable auth) means the user has to re-paste
-		// to retry. Default safe action: keep, retry later.
+	case "esc", "n", "enter":
+		// Default safe action: cancel and preserve the credential.
+		// Catalog credentials are only useful as charon's handle on
+		// the upstream key; throwing away the handle on a transient
+		// failure (network blip, rate limit, scope-fixable auth)
+		// means the user has to re-paste to retry. Restricted to
+		// explicit keys (rather than catch-all "any other key") so a
+		// stray keystroke doesn't silently abandon the flow.
 		return m, func() tea.Msg { return catalogRevokeCancelMsg{} }
 	}
+	return m, nil
 }
 
 func (m catalogRevokeModel) View() string {

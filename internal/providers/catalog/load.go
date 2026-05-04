@@ -136,9 +136,6 @@ func validateRevoke(r Revoke) error {
 	if err := validateHTTPSURL("revoke.url", r.URL); err != nil {
 		return err
 	}
-	if r.AuthSource != "pasted_key" {
-		return fmt.Errorf("revoke.auth_source %q must be \"pasted_key\"", r.AuthSource)
-	}
 	// {key_id} placeholder in the revoke URL only makes sense when a
 	// list_endpoint is configured to discover the id from the pasted
 	// key. Without one, M4b's dispatcher would have nothing to fill it
