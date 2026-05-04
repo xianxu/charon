@@ -48,10 +48,16 @@ func runMenubar() {
 	systray.Run(menubarReady, menubarExit)
 }
 
-// pollInterval is how often the menubar refreshes its title from
-// the runtime socket. Short enough to feel live; long enough to not
-// hammer the socket.
-const pollInterval = 5 * time.Second
+// Poll cadence is adaptive: when the session has more than a
+// minute of TTL left, polling every 10s is plenty (the title only
+// updates per-minute anyway). Inside the last minute, the ticking
+// "30s … 29s …" countdown is the whole point — poll every second.
+// When disarmed or unreachable, default to the slow cadence.
+const (
+	pollIntervalSlow = 10 * time.Second
+	pollIntervalFast = 1 * time.Second
+	pollFastBelow    = 1 * time.Minute
+)
 
 // menubarState is shared between the polling goroutine and the
 // menu callbacks. mu guards reads/writes of the embedded SessionStatus
@@ -79,6 +85,11 @@ func menubarReady() {
 	systray.SetTitle(menubarTitle(false, "starting"))
 	systray.SetTooltip("Charon — runtime consent oracle")
 
+	// Pop the system "Charon Security would like to send notifications"
+	// prompt on first launch. Idempotent on subsequent launches; the
+	// user's answer persists in System Settings → Notifications.
+	requestNotificationAuth()
+
 	menubarState.mu.Lock()
 	menubarState.statusItem = systray.AddMenuItem("Status: …", "Current session state")
 	menubarState.statusItem.Disable()
@@ -102,14 +113,31 @@ func menubarExit() {
 	// per-RPC and short-lived.
 }
 
-// pollLoop refreshes session state every pollInterval. Stops when
-// the systray loop exits (which would terminate the process anyway).
+// pollLoop refreshes session state at an adaptive cadence: fast
+// inside the last minute (so the displayed countdown ticks every
+// second) and slow otherwise. We use time.Sleep + recompute rather
+// than a ticker so the cadence can change as soon as the new ttl is
+// known.
 func pollLoop() {
-	t := time.NewTicker(pollInterval)
-	defer t.Stop()
-	for range t.C {
+	for {
+		time.Sleep(nextPollDelay())
 		refreshState()
 	}
+}
+
+// nextPollDelay picks the wait until the next refresh based on the
+// last-known ttl. The < pollFastBelow check is "less than", so
+// at exactly 60s remaining we still poll every 10s; only once we
+// dip below do we switch to per-second updates.
+func nextPollDelay() time.Duration {
+	menubarState.mu.Lock()
+	armed := menubarState.armed
+	ttl := menubarState.ttlLeft
+	menubarState.mu.Unlock()
+	if armed && ttl > 0 && ttl < pollFastBelow {
+		return pollIntervalFast
+	}
+	return pollIntervalSlow
 }
 
 // menuClickLoop dispatches menu item activations onto runtime-socket
@@ -154,7 +182,7 @@ func refreshState() {
 	// driving disarm (i.e., this poll discovered an idle/absolute
 	// auto-disarm), notify.
 	if prevArmed && !getArmed() && err == nil {
-		notify("Charon", "Session auto-disarmed (idle or absolute timeout). Click the menubar to re-arm.")
+		notify("Charon", "Session auto-disarmed (idle or absolute timeout). Click the ○ icon in the menu bar to re-arm.")
 	}
 }
 
@@ -273,11 +301,18 @@ func socketRoundTrip(req runtimeReq) (runtimeResp, error) {
 	return resp, nil
 }
 
-// notify shows a macOS notification banner via osascript. Avoids
-// adding a Notification Center cgo dep for what's a one-off
-// "session auto-disarmed" surface. Best-effort: ignored if osascript
-// isn't on PATH.
+// notify shows a macOS notification banner. When running inside the
+// Charon Security.app bundle, uses UserNotifications.framework via
+// cgo so the banner is attributed to com.charon.security (and the
+// user's Banner-vs-Alert preference is scoped to this app rather
+// than to Script Editor). Falls back to osascript when run as a
+// bare binary during dev iteration. Best-effort: failures are
+// swallowed so the menubar stays usable.
 func notify(title, msg string) {
+	if hasBundle() {
+		postNativeNotification(title, msg)
+		return
+	}
 	script := fmt.Sprintf(`display notification %q with title %q`, msg, title)
 	go func() {
 		err := exec.Command("osascript", "-e", script).Run()
