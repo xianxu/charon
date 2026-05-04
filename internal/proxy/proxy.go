@@ -277,6 +277,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Printf("credential error for %s/%s: %v", provider.Name, account, err)
 			entry.Error = err.Error()
+			entry.StatusCode = http.StatusProxyAuthRequired
 			s.Audit.Log(entry)
 			resp := &http.Response{
 				StatusCode: http.StatusProxyAuthRequired,
@@ -306,6 +307,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 				}
 				errBody := scopeErrorJSON(provider.Name, resolvedAccount, missing)
 				entry.Error = "scope_missing: " + strings.Join(missing, ",")
+				entry.StatusCode = http.StatusProxyAuthRequired
 				s.Audit.Log(entry)
 				resp := &http.Response{
 					StatusCode: http.StatusProxyAuthRequired,

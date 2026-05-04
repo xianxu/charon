@@ -142,20 +142,83 @@ func renderWho(w io.Writer, entries []proxy.AuditEntry, since time.Duration) {
 		group := byExe[exe]
 		// Distinct hosts for the line.
 		hosts := map[string]int{}
+		errCount := 0
+		statusCounts := map[int]int{}
+		pids := map[int]struct{}{}
 		for _, e := range group {
 			hosts[e.Host]++
+			statusCounts[e.StatusCode]++
+			if e.PeerPID != 0 {
+				pids[e.PeerPID] = struct{}{}
+			}
+			if e.Error != "" {
+				errCount++
+			}
 		}
 		hostList := topHostsLine(hosts, 3)
-		var pid int
-		if len(group) > 0 {
-			pid = group[0].PeerPID
+		fmt.Fprintf(w, "  %d req  %s%s  →  %s",
+			len(group), shortExe(exe), pidLabel(pids), hostList)
+		if errCount > 0 {
+			fmt.Fprintf(w, "  [%d errors]", errCount)
 		}
-		fmt.Fprintf(w, "  %d req  %s", len(group), shortExe(exe))
-		if pid != 0 {
-			fmt.Fprintf(w, " (pid %d)", pid)
+		// Surface non-200 statuses so the user knows requests
+		// aren't reaching upstream cleanly.
+		if non2xx := nonSuccessSummary(statusCounts); non2xx != "" {
+			fmt.Fprintf(w, "  %s", non2xx)
 		}
-		fmt.Fprintf(w, "  →  %s\n", hostList)
+		fmt.Fprintln(w)
+		// Show one example error message per group so the user
+		// can act on it without grepping the full audit log.
+		for _, e := range group {
+			if e.Error != "" {
+				fmt.Fprintf(w, "      ↳ %s\n", e.Error)
+				break
+			}
+		}
 	}
+}
+
+// pidLabel renders " (pid N)" for a single pid, " (N pids)" for many,
+// "" when the group has no peer info. Avoids the previous misleading
+// "shows pid of first entry" behavior.
+func pidLabel(pids map[int]struct{}) string {
+	switch len(pids) {
+	case 0:
+		return ""
+	case 1:
+		for p := range pids {
+			return fmt.Sprintf(" (pid %d)", p)
+		}
+	}
+	return fmt.Sprintf(" (%d pids)", len(pids))
+}
+
+// nonSuccessSummary returns "(2 status=407, 1 status=429)" when any
+// statuses are non-2xx; "" otherwise. status=0 is treated as "no
+// upstream" — typically charon's own short-circuits.
+func nonSuccessSummary(counts map[int]int) string {
+	type kv struct {
+		k, v int
+	}
+	var bad []kv
+	for k, v := range counts {
+		if k == 0 || k >= 400 {
+			bad = append(bad, kv{k, v})
+		}
+	}
+	if len(bad) == 0 {
+		return ""
+	}
+	sort.Slice(bad, func(i, j int) bool { return bad[i].v > bad[j].v })
+	parts := make([]string, len(bad))
+	for i, b := range bad {
+		if b.k == 0 {
+			parts[i] = fmt.Sprintf("%d charon-blocked", b.v)
+		} else {
+			parts[i] = fmt.Sprintf("%d status=%d", b.v, b.k)
+		}
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 // statRow is the per-(exe, host) aggregate in stats output.
