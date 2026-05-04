@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -83,6 +84,26 @@ func TestResolvePeer_NonexistentPort(t *testing.T) {
 	// Port 1 — reserved tcpmux, almost never bound.
 	if got := ResolvePeer(1); got != nil {
 		t.Errorf("ResolvePeer(unbound port) = %+v, want nil", got)
+	}
+}
+
+// readPidExe should give the absolute path of the executable on
+// macOS — `ps -o command=`'s first whitespace-separated token. The
+// test asserts the path looks like a path (contains /), but doesn't
+// pin the exact value because go's test binary path varies.
+func TestReadPidExe_AbsolutePath(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("ps -o command= shape is BSD-specific")
+	}
+	if _, err := execLookPath("ps"); err != nil {
+		t.Skipf("ps unavailable: %v", err)
+	}
+	exe := readPidExe(os.Getpid())
+	if exe == "" {
+		t.Skip("ps returned empty (sandbox?) — not a contract violation")
+	}
+	if !strings.Contains(exe, "/") {
+		t.Errorf("readPidExe = %q, expected absolute path with /", exe)
 	}
 }
 

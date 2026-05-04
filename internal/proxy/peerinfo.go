@@ -3,10 +3,18 @@ package proxy
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 )
+
+// lsofMissing fires once if `lsof` isn't on PATH so operators see
+// "peer attribution disabled" instead of silently zero-pid audit
+// rows. After the first warn we don't repeat — this is a startup-
+// environment issue, not a per-request signal.
+var lsofMissing sync.Once
 
 // PeerInfo describes the local process that owns the other end of a
 // TCP connection charon accepted. Display-quality only — the spec
@@ -65,11 +73,18 @@ func ResolvePeer(peerPort int) *PeerInfo {
 }
 
 // lookupPIDForPort runs lsof to find the process whose LOCAL TCP port
-// matches peerPort. The proxy's listener also has a socket touching
-// this port (REMOTE side), so we filter out our own pid before
-// returning. Returns 0 on no match or any parse failure.
+// matches peerPort. The lsof match for the proxy's accepted-side
+// socket has peerPort as REMOTE; the local-side marker `:port->`
+// discriminates between the two. Returns 0 on no match or any
+// parse failure.
 func lookupPIDForPort(peerPort int) int {
 	if peerPort <= 0 {
+		return 0
+	}
+	if _, err := exec.LookPath("lsof"); err != nil {
+		lsofMissing.Do(func() {
+			log.Printf("warning: lsof not on PATH; peer attribution disabled")
+		})
 		return 0
 	}
 	// -F np: parseable output, only n (NAME) and p (PID) fields per
@@ -110,29 +125,50 @@ func lookupPIDForPort(peerPort int) int {
 }
 
 // readPidExe returns the absolute executable path for pid, or "" on
-// failure. macOS doesn't expose this through /proc; we shell out to
-// `ps -o comm=` which prints the executable path for the process.
-// (`comm=` is documented to print the long argv0 / executable on
-// modern BSD ps; Linux ps would need `args` for the equivalent.)
+// failure. macOS doesn't expose a "exe path only" `ps` field, but
+// `ps -o command=` prints the full command line and the first
+// whitespace-separated token is the absolute path of the executable
+// for the typical case (system-launched binaries always have an
+// absolute argv[0]; user-launched ones might be relative if the
+// shell cd'd, but the common path is absolute). Returns "" on
+// failure.
 func readPidExe(pid int) string {
 	if pid <= 0 {
 		return ""
 	}
-	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output()
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
-}
-
-// readPidComm returns the short process name (no path), useful for
-// human display when the full exe path is too long. Falls back to
-// the basename of readPidExe when ps doesn't separate them.
-func readPidComm(pid int) string {
-	exe := readPidExe(pid)
-	if exe == "" {
+	line := strings.TrimSpace(string(out))
+	if line == "" {
 		return ""
 	}
+	if i := strings.IndexByte(line, ' '); i >= 0 {
+		return line[:i]
+	}
+	return line
+}
+
+// readPidComm returns the short process name (no path) — `ps -o comm=`
+// gives this directly on macOS. Fallback to basename(readPidExe) when
+// `comm=` is unavailable.
+func readPidComm(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+	if err == nil {
+		comm := strings.TrimSpace(string(out))
+		if comm != "" {
+			// `comm=` may itself print a path on some systems; take basename.
+			if i := strings.LastIndex(comm, "/"); i >= 0 {
+				return comm[i+1:]
+			}
+			return comm
+		}
+	}
+	exe := readPidExe(pid)
 	if i := strings.LastIndex(exe, "/"); i >= 0 {
 		return exe[i+1:]
 	}

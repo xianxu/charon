@@ -12,6 +12,10 @@ import (
 // e.g. "1h", "30m"; default "1h"). Used by `charon who` /
 // `charon stats` (#16 F).
 func (s *Server) handleAuditRecent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
 	if s.Audit == nil {
 		http.Error(w, "audit log not configured", http.StatusServiceUnavailable)
 		return

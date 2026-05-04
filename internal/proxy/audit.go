@@ -42,7 +42,12 @@ type AuditEntry struct {
 	ReqBytes         int64  `json:"req_bytes,omitempty"`
 	RespBytes        int64  `json:"resp_bytes,omitempty"`
 	RespContentType  string `json:"resp_content_type,omitempty"`
-	ItemsReturned    *int   `json:"items_returned,omitempty"` // pointer so 0 vs unknown is distinguishable
+	// ItemsReturned is a *int (not int) so consumers can distinguish
+	// "we counted 0 items" from "we didn't count" — the latter
+	// happens for non-JSON responses, oversize responses (skipped
+	// past statsBodyCap), or parse failures. Bytes don't have this
+	// ambiguity since 0-bytes is itself meaningful and unambiguous.
+	ItemsReturned    *int   `json:"items_returned,omitempty"`
 }
 
 // auditRingSize bounds the in-memory ring buffer of recent audit

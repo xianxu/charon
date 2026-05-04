@@ -126,7 +126,7 @@ func TestSession_NilSessionDoesNotGate(t *testing.T) {
 	hs := httptest.NewServer(mux)
 	defer hs.Close()
 
-	srv := &Server{Session: nil} // gate disabled
+	srv := &Server{Session: nil, Audit: NopAuditLog()} // gate disabled, audit no-op
 	req := httptest.NewRequest(http.MethodConnect, hs.URL, nil)
 	w := httptest.NewRecorder()
 	// We don't run a full CONNECT — just verify the gate doesn't

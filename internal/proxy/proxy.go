@@ -164,8 +164,12 @@ func (s *Server) handleDirect(w http.ResponseWriter, r *http.Request) {
 
 // resolvePeerFromConn extracts the remote (peer) port from a hijacked
 // TCP connection and runs the lsof+ps lookup. Returns nil on any
-// failure path; callers tolerate nil and audit "unknown".
+// failure path (nil conn, non-TCP addr, lookup failure); callers
+// tolerate nil and audit "unknown".
 func resolvePeerFromConn(c net.Conn) *PeerInfo {
+	if c == nil {
+		return nil
+	}
 	tcp, ok := c.RemoteAddr().(*net.TCPAddr)
 	if !ok {
 		return nil
@@ -325,7 +329,19 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 		if err := provider.InjectAuth(req, token); err != nil {
 			entry.Error = err.Error()
+			entry.StatusCode = http.StatusInternalServerError
 			s.Audit.Log(entry)
+			// Tell the client what happened — without this the agent
+			// sees a TLS handshake then silent EOF.
+			errResp := &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Status:     "500 Internal Server Error",
+				Proto:      "HTTP/1.1",
+				ProtoMajor: 1, ProtoMinor: 1,
+				Header: http.Header{"Content-Type": {"application/json"}},
+				Body:   io.NopCloser(strings.NewReader(`{"error":"inject_auth_failed"}`)),
+			}
+			_ = errResp.Write(tlsClientConn)
 			return
 		}
 
@@ -342,9 +358,21 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		resp, err := s.transport().RoundTrip(req)
 		if err != nil {
 			entry.Error = err.Error()
+			entry.StatusCode = http.StatusBadGateway
 			entry.LatencyMs = time.Since(start).Milliseconds()
 			s.Audit.Log(entry)
 			log.Printf("upstream error: %v", err)
+			// 502 with the upstream error message so charon stats
+			// can distinguish upstream failures from gate refusals.
+			errResp := &http.Response{
+				StatusCode: http.StatusBadGateway,
+				Status:     "502 Bad Gateway",
+				Proto:      "HTTP/1.1",
+				ProtoMajor: 1, ProtoMinor: 1,
+				Header: http.Header{"Content-Type": {"text/plain"}},
+				Body:   io.NopCloser(strings.NewReader("charon: upstream error: " + err.Error() + "\n")),
+			}
+			_ = errResp.Write(tlsClientConn)
 			return
 		}
 
@@ -388,10 +416,39 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// tunnelPassthrough creates a raw TCP tunnel for unknown hosts.
+// tunnelPassthrough creates a raw TCP tunnel for unknown hosts. The
+// gate at the top of handleConnect already refused this if the
+// session was disarmed; we still audit so `charon who`/`stats` see
+// passthrough activity (per the user-mental-model promise of
+// "see everything that goes through charon").
 func (s *Server) tunnelPassthrough(w http.ResponseWriter, r *http.Request, host string) {
+	hostname := host
+	if i := strings.LastIndex(host, ":"); i >= 0 {
+		hostname = host[:i]
+	}
+	start := s.now()
+	entry := AuditEntry{
+		Timestamp: start,
+		Method:    r.Method,
+		Host:      hostname,
+		Path:      "(passthrough)",
+		Provider:  "passthrough",
+	}
+	// Best-effort peer attribution; same logic as the credentialed
+	// CONNECT path above.
+	if peer := resolvePeerFromConn(connFromResponseWriter(w)); peer != nil {
+		entry.PeerPID = peer.PID
+		entry.PeerExe = peer.Exe
+		entry.PeerArgv0 = peer.Argv0
+		entry.PeerParentChain = peer.ParentChain
+	}
+
 	upstream, err := net.DialTimeout("tcp", host, 10*time.Second)
 	if err != nil {
+		entry.Error = err.Error()
+		entry.StatusCode = http.StatusServiceUnavailable
+		entry.LatencyMs = time.Since(start).Milliseconds()
+		s.Audit.Log(entry)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
@@ -399,30 +456,77 @@ func (s *Server) tunnelPassthrough(w http.ResponseWriter, r *http.Request, host 
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		upstream.Close()
+		entry.Error = "hijacking not supported"
+		entry.StatusCode = http.StatusInternalServerError
+		s.Audit.Log(entry)
 		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
 		return
 	}
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
 		upstream.Close()
+		entry.Error = err.Error()
+		s.Audit.Log(entry)
 		return
 	}
 
 	_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+	entry.StatusCode = 200
 
+	// Re-resolve peer if the pre-hijack attempt couldn't get a *net.Conn
+	// (the http.ResponseWriter shim path). Post-hijack we always have one.
+	if entry.PeerPID == 0 {
+		if peer := resolvePeerFromConn(clientConn); peer != nil {
+			entry.PeerPID = peer.PID
+			entry.PeerExe = peer.Exe
+			entry.PeerArgv0 = peer.Argv0
+			entry.PeerParentChain = peer.ParentChain
+		}
+	}
+
+	// Copy with byte counters so passthrough traffic shows up in
+	// stats. ReqBytes = client→upstream, RespBytes = upstream→client.
 	done := make(chan struct{})
+	var upBytes, downBytes int64
 	go func() {
-		_, _ = io.Copy(upstream, clientConn)
+		upBytes, _ = io.Copy(upstream, clientConn)
 		close(done)
 	}()
-	_, _ = io.Copy(clientConn, upstream)
+	downBytes, _ = io.Copy(clientConn, upstream)
 	clientConn.Close()
 	<-done
 	upstream.Close()
+
+	entry.ReqBytes = upBytes
+	entry.RespBytes = downBytes
+	entry.LatencyMs = time.Since(start).Milliseconds()
+	s.Audit.Log(entry)
 }
 
-// handleHTTP handles plain HTTP requests (non-CONNECT).
+// connFromResponseWriter best-effort extracts a *net.Conn from a
+// ResponseWriter for peer-resolution before hijack. Returns nil if
+// the writer doesn't expose a connection (post-hijack we have a
+// real conn anyway).
+func connFromResponseWriter(w http.ResponseWriter) net.Conn {
+	type connHolder interface{ Conn() net.Conn }
+	if h, ok := w.(connHolder); ok {
+		return h.Conn()
+	}
+	return nil
+}
+
+// handleHTTP handles plain HTTP requests (non-CONNECT). Gated on
+// the same Session.IsArmed check as CONNECT so the runtime-consent
+// bit applies symmetrically across protocols. Today most agent
+// traffic is HTTPS-via-CONNECT; this path mostly handles legacy
+// http:// URLs and proxy introspection.
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.Session != nil && !s.Session.IsArmed() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusProxyAuthRequired)
+		fmt.Fprint(w, `{"error":"session_disarmed","fix":"charon arm   # or click the menubar dot in Charon Security.app"}`)
+		return
+	}
 	start := s.now()
 	hostname := r.URL.Hostname()
 	provider := ProviderForHost(hostname)

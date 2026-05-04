@@ -8,10 +8,11 @@ import (
 )
 
 // /session/{arm,disarm,status} HTTP handlers. Today these are POST-able
-// from anywhere on localhost (the proxy listens on 127.0.0.1 by default
-// so reachable only from the same uid). #16 C will gate arm/disarm
-// behind the unix-socket trust edge so only Charon Security.app can
-// drive them; until then the CLI talks to these endpoints directly.
+// from anywhere on the local machine — 127.0.0.1 binding means same-
+// host, but NOT same-uid (any process on the box can reach these
+// endpoints). #16 C will gate arm/disarm behind a unix-socket DR-
+// pinned trust edge so only Charon Security.app can drive them.
+// Until C lands, treat the gate as advisory only.
 
 type armRequest struct {
 	// TTLSeconds is the requested arm duration. 0 means default

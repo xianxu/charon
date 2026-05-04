@@ -62,6 +62,12 @@ func (b *bodyTap) Read(p []byte) (int, error) {
 
 func (b *bodyTap) Close() error { return b.src.Close() }
 
+// TODO(#16 G): document the content-sampling posture shift in
+// docs/threat-model.md — the proxy now reads response *content*, not
+// just headers. countTopLevelItems is constructed so it can ONLY
+// emit (int, bool); no path through which keys/values can leak. The
+// implementation contract is sound; only the doc is pending.
+
 // countTopLevelItems returns (count, ok) for a JSON byte slice.
 //
 // `ok=true` cases:
@@ -129,11 +135,13 @@ func isJSONContentType(ct string) bool {
 	if ct == "" {
 		return false
 	}
-	// Strip parameters: "application/json; charset=utf-8" → "application/json".
+	// Strip parameters and whitespace BEFORE lowercasing so trailing
+	// space (e.g. "application/json ;charset=utf-8") doesn't break
+	// the equality check below.
 	if i := strings.Index(ct, ";"); i >= 0 {
 		ct = ct[:i]
 	}
-	ct = strings.TrimSpace(strings.ToLower(ct))
+	ct = strings.ToLower(strings.TrimSpace(ct))
 	switch ct {
 	case "application/json":
 		return true
