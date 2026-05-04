@@ -842,12 +842,25 @@ func (m model) refreshProviderPicker() (tea.Model, tea.Cmd) {
 // keystroke per the picker's existing behavior). Used to surface
 // hints back from sub-screens — e.g. the M2 catalog-picked stub
 // pointing at the CLI shortcut until M4 lands.
+//
+// Preserves the previous cursor index across rebuild (clamped to
+// new bounds) so esc-back lands the user on the row they entered
+// from. Same convention as refreshAdminKeyList and
+// refreshCatalogAccountList.
 func (m model) refreshProviderPickerWithStatus(status string) (tea.Model, tea.Cmd) {
+	prevCursor := m.providerPicker.cursor
 	pp, err := newProviderPickerModel(m.vault, m.adminStores, m.catalog)
 	if err != nil {
 		m.err = err
 		return m, tea.Quit
 	}
+	if prevCursor >= len(pp.items) {
+		prevCursor = len(pp.items) - 1
+	}
+	if prevCursor < 0 {
+		prevCursor = 0
+	}
+	pp.cursor = prevCursor
 	pp.statusMsg = status
 	m.providerPicker = pp
 	m.current = screenProvider

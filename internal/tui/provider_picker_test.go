@@ -327,6 +327,61 @@ func TestProviderPicker_CatalogRow_OmittedWhenNoCreds(t *testing.T) {
 	}
 }
 
+// Esc-back from a sub-screen should land the cursor where it was
+// before drill-in (the row the user entered from). This is the
+// general TUI principle "back-nav preserves state" applied to the
+// provider picker — same convention as refreshAdminKeyList /
+// refreshCatalogAccountList already follow for their entity lists.
+func TestModel_BackNavToProviderPicker_PreservesCursor(t *testing.T) {
+	v := memory.New()
+	storeCatalogCred(t, v, "anthropic", "personal", "sk-ant-AAAA")
+	cat := &catalog.Catalog{Entries: []catalog.Entry{anthropicCatalogEntry()}}
+
+	m := model{vault: v, catalog: cat}
+	pp, _ := newProviderPickerModel(v, nil, cat)
+	m.providerPicker = pp
+	m.current = screenProvider
+	// Items: [Google, Anthropic, + add provider]. Move cursor to Anthropic.
+	m.providerPicker.cursor = 1
+	if m.providerPicker.items[1].name != "anthropic" {
+		t.Fatalf("test fixture wrong: items[1] = %q, expected anthropic", m.providerPicker.items[1].name)
+	}
+
+	// Drill into Anthropic.
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mm := updated.(model)
+	if cmd == nil {
+		t.Fatal("enter on Anthropic produced no cmd")
+	}
+	updated, _ = mm.Update(cmd())
+	mm = updated.(model)
+	if mm.current != screenCatalogAccountList {
+		t.Fatalf("expected screenCatalogAccountList, got %v", mm.current)
+	}
+
+	// Esc back.
+	updated, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	mm = updated.(model)
+	if cmd == nil {
+		t.Fatal("esc should emit catalogAccountListBackMsg")
+	}
+	updated, _ = mm.Update(cmd())
+	mm = updated.(model)
+	if mm.current != screenProvider {
+		t.Fatalf("after esc-back: current = %v, want screenProvider", mm.current)
+	}
+
+	// Cursor should still be on Anthropic row, not reset to 0 (Google).
+	if mm.providerPicker.cursor != 1 {
+		t.Errorf("cursor = %d after back-nav, want 1 (preserved on Anthropic)",
+			mm.providerPicker.cursor)
+	}
+	if mm.providerPicker.items[mm.providerPicker.cursor].name != "anthropic" {
+		t.Errorf("cursor row = %q, want anthropic",
+			mm.providerPicker.items[mm.providerPicker.cursor].name)
+	}
+}
+
 func TestProviderLabel_KnownAndUnknown(t *testing.T) {
 	cases := map[string]string{
 		"google":    "Google",
