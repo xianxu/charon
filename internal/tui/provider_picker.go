@@ -166,7 +166,20 @@ func newProviderPickerModel(
 
 	items = append(items, providerPickerItem{isAddProvider: true})
 
-	return providerPickerModel{items: items}, nil
+	m := providerPickerModel{items: items}
+	// Onboarding polish (#15 M7): when the vault has no credentials
+	// at all, default the cursor to the "+ add provider" row so a
+	// first-run user lands on the most useful action rather than
+	// pressing enter on an empty Google row. Cursor preservation
+	// across drill-out → drill-in (refreshProviderPickerWithStatus)
+	// will override this on subsequent rebuilds, so the polish only
+	// affects the first paint of a fresh model — exactly the right
+	// scope.
+	if len(creds) == 0 {
+		m.cursor = len(items) - 1
+	}
+
+	return m, nil
 }
 
 // providerLabel maps a provider name to its display label. Falls

@@ -238,6 +238,9 @@ func TestModel_FullProviderToAdminKeyAndBack(t *testing.T) {
 	}
 	pp, _ := newProviderPickerModel(v, m.adminStores, nil)
 	m.providerPicker = pp
+	// M7 lands cursor on +add when vault is empty; reset to row 0
+	// so the navigation below tests row 1 (openai).
+	m.providerPicker.cursor = 0
 	m.current = screenProvider
 
 	// Move to openai (cursor 1) and enter.

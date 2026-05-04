@@ -174,6 +174,10 @@ func TestProviderPicker_NavigationKeys(t *testing.T) {
 	}
 	m, _ := newProviderPickerModel(v, stores, nil)
 	// Items: google (0), openai (1), + add provider (2).
+	// M7 onboarding lands cursor on row 2 for empty vault; reset
+	// to 0 so this test exercises navigation from the top, not the
+	// onboarding default (covered separately).
+	m.cursor = 0
 
 	if m.cursor != 0 {
 		t.Fatalf("initial cursor = %d, want 0", m.cursor)
@@ -204,6 +208,9 @@ func TestProviderPicker_EnterEmitsSelectedMsg(t *testing.T) {
 		"openai": fakeAdminStore(t, "openai", false, ""),
 	}
 	m, _ := newProviderPickerModel(v, stores, nil)
+	// M7 puts cursor on +add when vault is empty; reset to row 0
+	// (Google) so this test exercises the providerSelected path.
+	m.cursor = 0
 
 	// Enter on google (cursor 0).
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -386,6 +393,38 @@ func TestModel_BackNavToProviderPicker_PreservesCursor(t *testing.T) {
 // user left it last time. In-session memory only — fresh model
 // starts cursor at 0. Tests the catalog account list path; same
 // logic applies to admin entity list and OAuth account picker.
+// First-run UX (#15 M7): when no credentials are configured
+// anywhere, cursor lands on the "+ add provider" row so the user's
+// first Enter takes them somewhere actionable rather than into a
+// detail screen for an empty provider.
+func TestProviderPicker_EmptyVault_CursorOnAddProvider(t *testing.T) {
+	v := memory.New()
+	m, err := newProviderPickerModel(v, nil, nil)
+	if err != nil {
+		t.Fatalf("newProviderPickerModel: %v", err)
+	}
+	addIdx := len(m.items) - 1
+	if !m.items[addIdx].isAddProvider {
+		t.Fatalf("last row %+v not isAddProvider", m.items[addIdx])
+	}
+	if m.cursor != addIdx {
+		t.Errorf("cursor = %d, want %d (+ add provider) on empty vault", m.cursor, addIdx)
+	}
+}
+
+// Once any credential exists (vault non-empty), the M7 auto-cursor
+// no longer fires — cursor lands at row 0 (Google) per pre-M7
+// behavior so the picker doesn't aggressively redirect away from a
+// configured provider.
+func TestProviderPicker_NonEmptyVault_CursorAtZero(t *testing.T) {
+	v := memory.New()
+	_ = v.Set(&vault.Credential{Provider: "google", Account: "user@gmail.com"})
+	m, _ := newProviderPickerModel(v, nil, nil)
+	if m.cursor != 0 {
+		t.Errorf("cursor = %d, want 0 (Google) when vault has creds", m.cursor)
+	}
+}
+
 func TestModel_ReEntryToCatalogAccountList_RestoresCursor(t *testing.T) {
 	v := memory.New()
 	storeCatalogCred(t, v, "anthropic", "personal", "sk-ant-AAAA")

@@ -350,6 +350,9 @@ func TestModel_ProviderToPasteFlow(t *testing.T) {
 	}
 	pp, _ := newProviderPickerModel(v, m.adminStores, nil)
 	m.providerPicker = pp
+	// M7 onboarding cursor lands on +add for empty vault; reset to
+	// row 0 so the down-arrow below moves to openai.
+	m.providerPicker.cursor = 0
 	m.current = screenProvider
 
 	// → openai entry

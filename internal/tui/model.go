@@ -285,9 +285,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the account list that's the account list (so the user lands
 		// on the row they just added).
 		m.notifyProxyCacheClear()
+		// The verify note (if any) goes inside parentheses right
+		// after the stored key, so the eye reads "Stored X/Y
+		// (verified) — try: ..." or "Stored X/Y (verify
+		// inconclusive: ...) — try: ..." without breaking the
+		// command-line example downstream.
+		storedFragment := fmt.Sprintf("Stored %s/%s", msg.provider, msg.account)
+		if msg.verifyNote != "" {
+			storedFragment = fmt.Sprintf("Stored %s/%s (%s)", msg.provider, msg.account, msg.verifyNote)
+		}
 		hint := fmt.Sprintf(
-			"Stored %s/%s — try: charon run -- curl -H \"X-Charon-Account: %s\" https://%s/...",
-			msg.provider, msg.account, msg.account,
+			"%s — try: charon run -- curl -H \"X-Charon-Account: %s\" https://%s/...",
+			storedFragment, msg.account,
 			catalogFirstHost(m.catalog, msg.provider),
 		)
 		if m.catalogPasteOrigin == screenCatalogAccountList {

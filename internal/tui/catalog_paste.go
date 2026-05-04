@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -26,9 +27,12 @@ import (
 // parent can refresh the picker and surface a "ready to use" hint.
 // On cancel (esc from step 1): catalogPasteCancelMsg, no side effect.
 //
-// Verify-on-paste (--verify, plan M5) intentionally not implemented
-// here — kept separate so the M4 paste flow can land + be reviewed
-// independently of the optional health-check.
+// Verify-on-paste (#15 M5): when the entry declares a verify_url,
+// the flow probes it after the user types Enter on the key step.
+// Provider-explicit rejection (401/403) sends the user back to
+// retype the key; an inconclusive endpoint (5xx, network) stores
+// the key with a degraded status note. Entries without verify_url
+// skip the verifying step entirely.
 type catalogPasteModel struct {
 	entry catalog.Entry
 	state catalogPasteState
@@ -45,16 +49,30 @@ type catalogPasteState int
 const (
 	catalogPasteStateAccount catalogPasteState = iota
 	catalogPasteStateKey
+	catalogPasteStateVerifying
 	catalogPasteStateError
 )
 
 // catalogPasteDoneMsg signals the paste flow stored a new catalog
 // credential successfully. Carries provider+account so the parent
 // can craft a precise "ready to use" hint without re-deriving the
-// vault key shape.
+// vault key shape. verifyNote is empty when no verify happened
+// (entry has no verify_url) and otherwise carries a short status
+// fragment ("verified" or "verify inconclusive: ...") that the
+// parent can append to the success hint.
 type catalogPasteDoneMsg struct {
-	provider string
-	account  string
+	provider   string
+	account    string
+	verifyNote string
+}
+
+// catalogVerifyResultMsg carries the verify probe outcome back to
+// the paste model. Driven by entry.Verify; the paste model decides
+// whether to proceed to store, send the user back to retype, or
+// store-with-degraded-status.
+type catalogVerifyResultMsg struct {
+	result catalog.VerifyResult
+	err    error
 }
 
 // catalogPasteCancelMsg signals the user cancelled out of the flow
@@ -105,6 +123,8 @@ func (m catalogPasteModel) Update(msg tea.Msg) (catalogPasteModel, tea.Cmd) {
 		return m.updateAccount(msg)
 	case catalogPasteStateKey:
 		return m.updateKey(msg)
+	case catalogPasteStateVerifying:
+		return m.updateVerifying(msg)
 	case catalogPasteStateError:
 		return m.updateError(msg)
 	}
@@ -144,23 +164,18 @@ func (m catalogPasteModel) updateKey(msg tea.Msg) (catalogPasteModel, tea.Cmd) {
 			if pasted == "" {
 				return m, nil
 			}
-			account := strings.TrimSpace(m.accountInput.Value())
-			cred := &vault.Credential{
-				Type:     vault.TypeCatalog,
-				Provider: m.entry.ID,
-				Account:  account,
-				Catalog: &vault.CatalogData{
-					KeyMaterial: pasted,
-					AddedAt:     time.Now(),
-				},
-			}
-			if err := m.vault.Set(cred); err != nil {
-				m.state = catalogPasteStateError
-				m.err = fmt.Errorf("store credential: %w", err)
-				return m, nil
-			}
+			// Move to verifying state and fire the verify probe.
+			// Entries without verify_url short-circuit inside Verify
+			// (returns VerifyOK with nil error) so the brief
+			// "verifying..." flash is harmless and keeps the state
+			// machine uniform.
+			m.state = catalogPasteStateVerifying
+			entry := m.entry
 			return m, func() tea.Msg {
-				return catalogPasteDoneMsg{provider: m.entry.ID, account: account}
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				res, err := entry.Verify(ctx, pasted)
+				return catalogVerifyResultMsg{result: res, err: err}
 			}
 		case "esc":
 			m.state = catalogPasteStateAccount
@@ -178,6 +193,67 @@ func (m catalogPasteModel) updateKey(msg tea.Msg) (catalogPasteModel, tea.Cmd) {
 	var cmd tea.Cmd
 	m.keyInput, cmd = m.keyInput.Update(msg)
 	return m, cmd
+}
+
+// updateVerifying handles the brief "verifying..." state. The probe
+// finishes via catalogVerifyResultMsg; ctrl+c remains the only way
+// out mid-probe (the in-flight goroutine will time out via its 30s
+// context once the program exits the foreground).
+func (m catalogPasteModel) updateVerifying(msg tea.Msg) (catalogPasteModel, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "ctrl+c" {
+		return m, tea.Quit
+	}
+	r, ok := msg.(catalogVerifyResultMsg)
+	if !ok {
+		return m, nil
+	}
+	pasted := strings.TrimSpace(m.keyInput.Value())
+	account := strings.TrimSpace(m.accountInput.Value())
+
+	if r.result == catalog.VerifyRejected {
+		// Provider explicitly rejected the key (401/403). Don't
+		// store; send the user back to step 2 to retype. The
+		// existing error overlay handles "any key returns to step
+		// 2"; we just funnel through it.
+		m.state = catalogPasteStateError
+		m.err = fmt.Errorf("provider rejected the pasted key: %v", r.err)
+		return m, nil
+	}
+
+	// VerifyOK or VerifyEndpointError: store. Endpoint-error means
+	// we couldn't get a verdict (5xx, network) — the key might
+	// still be good, so don't block; surface the warning in the
+	// status note instead.
+	cred := &vault.Credential{
+		Type:     vault.TypeCatalog,
+		Provider: m.entry.ID,
+		Account:  account,
+		Catalog: &vault.CatalogData{
+			KeyMaterial: pasted,
+			AddedAt:     time.Now(),
+		},
+	}
+	if err := m.vault.Set(cred); err != nil {
+		m.state = catalogPasteStateError
+		m.err = fmt.Errorf("store credential: %w", err)
+		return m, nil
+	}
+
+	var note string
+	switch r.result {
+	case catalog.VerifyOK:
+		// Only emit "verified" when an actual verify_url was probed;
+		// a no-verify_url entry returns VerifyOK as a no-op and we
+		// shouldn't claim verification we didn't do.
+		if m.entry.VerifyURL != "" {
+			note = "verified"
+		}
+	case catalog.VerifyEndpointError:
+		note = fmt.Sprintf("verify inconclusive: %v", r.err)
+	}
+	return m, func() tea.Msg {
+		return catalogPasteDoneMsg{provider: m.entry.ID, account: account, verifyNote: note}
+	}
 }
 
 func (m catalogPasteModel) updateError(msg tea.Msg) (catalogPasteModel, tea.Cmd) {
@@ -199,6 +275,8 @@ func (m catalogPasteModel) View() string {
 		return m.viewAccount()
 	case catalogPasteStateKey:
 		return m.viewKey()
+	case catalogPasteStateVerifying:
+		return m.viewVerifying()
 	case catalogPasteStateError:
 		return m.viewError()
 	}
@@ -252,6 +330,22 @@ func (m catalogPasteModel) viewKey() string {
 	b.WriteString(m.keyInput.View())
 	b.WriteString("\n\n")
 	b.WriteString(helpStyle.Render("enter: store   ctrl+o: open key URL   esc: back"))
+	return b.String()
+}
+
+func (m catalogPasteModel) viewVerifying() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(fmt.Sprintf("%s › Add provider › %s", appName(), m.entry.Name)))
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render("Verifying with provider..."))
+	b.WriteString("\n")
+	b.WriteString(strings.Repeat("─", 60))
+	b.WriteString("\n\n")
+	b.WriteString(fmt.Sprintf("  Account: %s\n\n", strings.TrimSpace(m.accountInput.Value())))
+	if m.entry.VerifyURL != "" {
+		b.WriteString("  Probing " + hyperlink(m.entry.VerifyURL, m.entry.VerifyURL) + "\n\n")
+	}
+	b.WriteString(helpStyle.Render("(ctrl+c to abort)"))
 	return b.String()
 }
 

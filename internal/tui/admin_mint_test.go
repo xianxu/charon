@@ -461,6 +461,8 @@ func TestModel_ProviderToMintFlow_PicksExisting(t *testing.T) {
 	}
 	pp, _ := newProviderPickerModel(v, m.adminStores, nil)
 	m.providerPicker = pp
+	// M7 onboarding lands cursor on +add for empty vault; reset.
+	m.providerPicker.cursor = 0
 	m.current = screenProvider
 
 	// → openai entity list.
