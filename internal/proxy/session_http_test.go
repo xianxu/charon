@@ -38,6 +38,45 @@ func TestSession_Gate_DisarmedCONNECTReturns407(t *testing.T) {
 	}
 }
 
+// Disarmed denials must still appear in the audit ring so that
+// `charon who` can show what was knocking on the proxy while the
+// user was away. Visibility is the entire reason the gate logs at
+// all — without this, background processes hammering the proxy
+// look indistinguishable from silence.
+func TestSession_Gate_DisarmedRequestIsAudited(t *testing.T) {
+	audit := NopAuditLog()
+	srv := &Server{
+		Audit:   audit,
+		Session: NewSession(),
+		Now:     time.Now,
+	}
+	req := httptest.NewRequest(http.MethodConnect, "https://gmail.googleapis.com:443", nil)
+	req.Host = "gmail.googleapis.com:443"
+	srv.handleConnect(httptest.NewRecorder(), req)
+
+	plainReq := httptest.NewRequest(http.MethodGet, "http://example.com/foo", nil)
+	srv.handleHTTP(httptest.NewRecorder(), plainReq)
+
+	entries := audit.Recent(time.Time{})
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 audited denials, got %d", len(entries))
+	}
+	for _, e := range entries {
+		if e.StatusCode != http.StatusProxyAuthRequired {
+			t.Errorf("entry %q: status = %d, want 407", e.Method, e.StatusCode)
+		}
+		if e.Error != "session_disarmed" {
+			t.Errorf("entry %q: error = %q, want session_disarmed", e.Method, e.Error)
+		}
+	}
+	if entries[0].Method != "CONNECT" || entries[0].Host != "gmail.googleapis.com" {
+		t.Errorf("CONNECT entry = %+v", entries[0])
+	}
+	if entries[1].Method != "GET" || entries[1].Host != "example.com" || entries[1].Path != "/foo" {
+		t.Errorf("HTTP entry = %+v", entries[1])
+	}
+}
+
 // /session/arm with no body uses default TTL.
 func TestSession_HTTP_ArmDefault(t *testing.T) {
 	srv := &Server{Session: NewSession()}

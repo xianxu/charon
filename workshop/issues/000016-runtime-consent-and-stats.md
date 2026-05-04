@@ -554,3 +554,37 @@ Caveats:
   A is now driven by clicking a menubar dot, not just CLI. C+D
   together mean an in-process agent cannot drive arm/disarm —
   the .app's distinct DR is the trust anchor.
+
+- **2026-05-03 — Phase D refinements.** Polish surfaced by first
+  real use of the menubar:
+  - **Native notifications.** osascript-driven banners attribute
+    to Script Editor and dismiss in 5 s; user can't override that
+    in System Settings because the Banner-vs-Alert preference is
+    keyed on bundle id. Added `cmd/charon-security/notify_darwin.go`
+    using UserNotifications.framework via cgo Objective-C
+    (`-x objective-c -fobjc-arc`, `-framework UserNotifications`).
+    `requestAuthorization` runs once at menubar startup; `notify()`
+    posts via `addNotificationRequest` when running inside the .app
+    bundle and falls back to osascript for bare-binary dev runs.
+    `notify_other.go` stubs the same surface for non-darwin builds.
+    Now the auto-disarm banner is attributed to "Charon Security",
+    which lets the user pick Alerts (sticky) instead of Banners
+    (auto-dismiss) in System Settings → Notifications. Wording
+    fix: "Click the ○ icon in the menu bar to re-arm" — the old
+    "Click the menubar to re-arm" read like the *notification*
+    was clickable.
+  - **Adaptive polling.** Fixed 5 s ticker felt sluggish at the
+    end of a session; the user wants to see "30s … 29s …" in real
+    time. New cadence: 10 s when ttl > 60 s (or disarmed /
+    unreachable), 1 s when armed and ttl < 60 s. Implemented as
+    `time.Sleep(nextPollDelay())` so the cadence flips as soon as
+    a poll lands a sub-minute ttl.
+  - **Audit denied requests.** Disarmed-gate denials in
+    `handleConnect` / `handleHTTP` were short-circuiting before the
+    audit log. Background processes hammering the proxy looked
+    indistinguishable from silence. New `logDisarmedDenial` helper
+    records `status=407, error=session_disarmed` plus best-effort
+    peer attribution into the audit ring before returning the JSON
+    error body. Now `charon who --since 5m` shows what knocked
+    while the user was away. Test in `session_http_test.go`
+    (`TestSession_Gate_DisarmedRequestIsAudited`).

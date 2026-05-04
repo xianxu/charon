@@ -186,6 +186,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// request inside an open tunnel doesn't ask CONNECT again so
 	// RST mid-tunnel doesn't actually defend more).
 	if s.Session != nil && !s.Session.IsArmed() {
+		s.logDisarmedDenial(w, r, "CONNECT", strings.Split(r.Host, ":")[0], "")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusProxyAuthRequired)
 		fmt.Fprint(w, `{"error":"session_disarmed","fix":"charon arm   # or click the menubar dot in Charon Security.app"}`)
@@ -503,6 +504,34 @@ func (s *Server) tunnelPassthrough(w http.ResponseWriter, r *http.Request, host 
 	s.Audit.Log(entry)
 }
 
+// logDisarmedDenial records an audit entry for a request that was
+// rejected by the runtime-consent gate. The point is visibility:
+// background processes hammering the proxy while the user is away
+// should still appear in `charon who` so the user can see who and
+// where, even though no traffic actually flowed. Peer attribution
+// is best-effort (same as the credentialed paths); we don't have a
+// hijacked conn yet, so we go through connFromResponseWriter.
+func (s *Server) logDisarmedDenial(w http.ResponseWriter, r *http.Request, method, hostname, path string) {
+	if s.Audit == nil {
+		return
+	}
+	entry := AuditEntry{
+		Timestamp:  s.now(),
+		Method:     method,
+		Host:       hostname,
+		Path:       path,
+		StatusCode: http.StatusProxyAuthRequired,
+		Error:      "session_disarmed",
+	}
+	if peer := resolvePeerFromConn(connFromResponseWriter(w)); peer != nil {
+		entry.PeerPID = peer.PID
+		entry.PeerExe = peer.Exe
+		entry.PeerArgv0 = peer.Argv0
+		entry.PeerParentChain = peer.ParentChain
+	}
+	s.Audit.Log(entry)
+}
+
 // connFromResponseWriter best-effort extracts a *net.Conn from a
 // ResponseWriter for peer-resolution before hijack. Returns nil if
 // the writer doesn't expose a connection (post-hijack we have a
@@ -522,6 +551,7 @@ func connFromResponseWriter(w http.ResponseWriter) net.Conn {
 // http:// URLs and proxy introspection.
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.Session != nil && !s.Session.IsArmed() {
+		s.logDisarmedDenial(w, r, r.Method, r.URL.Hostname(), r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusProxyAuthRequired)
 		fmt.Fprint(w, `{"error":"session_disarmed","fix":"charon arm   # or click the menubar dot in Charon Security.app"}`)
