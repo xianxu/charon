@@ -223,7 +223,7 @@ func (m catalogPasteModel) viewAccount() string {
 		b.WriteString("  Get key:  ")
 		b.WriteString(mutedStyle.Render(m.entry.KeyURL))
 		b.WriteString("    ")
-		b.WriteString(helpStyle.Render("(ctrl+o to open)"))
+		b.WriteString(actionHintStyle.Render("(ctrl+o to open)"))
 		b.WriteString("\n")
 	}
 	if len(m.entry.HostnamePatterns) > 0 {

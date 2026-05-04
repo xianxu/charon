@@ -33,6 +33,13 @@ var (
 			Foreground(lipgloss.Color("241")).
 			Italic(true)
 
+	// actionHintStyle is for inline, context-sensitive action hints
+	// (e.g. "(ctrl+o to open)" next to a URL). Distinct from
+	// helpStyle (bottom-of-screen general nav reference, muted) so
+	// the hint pops next to the affordance it describes. Bold
+	// default-fg works across terminal themes — no specific color.
+	actionHintStyle = lipgloss.NewStyle().Bold(true)
+
 	// Row state styles. Diff colors (green/red) take priority over the
 	// requested badge tint, since target≠realized means the user has decided.
 	rowGrantedStyle = lipgloss.NewStyle() // realized=on, target=on
