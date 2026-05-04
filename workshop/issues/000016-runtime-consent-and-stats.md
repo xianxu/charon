@@ -516,3 +516,41 @@ Caveats:
     socket plus error paths. Sandbox can't bind unix sockets so
     they skip rather than fail; production path verified by code
     inspection + manual smoke.
+
+- **2026-05-01 — Phase D done (MVP).** Menubar agent.
+  - Dependency: `fyne.io/systray` v1.12.1 (maintained fork of
+    getlantern/systray). Pure Go API; the cgo for AppKit's
+    NSStatusItem is internal to systray.
+  - `cmd/charon-security/menubar.go`: status icon (●/○) + summary
+    text in title ("● 27m" / "○ off"). Dropdown menu:
+    - Status (read-only line)
+    - Arm 30m / 1h / 8h
+    - Disarm
+    - Quit
+  - Talks to the proxy via the unix socket (#16 C). Connection-
+    per-RPC matches the server side. Polls every 5s for state
+    refresh; the title updates live.
+  - Notifications via `osascript display notification`. Fires on
+    "session auto-disarmed" detection (transition from armed→
+    disarmed not driven by a user click). First fire prompts for
+    Notification Center permission.
+  - Default no-args invocation of `charon-security` is menubar
+    mode. Double-clicking the .app bundle (LSUIElement=true)
+    lands on this. Explicit subcommands (`check`, `remedy`,
+    `menubar`) still work for CLI use.
+  - Skipped per "Go-only MVP" decision: live connection count,
+    blocked-CONNECT toast, in-app audit viewer with search.
+    Those need full AppKit windows, not what systray gives us.
+    `charon who --since 1h` covers the audit-viewer use case
+    from the CLI.
+
+  Tests cover the title/duration/summary helpers (the systray UI
+  itself can't run headless). The end-to-end flow is verified
+  manually: launch via `./bin/charon-security menubar` against a
+  `make dev` proxy, click Arm/Disarm, watch title + arms/disarms
+  the proxy.
+
+  Phase D MVP closes the loop on the issue: the consent gate from
+  A is now driven by clicking a menubar dot, not just CLI. C+D
+  together mean an in-process agent cannot drive arm/disarm —
+  the .app's distinct DR is the trust anchor.

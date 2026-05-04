@@ -32,11 +32,22 @@ var (
 func main() {
 	root := &cobra.Command{
 		Use:   "charon-security",
-		Short: "Audit macOS hygiene for agentic-coding workflows",
-		Long: "Charon Security audits the local Mac for the environmental " +
-			"assumptions charon's threat model relies on: SIP enabled, no " +
-			"excessive TCC grants on terminals/IDEs, charon's keychain ACL " +
-			"boundary intact. See docs/threat-model.md.",
+		Short: "Audit macOS hygiene + run the runtime-consent menubar",
+		Long: "Charon Security has two modes:\n\n" +
+			"  check  — audit macOS hygiene assumptions charon's threat\n" +
+			"           model relies on (SIP, TCC grants, keychain ACL).\n" +
+			"  menubar — run as a menubar agent that arms/disarms the\n" +
+			"            proxy's runtime-consent gate.\n\n" +
+			"Default (no subcommand): launch menubar mode. The .app\n" +
+			"bundle's LSUIElement=true setting keeps it dock-less.\n" +
+			"See docs/threat-model.md.",
+		// No-args default → menubar. The .app bundle launched via
+		// Finder/launchd/`open` invokes the binary with no args; we
+		// want that to mean "show the menubar item." Explicit
+		// subcommands (check, remedy, menubar) all still work.
+		Run: func(cmd *cobra.Command, args []string) {
+			runMenubar()
+		},
 	}
 	root.PersistentFlags().BoolVar(&flagNoColor, "no-color", false, "disable colored output")
 	root.PersistentFlags().BoolVar(&flagForceColor, "force-color", false,
@@ -45,6 +56,7 @@ func main() {
 
 	root.AddCommand(checkCmd())
 	root.AddCommand(remedyCmd())
+	root.AddCommand(menubarCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
