@@ -3,7 +3,7 @@
 
 .PHONY: build sign test run clean signing-identity install reinstall print-sign-identity \
         security-build security-install security security-remedy security-uninstall \
-        govulncheck dev
+        govulncheck dev dev-unsign
 
 # ── Codesigning configuration ────────────────────────────────────────────────
 # CODESIGN_IDENTIFIER must stay in sync with charonCodesignIdentifier in
@@ -36,6 +36,16 @@ test:
 run: build
 	./bin/charon serve
 
+# Wipe bin/charon before `dev` rebuilds. Without this, a previous
+# `make install` / `make reinstall` leaves the binary signed in
+# place, and a no-op `go build` (deterministic, same source → same
+# bytes) can leave the existing signed file intact on some
+# toolchain/cache paths. Signed bin/charon resolves to ServiceProd
+# at runtime, so `./bin/charon auth` would silently read prod vault
+# instead of dev — which is precisely the trap to avoid.
+dev-unsign:
+	@rm -f bin/charon
+
 # Stop production launchd service, build an unsigned dev binary, and
 # run it in foreground with -v. Unsigned binary routes credentials to
 # the file-backed dev vault at ~/.local/share/charon/, so dev work
@@ -46,7 +56,10 @@ run: build
 # trap lives in the script (not in this recipe) because Make aborts
 # the recipe shell on SIGINT before its EXIT trap can run, while a
 # bash script with its own trap fires reliably.
-dev: build
+#
+# dev-unsign runs first so a previous `make install` doesn't leave
+# bin/charon signed when this recipe goes to use it.
+dev: dev-unsign build
 	@scripts/dev/dev-serve.sh
 
 test-integration:
