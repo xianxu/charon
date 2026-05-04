@@ -37,6 +37,7 @@ const (
 	screenAdminKeyDetail                // per-key drill-in (Screen 3b)
 	screenGCPSetup                      // Google Cloud project setup (#14 M3)
 	screenCatalogPicker                 // Tier-3 catalog provider picker (#15 M2)
+	screenCatalogPaste                  // Tier-3 catalog add-account flow (#15 M4)
 )
 
 // model is the top-level bubbletea model.
@@ -52,6 +53,7 @@ type model struct {
 	adminDetail    adminKeyDetailModel
 	gcpSetup       gcpSetupModel
 	catalogPicker  catalogPickerModel
+	catalogPaste   catalogPasteModel
 	catalog        *catalog.Catalog
 
 	vault       vault.Store
@@ -215,13 +217,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.refreshProviderPicker()
 
 	case catalogSelectedMsg:
-		// M4 lands the paste flow. Today: bounce back to the provider
-		// picker with a CLI hint so users testing M3 can complete the
-		// loop end-to-end without the TUI flow.
+		m.catalogPaste = newCatalogPasteModel(msg.entry, m.vault)
+		m.current = screenCatalogPaste
+		return m, nil
+
+	case catalogPasteCancelMsg:
+		// User backed out of the paste flow before storing — return to
+		// the catalog picker (not the top-level provider picker) so
+		// they can pick a different entry without re-navigating.
+		m.current = screenCatalogPicker
+		return m, nil
+
+	case catalogPasteDoneMsg:
+		// Successfully stored. Notify the proxy to invalidate any
+		// cached lookup (e.g. a stale 407 cache for this provider/
+		// account from before the paste). Then bounce to the provider
+		// picker with a precise "ready to use" hint.
+		m.notifyProxyCacheClear()
 		hint := fmt.Sprintf(
-			"Selected %s. M4 ships the paste flow; for now: "+
-				"charon vault set --type catalog --provider %s --account <name> --token <key>",
-			msg.entry.Name, msg.entry.ID,
+			"Stored %s/%s — try: charon run -- curl -H \"X-Charon-Account: %s\" https://%s/...",
+			msg.provider, msg.account, msg.account,
+			catalogFirstHost(m.catalog, msg.provider),
 		)
 		return m.refreshProviderPickerWithStatus(hint)
 
@@ -510,6 +526,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case screenCatalogPicker:
 		var cmd tea.Cmd
 		m.catalogPicker, cmd = m.catalogPicker.Update(msg)
+		return m, cmd
+	case screenCatalogPaste:
+		var cmd tea.Cmd
+		m.catalogPaste, cmd = m.catalogPaste.Update(msg)
 		return m, cmd
 	case screenPicker:
 		var cmd tea.Cmd
@@ -834,6 +854,8 @@ func (m model) View() string {
 		return m.providerPicker.View()
 	case screenCatalogPicker:
 		return m.catalogPicker.View()
+	case screenCatalogPaste:
+		return m.catalogPaste.View()
 	case screenPicker:
 		return m.picker.View()
 	case screenAdminKeyList:
@@ -856,4 +878,20 @@ func (m model) View() string {
 		return m.gcpSetup.View()
 	}
 	return ""
+}
+
+// catalogFirstHost returns the first hostname pattern declared by
+// the catalog entry with the given provider id, or a placeholder
+// when the catalog is unavailable. Used to craft a precise "ready
+// to use" hint after a successful paste.
+func catalogFirstHost(c *catalog.Catalog, provider string) string {
+	if c == nil {
+		return "<provider-host>"
+	}
+	for _, e := range c.Entries {
+		if e.ID == provider && len(e.HostnamePatterns) > 0 {
+			return e.HostnamePatterns[0]
+		}
+	}
+	return "<provider-host>"
 }

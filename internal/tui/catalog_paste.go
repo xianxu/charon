@@ -1,0 +1,288 @@
+package tui
+
+import (
+	"fmt"
+	"os/exec"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/xianxu/charon/internal/providers/catalog"
+	"github.com/xianxu/charon/internal/vault"
+)
+
+// catalogPasteModel drives the Tier-3 add-account flow (#15 M4).
+//
+// Two-step UX:
+//
+//	step 1/2: account name (textinput) — also surfaces signup/key
+//	          URLs and a ctrl+o shortcut to open the key URL.
+//	step 2/2: paste key (masked textinput) — enter to store, esc to
+//	          go back.
+//
+// On success: emits catalogPasteDoneMsg with provider+account so the
+// parent can refresh the picker and surface a "ready to use" hint.
+// On cancel (esc from step 1): catalogPasteCancelMsg, no side effect.
+//
+// Verify-on-paste (--verify, plan M5) intentionally not implemented
+// here — kept separate so the M4 paste flow can land + be reviewed
+// independently of the optional health-check.
+type catalogPasteModel struct {
+	entry catalog.Entry
+	state catalogPasteState
+
+	accountInput textinput.Model
+	keyInput     textinput.Model
+	vault        vault.Store
+
+	err error
+}
+
+type catalogPasteState int
+
+const (
+	catalogPasteStateAccount catalogPasteState = iota
+	catalogPasteStateKey
+	catalogPasteStateError
+)
+
+// catalogPasteDoneMsg signals the paste flow stored a new catalog
+// credential successfully. Carries provider+account so the parent
+// can craft a precise "ready to use" hint without re-deriving the
+// vault key shape.
+type catalogPasteDoneMsg struct {
+	provider string
+	account  string
+}
+
+// catalogPasteCancelMsg signals the user cancelled out of the flow
+// before any persistent state change.
+type catalogPasteCancelMsg struct{}
+
+func newCatalogPasteModel(entry catalog.Entry, v vault.Store) catalogPasteModel {
+	acc := textinput.New()
+	acc.Placeholder = "personal"
+	acc.Prompt = "  account> "
+	acc.CharLimit = 64
+	acc.Width = 60
+	acc.Focus()
+
+	key := textinput.New()
+	key.Placeholder = catalogKeyPlaceholder(entry.ID)
+	key.Prompt = "  key> "
+	key.CharLimit = 256
+	key.Width = 60
+	key.EchoMode = textinput.EchoPassword
+	key.EchoCharacter = '•'
+
+	return catalogPasteModel{
+		entry:        entry,
+		state:        catalogPasteStateAccount,
+		accountInput: acc,
+		keyInput:     key,
+		vault:        v,
+	}
+}
+
+// catalogKeyPlaceholder returns a per-provider key-shape hint for
+// the textinput placeholder. Falls back to a generic hint for
+// unknown providers — the catalog YAML doesn't carry a sample-key
+// pattern today, and that's the right call: real keys are
+// secret-prefixed and any "shape" we ship gets stale.
+func catalogKeyPlaceholder(id string) string {
+	switch id {
+	case "anthropic":
+		return "sk-ant-…"
+	}
+	return "paste here"
+}
+
+func (m catalogPasteModel) Update(msg tea.Msg) (catalogPasteModel, tea.Cmd) {
+	switch m.state {
+	case catalogPasteStateAccount:
+		return m.updateAccount(msg)
+	case catalogPasteStateKey:
+		return m.updateKey(msg)
+	case catalogPasteStateError:
+		return m.updateError(msg)
+	}
+	return m, nil
+}
+
+func (m catalogPasteModel) updateAccount(msg tea.Msg) (catalogPasteModel, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok {
+		switch k.String() {
+		case "enter":
+			if strings.TrimSpace(m.accountInput.Value()) == "" {
+				return m, nil
+			}
+			m.state = catalogPasteStateKey
+			m.accountInput.Blur()
+			m.keyInput.Focus()
+			return m, nil
+		case "esc":
+			return m, func() tea.Msg { return catalogPasteCancelMsg{} }
+		case "ctrl+c":
+			return m, tea.Quit
+		case "ctrl+o":
+			openURL(m.entry.KeyURL)
+			return m, nil
+		}
+	}
+	var cmd tea.Cmd
+	m.accountInput, cmd = m.accountInput.Update(msg)
+	return m, cmd
+}
+
+func (m catalogPasteModel) updateKey(msg tea.Msg) (catalogPasteModel, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok {
+		switch k.String() {
+		case "enter":
+			pasted := strings.TrimSpace(m.keyInput.Value())
+			if pasted == "" {
+				return m, nil
+			}
+			account := strings.TrimSpace(m.accountInput.Value())
+			cred := &vault.Credential{
+				Type:     vault.TypeCatalog,
+				Provider: m.entry.ID,
+				Account:  account,
+				Catalog: &vault.CatalogData{
+					KeyMaterial: pasted,
+					AddedAt:     time.Now(),
+				},
+			}
+			if err := m.vault.Set(cred); err != nil {
+				m.state = catalogPasteStateError
+				m.err = fmt.Errorf("store credential: %w", err)
+				return m, nil
+			}
+			return m, func() tea.Msg {
+				return catalogPasteDoneMsg{provider: m.entry.ID, account: account}
+			}
+		case "esc":
+			m.state = catalogPasteStateAccount
+			m.keyInput.Blur()
+			m.keyInput.Reset()
+			m.accountInput.Focus()
+			return m, nil
+		case "ctrl+c":
+			return m, tea.Quit
+		case "ctrl+o":
+			openURL(m.entry.KeyURL)
+			return m, nil
+		}
+	}
+	var cmd tea.Cmd
+	m.keyInput, cmd = m.keyInput.Update(msg)
+	return m, cmd
+}
+
+func (m catalogPasteModel) updateError(msg tea.Msg) (catalogPasteModel, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "ctrl+c" {
+		return m, tea.Quit
+	}
+	if _, ok := msg.(tea.KeyMsg); ok {
+		m.state = catalogPasteStateKey
+		m.err = nil
+		m.keyInput.Reset()
+		m.keyInput.Focus()
+	}
+	return m, nil
+}
+
+func (m catalogPasteModel) View() string {
+	switch m.state {
+	case catalogPasteStateAccount:
+		return m.viewAccount()
+	case catalogPasteStateKey:
+		return m.viewKey()
+	case catalogPasteStateError:
+		return m.viewError()
+	}
+	return ""
+}
+
+func (m catalogPasteModel) viewAccount() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(fmt.Sprintf("%s › Add provider › %s", appName(), m.entry.Name)))
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render("Step 1/2 — account name"))
+	b.WriteString("\n")
+	b.WriteString(strings.Repeat("─", 60))
+	b.WriteString("\n\n")
+
+	if m.entry.SignupURL != "" {
+		b.WriteString("  Sign up:  ")
+		b.WriteString(mutedStyle.Render(m.entry.SignupURL))
+		b.WriteString("\n")
+	}
+	if m.entry.KeyURL != "" {
+		b.WriteString("  Get key:  ")
+		b.WriteString(mutedStyle.Render(m.entry.KeyURL))
+		b.WriteString("    ")
+		b.WriteString(helpStyle.Render("(ctrl+o to open)"))
+		b.WriteString("\n")
+	}
+	if len(m.entry.HostnamePatterns) > 0 {
+		b.WriteString("  Host:     ")
+		b.WriteString(mutedStyle.Render(m.entry.HostnamePatterns[0]))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+	b.WriteString("  Account name (becomes X-Charon-Account header value):\n")
+	b.WriteString(m.accountInput.View())
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("enter: continue   ctrl+o: open key URL   esc: back"))
+	return b.String()
+}
+
+func (m catalogPasteModel) viewKey() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(fmt.Sprintf("%s › Add provider › %s", appName(), m.entry.Name)))
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render("Step 2/2 — paste API key"))
+	b.WriteString("\n")
+	b.WriteString(strings.Repeat("─", 60))
+	b.WriteString("\n\n")
+	b.WriteString(fmt.Sprintf("  Account: %s\n\n", strings.TrimSpace(m.accountInput.Value())))
+	b.WriteString("  Paste API key (input is hidden):\n")
+	b.WriteString(m.keyInput.View())
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("enter: store   ctrl+o: open key URL   esc: back"))
+	return b.String()
+}
+
+func (m catalogPasteModel) viewError() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(fmt.Sprintf("%s › Add provider › %s — failed", appName(), m.entry.Name)))
+	b.WriteString("\n\n")
+	if m.err != nil {
+		b.WriteString(rowDelStyle.Render("  " + m.err.Error()))
+	}
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("press any key to retry   ctrl+c: quit"))
+	return b.String()
+}
+
+// openURL launches the user's default browser at url. Best-effort —
+// failures are silent (URL is also displayed inline so the user can
+// copy it manually). darwin uses "open"; linux uses "xdg-open";
+// other platforms no-op.
+func openURL(url string) {
+	if url == "" {
+		return
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "linux":
+		cmd = exec.Command("xdg-open", url)
+	default:
+		return
+	}
+	_ = cmd.Start()
+}
