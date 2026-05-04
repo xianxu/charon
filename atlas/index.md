@@ -7,6 +7,7 @@
 External user-facing docs (linked from charon.md where relevant):
 
 - [`../docs/agent-protocol.md`](../docs/agent-protocol.md) — agent-side spec (headers, 407 handling)
+- [`../docs/providers.md`](../docs/providers.md) — provider lifecycle models (OAuth / admin-key / catalog) and catalog reference + how to add a new entry
 - [`../docs/threat-model.md`](../docs/threat-model.md) — what charon defends against, what it doesn't, ranked open weaknesses
 - [`../docs/security-test-plan.md`](../docs/security-test-plan.md) — manual verification of the M4 ACL boundary
 - [`../docs/security-audit-test-plan.md`](../docs/security-audit-test-plan.md) — manual test plan for `charon-security`

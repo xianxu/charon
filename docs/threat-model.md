@@ -195,6 +195,29 @@ to "credential injector with bounded counting." The user-visible
 trade is `charon stats --since 1h` showing meaningful per-host
 volume vs. opaque "some traffic happened."
 
+### Catalog (Tier-3) trust boundary (added in #15)
+
+The catalog at `internal/providers/catalog/catalog.yaml` is
+**curated and embedded** at compile time via `go:embed`. The proxy
+routes traffic to hostnames declared in the catalog, applies the
+auth shape declared in the catalog, and hits revoke/verify URLs
+declared in the catalog. None of those URLs are user-supplied at
+runtime, so the SSRF surface is bounded by what's reviewed in the
+YAML at release time. A user-extensible catalog
+(`~/.config/charon/providers.yaml` merge) was deliberately
+deferred for this reason — adding it would require either (a)
+trusting users to vet provider auth shapes / revoke URLs, or
+(b) a runtime allowlist that's substantially harder to reason
+about than "everything in the embedded YAML went through review."
+
+Pasted catalog keys themselves (the `Catalog.KeyMaterial` payload)
+are user-supplied and not inspected — the proxy attaches whatever
+the user pasted to outbound requests with the entry's auth shape.
+Charon doesn't know whether a pasted Anthropic key is a regular
+project key or an admin key, only that the user said "use it for
+this hostname pattern." See `docs/providers.md` § Revoke posture
+for the failure mode and mitigation.
+
 ---
 
 ## Assets
@@ -204,6 +227,7 @@ volume vs. opaque "some traffic happened."
 | OAuth refresh tokens | macOS Keychain (`charon` service) | High | Long-lived, per provider × account, mints fresh access tokens until revoked at provider |
 | Provider admin keys | macOS Keychain (`charon` service, `_<provider>:admin` account) | **Highest** | Mint per-account API keys with full org access; list/modify all projects; see all usage; modify rate limits — anything the provider's organization dashboard can do |
 | Per-account minted API keys | macOS Keychain (`charon` service, `<provider>:<account>` account) | High | Long-lived, scoped to one project/workspace. Independent of admin key — keep working until revoked individually or admin-key rotates to a different org |
+| Catalog (paste-and-revoke) keys | macOS Keychain (`charon` service, `<catalog-id>:<account>` account, `catalog.key_material` payload field) | High | Long-lived, no charon-side mint. User pastes from the provider's dashboard (#15). Revoke is best-effort upstream when the catalog declares a `revoke` endpoint, otherwise local-delete only with a console-URL pointer to manual cleanup. Same M4 ACL as other vault entries. Blast radius is whatever the pasted key carries upstream — typically project-scoped on inference providers, but admin-scoped if the user pasted an admin key for revoke purposes. |
 | AI Studio API key (sidecar) | macOS Keychain (`charon` service, `google:<account>` entry, `aistudio` payload field) | High | Long-lived API key minted under the user's GCP project, restricted at mint time to `generativelanguage.googleapis.com` only. Independent of OAuth refresh — survives token rotation but tied to the same Google account; revoked along with the account on `accounts rm` (M6 calls `apikeys.googleapis.com DELETE`). Restriction at mint time bounds blast radius if the key leaks: it cannot be repurposed for other Google APIs. |
 | Proxy CA private key | macOS Keychain (`charon` service, `_ca:key` account) | **Highest** | Owning it lets an attacker forge HTTPS for any host the agent trusts via `charon run`'s env vars |
 | Access tokens | In-memory cache only | Low | Short-lived (~1h), never persisted |

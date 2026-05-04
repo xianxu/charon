@@ -137,6 +137,32 @@ points them at the right URL.
 The catalog (#15) declares per-provider revoke endpoints so this
 distinction is data-driven.
 
+#### Catalog providers (Tier 3) — paste-and-revoke
+
+The catalog at `internal/providers/catalog/catalog.yaml` is the
+data-driven mechanism for the long-tail of API-key providers
+that don't justify per-provider Go code. Anthropic seeds the
+catalog today; new entries land as one-line YAML PRs (Groq,
+Mistral, xAI, etc.).
+
+Lifecycle posture for catalog credentials:
+- **Add**: user pastes key in TUI, optionally verified against the
+  entry's `verify_url` (M5: rejected → retype, inconclusive → store
+  with degraded note, OK → store with "verified" note).
+- **Route**: hostname → catalog entry → vault lookup by
+  `X-Charon-Account` → auth shape (bearer / header / query) applied
+  with optional `extra_headers`. Compiled providers win on hostname
+  overlap; collisions are rejected at boot.
+- **Revoke**: best-effort upstream when the entry declares a
+  `revoke` endpoint (direct or list-then-deactivate). Default-preserve
+  on upstream failure — the credential is charon's *handle* on the
+  upstream key, throwing it away on transient failure forces a
+  re-paste. Explicit `[d]` force-delete affordance for cases where
+  retry will never succeed.
+
+The full catalog reference (schema, validation, how to add an
+entry) is in [`docs/providers.md`](../docs/providers.md).
+
 ### Other decisions
 - **CGo on darwin for keychain access** (was: pure Go via `security` CLI; revisited in #000003 because the CLI shell-out makes keychain ACLs meaningless — the requesting process becomes `/usr/bin/security`, not charon). Build-tag split: darwin+cgo uses Security framework directly via `github.com/keybase/go-keychain` for Get/Delete/List + direct CGo (`acl_darwin.go`) for ACL'd Set; `!cgo || !darwin` keeps the legacy CLI shell-out for hermetic CI / cross-compile.
 - **File-backed dev vault** (`internal/vault/keychain/dev_file.go`) — when the running binary is unsigned (ServiceDev), all keychain ops route to `~/.local/share/charon/dev-vault.json` instead of the macOS Keychain. Avoids the keychain-permission-prompt-per-rebuild friction and prevents training users to click "Always Allow" on every dev build. ServiceProd unchanged — production binaries still use the codesign-DR-pinned ACL on macOS Keychain.

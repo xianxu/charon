@@ -1,10 +1,10 @@
 ---
 id: 000015
-status: working
+status: done
 deps: []
 github_issue:
 created: 2026-04-28
-updated: 2026-05-03
+updated: 2026-05-04
 estimate_hours: 12
 estimate_method: estimate-logic-v2.md (Method A)
 prior_estimate_hours: 45  # v1 estimate; superseded by v2 after #13 actuals
@@ -356,6 +356,41 @@ broader rationale.
   the handle, so default-preserve is the correct tradeoff.
 
 ## Log
+
+- **2026-05-04 — M5 + M7 + M6 closure.** Final three milestones
+  landed in succession after chunk-2 review.
+  - **M5 — verify-on-paste**: `Entry.Verify(ctx, key)` dispatcher
+    in `internal/providers/catalog/verify.go` returns
+    VerifyOK / VerifyRejected / VerifyEndpointError. TUI paste flow
+    gains a brief "verifying..." state between key input and store;
+    Rejected sends user back to retype, EndpointError stores with
+    a degraded note. Anthropic's `verify_url` is `/v1/models`
+    (free, fast). Entries without `verify_url` skip the probe
+    entirely. Status note splices into the M4 success hint:
+    "Stored anthropic/personal (verified) — try: charon run -- ...".
+    6 verify-dispatcher tests + 4 paste-flow integration tests.
+  - **M7 — onboarding cursor**: when vault has 0 credentials, the
+    provider picker's initial cursor lands on `+ add provider` so
+    first-run users land on an actionable row, not an empty Google
+    one. Cursor preservation across drill-out → drill-in (added in
+    chunk-1 region) overrides this on subsequent rebuilds, so the
+    polish only affects the first paint of a fresh model. Implementation:
+    one `if len(creds) == 0` check at the bottom of
+    `newProviderPickerModel`. Two new tests; existing model-level
+    tests updated to reset cursor explicitly when assuming pre-M7
+    row-0 default (one-line per test).
+  - **M6 — docs**: README mentions the catalog model (third
+    bullet alongside OAuth and admin-key) and links to
+    `docs/providers.md`. New `docs/providers.md` carries the full
+    catalog reference: schema, validation rules, how to add a new
+    entry, the verify and revoke postures with rationale.
+    `docs/threat-model.md` gets a Catalog asset row + a "Catalog
+    (Tier-3) trust boundary" subsection in Scope explaining the
+    SSRF surface is bounded by the embedded curated YAML.
+    `atlas/charon.md` gets a Catalog providers (Tier 3)
+    subsection under Credential lifecycle; `atlas/index.md`
+    surfaces `docs/providers.md`.
+  Issue status flipped working → done.
 
 - **2026-05-04 — Chunk-2 review (M4b + 5 followups).**
   superpowers-code-reviewer subagent against `BASE=6f0baf4` →

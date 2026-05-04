@@ -37,9 +37,16 @@ Two credential lifecycle models supported:
 - **Admin-key** (OpenAI) — paste a one-time admin key into charon, then
   charon mints per-account API keys via the provider's admin API and
   manages their lifecycle
-
-A future catalog flow (#15) extends to long-tail providers (Anthropic,
-Groq, Mistral, …) with paste-only keys and best-effort revocation.
+- **Catalog (paste-and-revoke)** — for the long-tail of API-key
+  providers (Anthropic seeded; Groq / Mistral / xAI / etc. land as
+  one-line YAML PRs at `internal/providers/catalog/catalog.yaml`).
+  Keys are pasted into the TUI, optionally health-checked against
+  the provider's verify endpoint, and routed via the provider's
+  declared auth shape (bearer / custom header / URL param).
+  Best-effort upstream deactivation on revoke when the provider
+  exposes a list+deactivate endpoint; otherwise local-delete with
+  a console-URL pointer. See [`docs/providers.md`](docs/providers.md)
+  for the catalog reference and how to add a new entry.
 
 ## Quick start
 
