@@ -329,6 +329,24 @@ broader rationale.
 
 ## Log
 
+- **2026-05-03 — M4 e2e verified.** TUI add-account flow landed in
+  `fd4daf2`: `catalogPasteModel` (account-name → masked key paste;
+  ctrl+o launches `key_url` via `open` on darwin / `xdg-open` on
+  linux). On done, the provider picker shows a ready-to-run
+  `charon run -- curl -H "X-Charon-Account: <name>" https://<host>`
+  hint pulled from the entry's first hostname pattern. 7 teatest
+  cases (happy path, esc-from-account cancel, empty-name no-advance,
+  esc-from-key preserves account + clears key, empty-key no-store,
+  view URL/host/ctrl+o visibility, masking).
+  E2e against production proxy: pasted real Anthropic key under
+  `personal`, then `charon run -- curl https://api.anthropic.com/v1/messages`
+  with `X-Charon-Account: personal` and a `claude-opus-4-7` request
+  body → 200 with content payload. `x-api-key` + `anthropic-version`
+  injected by the M3 catalog router as designed; no client-side
+  auth headers needed. Picker integration for catalog credentials
+  (visible row per provider with credential count) deferred to M4b
+  since revoke selection needs that row anyway.
+
 - **2026-05-03 — Chunk-1 review (M1+M2+M3).** `superpowers-code-reviewer`
   subagent; BASE=`9843ab4`, HEAD=`8bcf871`. Verdict: ready to merge with
   fixes. 0 Critical, 4 Important, 8 Minor.
