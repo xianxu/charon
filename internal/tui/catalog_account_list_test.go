@@ -120,6 +120,32 @@ func TestCatalogAccountList_EscEmitsBackMsg(t *testing.T) {
 	}
 }
 
+func TestCatalogAccountList_EnterOnAccountRow_IsNoOp(t *testing.T) {
+	// Catalog credentials have no detail screen, so enter on an
+	// account row is intentionally a no-op. Revoke is reachable
+	// only via `r` — keeps the destructive action from sharing a
+	// keybinding with a benign open-verb that doesn't exist here.
+	v := memory.New()
+	storeCatalogCred(t, v, "anthropic", "personal", "sk-ant-AAAA")
+	m, _ := newCatalogAccountListModel(anthropicCatalogEntry(), v)
+	// Cursor on personal (row 0).
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		// If there is a cmd, it must NOT be the revoke trigger.
+		// (A nil cmd is the expected outcome.)
+		if _, isRevoke := cmd().(catalogRevokeRequestMsg); isRevoke {
+			t.Fatal("enter on account row erroneously triggered revoke")
+		}
+		if _, isAdd := cmd().(catalogAccountAddMsg); isAdd {
+			t.Fatal("enter on account row erroneously triggered add")
+		}
+	}
+	// Help line should not advertise enter for an open verb.
+	if strings.Contains(m.View(), "enter open") {
+		t.Errorf("help line still mentions 'enter open':\n%s", m.View())
+	}
+}
+
 func TestCatalogAccountList_REmpty_OnAddRow_NoOp(t *testing.T) {
 	v := memory.New()
 	m, _ := newCatalogAccountListModel(anthropicCatalogEntry(), v)

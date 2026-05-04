@@ -92,16 +92,18 @@ func (m catalogAccountListModel) Update(msg tea.Msg) (catalogAccountListModel, t
 		}
 	case "enter":
 		row := m.rows[m.cursor]
-		entry := m.entry
-		switch {
-		case row.isAddNew:
+		// Enter is only meaningful on the "+ add account" row.
+		// Catalog credentials have no detail screen — there's
+		// nothing to "open" for an existing account row, so enter
+		// is intentionally a no-op there. Revoke is reachable
+		// only via `r` so the destructive path doesn't share a
+		// keybinding with a benign "open" verb the way the admin-
+		// key list does.
+		if row.isAddNew {
+			entry := m.entry
 			return m, func() tea.Msg { return catalogAccountAddMsg{entry: entry} }
-		default:
-			account := row.account
-			return m, func() tea.Msg {
-				return catalogRevokeRequestMsg{entry: entry, account: account}
-			}
 		}
+		return m, nil
 	case "r":
 		row := m.rows[m.cursor]
 		if row.isAddNew {
@@ -159,6 +161,6 @@ func (m catalogAccountListModel) View() string {
 		b.WriteString(helpStyle.Render(m.statusMsg))
 		b.WriteString("\n")
 	}
-	b.WriteString(helpStyle.Render("↑↓ nav   enter open   r revoke   esc back   q quit"))
+	b.WriteString(helpStyle.Render("↑↓ nav   r revoke   esc back   q quit"))
 	return b.String()
 }
