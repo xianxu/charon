@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -40,15 +41,25 @@ func validate(entries []Entry) error {
 	if len(entries) == 0 {
 		return fmt.Errorf("catalog: must contain at least one entry")
 	}
-	seen := make(map[string]struct{}, len(entries))
+	seenIDs := make(map[string]struct{}, len(entries))
+	// Hostname → first id that claimed it, so the error names both the
+	// duplicate's source and the previous owner. Catalog YAML is grown
+	// via PR; the error makes the conflict obvious to the second PR.
+	seenHosts := make(map[string]string, len(entries))
 	for i, e := range entries {
 		if err := validateEntry(e); err != nil {
 			return fmt.Errorf("catalog: entry %d (%q): %w", i, e.ID, err)
 		}
-		if _, dup := seen[e.ID]; dup {
+		if _, dup := seenIDs[e.ID]; dup {
 			return fmt.Errorf("catalog: entry %d: duplicate id %q", i, e.ID)
 		}
-		seen[e.ID] = struct{}{}
+		seenIDs[e.ID] = struct{}{}
+		for _, h := range e.HostnamePatterns {
+			if owner, dup := seenHosts[h]; dup {
+				return fmt.Errorf("catalog: entry %q claims hostname %q already owned by entry %q", e.ID, h, owner)
+			}
+			seenHosts[h] = e.ID
+		}
 	}
 	return nil
 }
@@ -127,6 +138,13 @@ func validateRevoke(r Revoke) error {
 	}
 	if r.AuthSource != "pasted_key" {
 		return fmt.Errorf("revoke.auth_source %q must be \"pasted_key\"", r.AuthSource)
+	}
+	// {key_id} placeholder in the revoke URL only makes sense when a
+	// list_endpoint is configured to discover the id from the pasted
+	// key. Without one, M4b's dispatcher would have nothing to fill it
+	// with — fail at load time rather than confuse a future operator.
+	if strings.Contains(r.URL, "{key_id}") && r.ListEndpoint == nil {
+		return fmt.Errorf("revoke.url contains {key_id} but revoke.list_endpoint is unset")
 	}
 	if r.ListEndpoint != nil {
 		if err := validateHTTPSURL("revoke.list_endpoint.url", r.ListEndpoint.URL); err != nil {

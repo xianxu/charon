@@ -329,6 +329,26 @@ broader rationale.
 
 ## Log
 
+- **2026-05-03 — Chunk-1 review (M1+M2+M3).** `superpowers-code-reviewer`
+  subagent; BASE=`9843ab4`, HEAD=`8bcf871`. Verdict: ready to merge with
+  fixes. 0 Critical, 4 Important, 8 Minor.
+  Important fixes addressed in `<post-review-commit>`:
+  - Suffix-collision detection in `catalog.Register` (skip+log when a
+    catalog hostname falls under a compiled `SuffixToProvider` rule);
+    new `proxy.MatchingSuffix` helper exposes the lookup.
+  - Duplicate-hostname-across-entries rejected at `catalog.validate`
+    load time so PR conflicts surface at boot, not first request.
+  - `atlas/charon.md` updated for `query` (was `url_param_key`); added a
+    new "Auth methods" bullet documenting the three styles.
+  - `TestRegister_DoesNotOverrideCompiledHosts` defensive `t.Cleanup`
+    so the assertion stays meaningful if a future test mutates the map.
+  Minors landed opportunistically: `{key_id}` placeholder in
+  `revoke.url` now requires `list_endpoint` at validate time;
+  AI-Studio-vs-catalog disambiguation locked by a new table-driven
+  test in `internal/proxy/proxy_test.go`. Other Minors (cosmetic
+  picker render duplication, defensive nil-URL guard, DRY of
+  cred-resolve branches, 2x `catalog.Load()` at startup) deferred.
+
 - **2026-05-03 — Scope reduction.** Catalog mechanism preserved;
   seed shrunk from 13 LLM-inference providers to **Anthropic only**.
   Reframed as a generic API-key paste-and-revoke catalog (not LLM-

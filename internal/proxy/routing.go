@@ -141,11 +141,22 @@ func ProviderForHost(host string) *Provider {
 	if p, ok := HostToProvider[host]; ok {
 		return p
 	}
-	// Suffix match.
-	for _, sp := range SuffixToProvider {
-		if strings.HasSuffix(host, sp.Suffix) {
-			return sp.Provider
-		}
+	if _, p := MatchingSuffix(host); p != nil {
+		return p
 	}
 	return nil
+}
+
+// MatchingSuffix returns the SuffixToProvider rule that would catch
+// host (suffix string + provider), or ("", nil) if none matches.
+// Exposed so callers (e.g. catalog.Register) can detect when a
+// proposed exact-match rule would collide with an existing suffix
+// rule.
+func MatchingSuffix(host string) (string, *Provider) {
+	for _, sp := range SuffixToProvider {
+		if strings.HasSuffix(host, sp.Suffix) {
+			return sp.Suffix, sp.Provider
+		}
+	}
+	return "", nil
 }

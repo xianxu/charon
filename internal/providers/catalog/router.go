@@ -1,13 +1,24 @@
 package catalog
 
 import (
+	"log"
+
 	"github.com/xianxu/charon/internal/proxy"
 )
 
 // Register adds each catalog entry's hostname patterns to the
 // proxy's HostToProvider map as exact-match rules. Compiled-
 // provider entries (declared statically in routing.go) take
-// precedence: Register skips any hostname already registered.
+// precedence:
+//
+//   - exact-match collision: skipped (e.g. catalog entry claiming
+//     api.openai.com is ignored).
+//   - suffix-match collision: skipped (e.g. catalog entry claiming
+//     foo.googleapis.com is ignored — Google OAuth bearer wins via
+//     SuffixToProvider).
+//
+// Both skip cases log a warning so a careless catalog PR surfaces
+// at boot rather than silently failing at first request.
 //
 // Called once at startup from the serve command. Idempotent for
 // the catalog's own entries (re-registering replaces them).
@@ -15,8 +26,14 @@ func Register(c *Catalog) {
 	for _, e := range c.Entries {
 		rp := EntryToProvider(e)
 		for _, host := range e.HostnamePatterns {
-			if _, exists := proxy.HostToProvider[host]; exists {
-				// Compiled provider already owns this host.
+			if existing, exists := proxy.HostToProvider[host]; exists {
+				log.Printf("catalog: entry %q claims host %q already owned by compiled provider %q — skipping",
+					e.ID, host, existing.Name)
+				continue
+			}
+			if suffix, sp := proxy.MatchingSuffix(host); sp != nil {
+				log.Printf("catalog: entry %q claims host %q which falls under compiled suffix %q (provider %q) — skipping",
+					e.ID, host, suffix, sp.Name)
 				continue
 			}
 			proxy.HostToProvider[host] = rp

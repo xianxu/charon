@@ -190,6 +190,40 @@ func TestParse_RejectsMalformed(t *testing.T) {
 			wantErr: "auth_source",
 		},
 		{
+			name: "duplicate hostname across entries",
+			yaml: `
+- id: a
+  name: A
+  signup_url: https://example.com
+  key_url: https://example.com/keys
+  hostname_patterns: [api.shared.test]
+  auth: { style: bearer }
+- id: b
+  name: B
+  signup_url: https://example.com
+  key_url: https://example.com/keys
+  hostname_patterns: [api.shared.test]
+  auth: { style: bearer }
+`,
+			wantErr: "already owned by entry",
+		},
+		{
+			name: "key_id placeholder without list_endpoint",
+			yaml: `
+- id: a
+  name: A
+  signup_url: https://example.com
+  key_url: https://example.com/keys
+  hostname_patterns: [api.example.com]
+  auth: { style: bearer }
+  revoke:
+    method: POST
+    url: https://api.example.com/keys/{key_id}
+    auth_source: pasted_key
+`,
+			wantErr: "{key_id}",
+		},
+		{
 			name: "list_endpoint missing result_path",
 			yaml: `
 - id: a

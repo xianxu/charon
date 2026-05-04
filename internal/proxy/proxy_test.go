@@ -235,6 +235,112 @@ func TestHTTPProxy_AdminKeyMissingMaterial_FailsClosed(t *testing.T) {
 	}
 }
 
+// TestHTTPProxy_AuthQueryDisambiguation locks the invariant that
+// the proxy's resolveToken correctly distinguishes AI Studio's
+// "AuthQuery on a TypeOAuth credential with AIStudio sidecar" from
+// generic catalog-style "AuthQuery (or AuthHeader) on a TypeCatalog
+// credential". The AI Studio path reads cred.AIStudio.KeyMaterial;
+// the catalog path reads cred.Catalog.KeyMaterial. A TypeCatalog
+// credential MUST NOT route through the AI Studio branch even when
+// its provider's auth method is AuthQuery — otherwise a future
+// catalog provider using URL-param auth would silently look for an
+// AIStudio sidecar that doesn't exist.
+func TestHTTPProxy_AuthQueryDisambiguation(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		credType    string
+		setup       func(*vault.Credential)
+		auth        AuthMethod
+		wantParam   string
+		wantHeader  string
+		wantHeaderV string
+		wantToken   string
+	}{
+		{
+			name:     "AI Studio: AuthQuery + TypeOAuth + AIStudio sidecar",
+			credType: vault.TypeOAuth,
+			setup: func(c *vault.Credential) {
+				c.AIStudio = &vault.AIStudioData{KeyMaterial: "AIzaSy_AIS"}
+			},
+			auth:      AuthQuery,
+			wantParam: "AIzaSy_AIS",
+		},
+		{
+			name:     "Catalog: AuthQuery + TypeCatalog + Catalog payload",
+			credType: vault.TypeCatalog,
+			setup: func(c *vault.Credential) {
+				c.Catalog = &vault.CatalogData{KeyMaterial: "qkey-CAT"}
+			},
+			auth:      AuthQuery,
+			wantParam: "qkey-CAT",
+		},
+		{
+			name:     "Catalog: AuthHeader + TypeCatalog + Catalog payload",
+			credType: vault.TypeCatalog,
+			setup: func(c *vault.Credential) {
+				c.Catalog = &vault.CatalogData{KeyMaterial: "sk-ant-CAT"}
+			},
+			auth:        AuthHeader,
+			wantHeader:  "x-api-key",
+			wantHeaderV: "sk-ant-CAT",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var seenParam, seenHeader string
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				seenParam = r.URL.Query().Get("key")
+				if tc.wantHeader != "" {
+					seenHeader = r.Header.Get(tc.wantHeader)
+				}
+				fmt.Fprint(w, "ok")
+			}))
+			defer upstream.Close()
+
+			upstreamURL, _ := url.Parse(upstream.URL)
+			hostname := upstreamURL.Hostname()
+			HostToProvider[hostname] = &Provider{
+				Name:       "test-disambig",
+				Auth:       tc.auth,
+				HeaderName: tc.wantHeader, // "" for AuthQuery → defaults to "key"
+			}
+			defer delete(HostToProvider, hostname)
+
+			store := memory.New()
+			cred := &vault.Credential{
+				Type:     tc.credType,
+				Provider: "test-disambig",
+				Account:  "personal",
+			}
+			tc.setup(cred)
+			_ = store.Set(cred)
+
+			srv := &Server{Vault: store, Audit: NopAuditLog(), CA: testCA(t)}
+			proxyServer := httptest.NewServer(srv)
+			defer proxyServer.Close()
+
+			proxyURL, _ := url.Parse(proxyServer.URL)
+			client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+
+			req, _ := http.NewRequest("GET", "http://"+upstreamURL.Host+"/x", nil)
+			req.Header.Set("X-Charon-Account", "personal")
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("request: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200", resp.StatusCode)
+			}
+			if tc.wantParam != "" && seenParam != tc.wantParam {
+				t.Errorf("query key = %q, want %q", seenParam, tc.wantParam)
+			}
+			if tc.wantHeader != "" && seenHeader != tc.wantHeaderV {
+				t.Errorf("header %q = %q, want %q", tc.wantHeader, seenHeader, tc.wantHeaderV)
+			}
+		})
+	}
+}
+
 func TestHTTPProxyAccountSelection(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, r.Header.Get("Authorization"))

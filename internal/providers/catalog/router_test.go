@@ -122,6 +122,9 @@ func TestRegister_DoesNotOverrideCompiledHosts(t *testing.T) {
 	if want == nil {
 		t.Fatalf("expected api.openai.com pre-registered")
 	}
+	// Defensive: snapshot+restore so prior or later tests that mutate
+	// this entry can't make this assertion silently meaningless.
+	t.Cleanup(func() { proxy.HostToProvider[host] = want })
 
 	c := &Catalog{Entries: []Entry{
 		{
@@ -136,6 +139,41 @@ func TestRegister_DoesNotOverrideCompiledHosts(t *testing.T) {
 	got := proxy.HostToProvider[host]
 	if got != want {
 		t.Errorf("Register overwrote compiled api.openai.com entry: got %+v", got)
+	}
+}
+
+// TestRegister_SkipsSuffixCollision ensures a catalog entry whose
+// hostname falls under a compiled SuffixToProvider rule (e.g.
+// .googleapis.com → google) is silently skipped (with a log line)
+// rather than registered as a misleading exact-match shadow.
+func TestRegister_SkipsSuffixCollision(t *testing.T) {
+	const host = "anything.googleapis.com"
+	// Snapshot in case any prior test added an exact-match entry.
+	prev, hadPrev := proxy.HostToProvider[host]
+	t.Cleanup(func() {
+		if hadPrev {
+			proxy.HostToProvider[host] = prev
+		} else {
+			delete(proxy.HostToProvider, host)
+		}
+	})
+
+	c := &Catalog{Entries: []Entry{
+		{
+			ID:               "google-shadow",
+			Name:             "Imposter",
+			HostnamePatterns: []string{host},
+			Auth:             Auth{Style: "bearer"},
+		},
+	}}
+	Register(c)
+
+	if got, ok := proxy.HostToProvider[host]; ok && got != prev {
+		t.Errorf("Register added exact-match entry %q despite suffix collision: %+v", host, got)
+	}
+	// Suffix-routed lookup still resolves to google.
+	if p := proxy.ProviderForHost(host); p == nil || p.Name != "google" {
+		t.Errorf("ProviderForHost(%q) = %+v, want google via suffix", host, p)
 	}
 }
 
