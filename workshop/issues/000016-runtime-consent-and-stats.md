@@ -380,10 +380,10 @@ Caveats:
 
 ### Phase G — atlas + threat-model docs
 
-- [ ] `atlas/charon.md`: session model section
-- [ ] `atlas/security-audit.md`: runtime-consent role for
+- [x] `atlas/charon.md`: session model section
+- [x] `atlas/security-audit.md`: runtime-consent role for
       security.app
-- [ ] `docs/threat-model.md`: armed/disarmed gate; content-sampling
+- [x] `docs/threat-model.md`: armed/disarmed gate; content-sampling
       posture; cooldown-on-oracle rationale
 
 ### Phase H — milestone code review
@@ -588,3 +588,29 @@ Caveats:
     error body. Now `charon who --since 5m` shows what knocked
     while the user was away. Test in `session_http_test.go`
     (`TestSession_Gate_DisarmedRequestIsAudited`).
+
+- **2026-05-03 — Phase G done.** Atlas + threat-model docs sweep.
+  - `atlas/charon.md`: new "Runtime consent" section covering the
+    armed/disarmed bit, idle/absolute timers, the unix-socket
+    trust edge, caller-ID posture, and Tier 1/Tier 2 stats.
+    `Key Components` extended with the new files; CLI box
+    extended with arm/disarm/who/stats.
+  - `atlas/security-audit.md`: bundle now described as a
+    two-purpose helper (audit + consent oracle). New "Runtime-
+    consent oracle" section explains why the same bundle and
+    distinct-from-`com.charon.cli` bundle ID is the trust anchor.
+    Architecture box gained the menubar subcommand.
+  - `docs/threat-model.md`: new Defense layer 7 (runtime consent
+    gate) with idle/absolute caps, the "agent activity while user
+    away" framing, and the cooldown-on-oracle deferred design
+    note. New A1b threat case explicitly tagged 🟡 partial. New
+    "Content-sampling posture" subsection under Scope spelling
+    out exactly what Tier 1/Tier 2 do and don't read. "Done" list
+    gained a #16 entry.
+
+  No behaviour change. The threat-model section is the load-
+  bearing one — a future reviewer asking "what does the gate
+  actually defend against, given an in-process compromise can
+  drive arm directly?" finds the answer there: the gate doesn't
+  defend against an actively-using user; it defends against
+  agent activity while the user is away.

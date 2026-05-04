@@ -168,6 +168,33 @@ deployment ("charon as a service") would invert most of these
 assumptions and is tracked separately as
 [#000009](../workshop/issues/000009-cloud-scalable-vault-backend.md).
 
+### Content-sampling posture (added in #16)
+
+Charon is a TLS-MITM proxy: it always *could* read request and
+response bodies. Until #16 it didn't, beyond what's needed to
+inject the `Authorization` header. As of #16 it does, in two
+narrow ways, both visible only in the audit log and never in any
+network egress:
+
+- **Tier 1 — magnitude.** Exact `req_bytes` and `resp_bytes` plus
+  `resp_content_type`, recorded per request. Free; the proxy
+  already streams the body through.
+- **Tier 2 — generic JSON top-level array count.** When the
+  response is `application/json` and ≤ 1 MiB, the body is parsed
+  and array-valued top-level fields are counted; the sum lands as
+  `items_returned` in the audit entry. Larger or non-JSON
+  responses pass through with `items_returned` absent.
+
+What is **never** logged: JSON keys, JSON values, headers beyond
+`Content-Type`, request bodies, prompts, response strings. Stats
+are counts and bytes only. The audit ring (5000 entries, in-memory)
+and the optional file log (`--audit-log`) carry the same fields.
+
+This is an explicit posture shift from "pure credential injector"
+to "credential injector with bounded counting." The user-visible
+trade is `charon stats --since 1h` showing meaningful per-host
+volume vs. opaque "some traffic happened."
+
 ---
 
 ## Assets
@@ -401,6 +428,55 @@ prompt fatigue during dev iteration.
 
 Status: ✅ Implemented in M3.
 
+### 7. Runtime consent gate (armed/disarmed)
+
+The proxy carries a single in-memory bit: `armed` or `disarmed`.
+Disarmed CONNECTs and HTTP requests return `407 session_disarmed`
+with a structured JSON body pointing the caller at `charon arm` or
+the menubar dot. `charon serve` boots **disarmed** — re-arming is a
+user click, never automatic. Two timers gate an armed session:
+
+- **Idle TTL — 30 min.** Reset on each proxied request. Without
+  traffic, auto-disarms.
+- **Absolute cap — 8 h.** Hard ceiling regardless of activity. The
+  load-bearing one — a chatty agent could otherwise keep the idle
+  timer alive forever on its own traffic.
+
+Trust between proxy and the consent oracle (Charon Security.app's
+menubar) is a unix-domain socket at `~/Library/Caches/charon/runtime.sock`
+(0600). The proxy reads `LOCAL_PEEREPID` and verifies the peer's
+codesign DR matches `com.charon.security` — same M4 mechanism as
+the keychain ACL. So even a `charon` binary fully under the agent's
+control can't drive arm/disarm on its own behalf: the oracle has a
+distinct DR, and only the oracle's process can flip the bit.
+
+Defeats: agent activity *while the user is away.* If an agent
+silently waits for the user to walk away from the laptop and then
+starts hammering the proxy, the idle timer disarms within 30 min
+and every subsequent CONNECT is recorded as `407 session_disarmed`
+with peer attribution in the audit ring. The user can review what
+tried to talk through the proxy via `charon who --since 1h` on
+return.
+
+Does **not** defeat: agent activity *while the user is actively
+using charon.* The bit is binary, not per-call, so anything an agent
+does within an open arm window is allowed. That's intentional —
+per-call prompts kill the UX and train the user to click through.
+Per-scope minimization at OAuth layer (M4) is the complementary
+defense for "what the agent can ever do," and the runtime gate is
+the complementary defense for "when the agent can do it."
+
+Cooldown-on-the-oracle (deferred): if no human has interacted with
+security.app in N hours, defer the next arm by requiring a click
+into the app's window rather than dismissing a notification. Closes
+the "agent triggers a 3 a.m. popup that the half-asleep user
+reflexively approves" path. Currently spec'd in
+[`workshop/issues/000016-runtime-consent-and-stats.md`](../workshop/issues/000016-runtime-consent-and-stats.md)
+but not implemented.
+
+Status: ✅ Implemented in #16 (phases A–F + D refinements).
+Cooldown-on-oracle deferred.
+
 ---
 
 ## Threat-by-threat enumeration
@@ -416,6 +492,22 @@ refresh tokens.
 
 ✅ The M4 keychain ACL pops Allow/Deny. Agent has no way to satisfy the
 predicate without the user's signing key.
+
+### A1b. AI agent activity while the user is away
+
+Agent waits for the laptop to idle, then drives `HTTPS_PROXY=`
+traffic through charon. With charon armed and a credential
+present, every request goes through.
+
+🟡 Partial via the runtime-consent gate (defense layer 7). Idle
+timer (30 min default) auto-disarms the proxy without traffic;
+once disarmed, every CONNECT/HTTP returns `407 session_disarmed`
+*and* lands in the audit ring with peer attribution, so the user
+can run `charon who --since 1h` on return and see what tried to
+talk through. Hard ceiling at 8 h regardless of activity. Doesn't
+help against an agent that's chatty within a live arm window
+(the bit is intentionally not per-call); the per-scope defenses at
+the OAuth layer (M4) are the complementary control there.
 
 ### A2. AI agent bypasses charon and calls API directly
 
@@ -739,6 +831,14 @@ because its security boundary (M4 keychain ACL) routes through
   govulncheck` runs Go's official vulnerability scanner against the
   module graph + reachable code. Auto-installs the tool on first
   use. Currently zero reachable CVEs.
+- ✅ **Runtime consent gate + caller ID + bounded stats** (A1b;
+  2026-05-03). [#16](../workshop/issues/000016-runtime-consent-and-stats.md).
+  Proxy boots disarmed; arm/disarm via `Charon Security.app`'s
+  menubar (DR-pinned unix socket; distinct bundle ID prevents the
+  in-process `charon` binary from driving its own gate). Idle 30 m
+  / absolute 8 h. Disarmed requests still audit-logged so
+  `charon who --since 1h` shows what tried to talk through while
+  the user was away. Cooldown-on-oracle is spec'd and deferred.
 
 ### Open
 

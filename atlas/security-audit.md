@@ -2,17 +2,25 @@
 
 ## What
 
-`charon-security` is a Mac hygiene auditor for agentic-coding workflows.
-Verifies that the environment charon's threat model assumes — SIP
-enabled, no TCC grants on terminals/IDEs, charon's keychain ACL
-boundary intact, no suspicious launchd persistence — actually holds
-on the user's machine. Prints actionable remediation when it doesn't.
+`charon-security` is a two-purpose helper bundled into a single
+`Charon Security.app`:
+
+1. **Hygiene auditor** (`charon-security check` / `make security`)
+   — verifies that the environment charon's threat model assumes
+   actually holds: SIP enabled, no TCC grants on terminals/IDEs,
+   charon's keychain ACL boundary intact, no suspicious launchd
+   persistence. Prints actionable remediation when it doesn't.
+2. **Runtime-consent oracle** (`charon-security menubar`, the
+   no-args default since #16) — macOS menubar agent that arms/
+   disarms the proxy's `Session` gate. Distinct bundle ID
+   (`com.charon.security`) means the bundle is its own trust
+   anchor for the proxy's DR check on the consent socket.
 
 Distinct from charon proper: charon is the credential proxy; charon-
 security is a separate binary in `cmd/charon-security/` that audits
-the surrounding environment. Lives in this repo because charon is the
-privacy-sensitive piece of the stack and reuses charon's keychain ACL
-inspection helpers.
+the surrounding environment and acts as its consent oracle. Lives in
+this repo because charon is the privacy-sensitive piece of the stack
+and reuses charon's keychain ACL inspection helpers.
 
 ## Architecture
 
@@ -25,13 +33,18 @@ make security               → runs the bundled binary. Pure run, never
                               re-signs (re-signing changes cdhash, which
                               invalidates TCC grants).
 
-charon-security check       → main audit subcommand
+charon-security check       → audit subcommand (hygiene scan)
 charon-security remedy <id> → look up remediation for one finding class
 charon-security remedy      → print full playbook (10 entries)
+charon-security menubar     → runtime-consent oracle (#16); no-args default
+                              when launched via Finder/`open` (LSUIElement=true
+                              keeps the bundle dock-less in this mode)
 ```
 
-`make security` is the user-facing entry; the rest are knobs for dev
-iteration / CI / scripted use.
+`make security` is the user-facing entry for the audit; the menubar
+mode launches automatically when the user double-clicks the .app or
+opens it via `open`. The rest are knobs for dev iteration / CI /
+scripted use.
 
 ## Why a `.app` bundle
 
@@ -91,9 +104,48 @@ code blocks, ordered lists). `--no-color` falls back to ASCII style.
 Every check that emits a `RemedyRef` has a matching entry; tests
 enforce this (`TestFindingRefsHaveRemedies`).
 
+## Runtime-consent oracle (#16)
+
+The menubar mode owns the proxy's `armed`/`disarmed` bit. Why this
+bundle and not a new one:
+
+- **Distinct TCC identity from `com.charon.cli`.** The proxy's
+  DR-check on the consent socket pins to `com.charon.security`,
+  so a compromised `charon` binary can't drive arm/disarm on its
+  own behalf — the oracle is genuinely separate even though both
+  ship in the same repo.
+- **Hardened runtime + no Accessibility entitlement.** Synthetic
+  events from `cliclick` / AppleScript can't drive the menubar
+  UI; the audit's existing "Accessibility-on-terminal=Critical"
+  check closes the loop on humans-only clicks.
+- **Same `.app` bundle as the audit tool** so users have one
+  thing to install/sign/grant TCC to. The audit and oracle share
+  no code paths beyond `cmd/charon-security/main.go` dispatch.
+
+Trust edge: unix-domain socket at `~/Library/Caches/charon/runtime.sock`
+(0600). Proxy reads `LOCAL_PEEREPID`, evaluates the peer's codesign
+DR against `com.charon.security`. Unsigned dev binaries auto-bypass
+so `make dev` keeps working; signed prod requires the real bundle
+on the other end.
+
+UI surface (`cmd/charon-security/menubar.go`):
+- ●/○ glyph + remaining TTL in the menubar title (e.g. `● 27m` /
+  `○ off`). Adaptive poll cadence — 10 s baseline, 1 s in the
+  final minute so the countdown ticks live.
+- Dropdown: status line, Arm 30m / 1h / 8h, Disarm, Quit.
+- Native notifications via `notify_darwin.go` (cgo wrapper around
+  UserNotifications.framework). Bundled mode posts via
+  `addNotificationRequest` so the user can configure Banner vs
+  Alert style scoped to charon. Bare-binary dev runs fall back to
+  `osascript`.
+
+Layered on the same `cmd/charon-security/` machinery so the audit
+and menubar share `notify_darwin.go` + bundle introspection.
+
 ## See also
 
 - [`docs/threat-model.md`](../docs/threat-model.md) — why each check exists
 - [`docs/security-audit-test-plan.md`](../docs/security-audit-test-plan.md) — manual verification steps
 - [`workshop/issues/000010-security-audit-tool.md`](../workshop/issues/000010-security-audit-tool.md) — design + log
 - [`workshop/issues/000011-apple-developer-id.md`](../workshop/issues/000011-apple-developer-id.md) — the blocker for Tahoe TCC + auto-revoke (M6)
+- [`workshop/issues/000016-runtime-consent-and-stats.md`](../workshop/issues/000016-runtime-consent-and-stats.md) — runtime-consent gate + caller ID + stats; menubar shipped here

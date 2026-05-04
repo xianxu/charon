@@ -33,7 +33,11 @@ Agent → HTTPS request (real URL) → Charon proxy (CONNECT + TLS interception)
 - `internal/proxy/cert.go` — persistent CA (`LoadOrCreateCA`), per-host cert generation with DNS/IP SAN support
 - `internal/proxy/cabundle.go` — builds combined CA bundle (system CAs + charon CA)
 - `internal/proxy/routing.go` — host → `Provider` mapping with pluggable `AuthMethod`
-- `internal/proxy/audit.go` — append-only JSON lines audit log
+- `internal/proxy/audit.go` — append-only JSON lines audit log + bounded in-memory ring (5000 entries) for `charon who/stats` queries
+- `internal/proxy/session.go` — runtime-consent state (armed/disarmed bit + idle/absolute timers); see "Runtime consent" below
+- `internal/proxy/runtime_socket.go` — DR-pinned unix-domain RPC for `charon arm/disarm/who/stats` and the security.app menubar
+- `internal/proxy/peerinfo.go` — best-effort caller identification (lsof+ps); display-quality, never auth-quality
+- `internal/proxy/stats.go` — request/response byte counts + generic JSON top-level item count (Tier 1 + Tier 2)
 - `internal/oauth/google.go` — Google OAuth flow: browser auth, local callback, token exchange, refresh with rotation, ID token email extraction
 - `internal/oauth/scope_catalog.go` — known Google scope definitions with short names
 - `internal/oauth/obfuscate.go` — XOR encode/decode for baked-in client credentials (same mechanism as brain)
@@ -206,6 +210,58 @@ functional for legacy file-based keychains (login.keychain-db). Modern
 different use case. Deprecation warnings suppressed via cgo
 `-Wno-deprecated-declarations`.
 
+## Runtime consent (#16)
+
+Proxy carries a single `armed` / `disarmed` bit. Disarmed CONNECT
+and HTTP requests are rejected with `407 session_disarmed` *and
+recorded in the audit ring* — denied requests still surface in
+`charon who --since 5m` so the user can see what tried to talk
+through the proxy while they were away. `charon serve` boots
+disarmed; persisting armed state across restarts would defeat the
+whole point.
+
+Two timers gate an armed session, both in `internal/proxy/session.go`:
+- **Idle TTL — 30m.** Resets on every proxied request. Without
+  traffic, the session auto-disarms.
+- **Absolute cap — 8h.** Hard ceiling regardless of activity; a
+  chatty agent can't keep the session alive forever.
+- **Default TTL — 1h** when arm is called without an explicit
+  duration. Effective expiry is the min of the three.
+
+Trust between the proxy and the consent oracle is a unix-domain
+socket at `~/Library/Caches/charon/runtime.sock` (perms 0600). The
+proxy reads the connecting peer's PID via `LOCAL_PEEREPID` and
+verifies its codesign DR matches `com.charon.security` — same
+DR-pinning mechanism as the keychain ACL. Unsigned dev binaries
+auto-bypass (so `make dev` still works); signed prod requires the
+real `Charon Security.app` on the other end.
+
+The consent oracle ships in the same `Charon Security.app` bundle
+as the audit tool — `charon-security menubar` (the no-args default
+when launched via Finder) shows a status icon (●/○ + remaining
+TTL) with arm/disarm options. Native notifications via
+UserNotifications.framework, attributed to `com.charon.security` so
+the user can pick Banner vs Alert style scoped to charon. See
+[`atlas/security-audit.md`](security-audit.md) for the bundle.
+
+Caller identification is best-effort and **never on the auth path**.
+At CONNECT time the proxy resolves the peer process via lsof+ps
+(PID, exe path, argv0, parent chain up to launchd). Logged as
+observed for display in `charon who`; a fork-exec race between
+accept and lookup could mis-attribute a single request — the design
+accepts that because the gate is the user click, not the peer
+identity.
+
+Stats live in the same audit entry. Tier 1 (always populated): exact
+`req_bytes`, `resp_bytes`, `resp_content_type`. Tier 2 (when JSON
+and < 1 MiB): generic top-level array count → `items_returned`.
+Bigger or non-JSON responses pass through with `items_returned`
+absent. **Posture shift**: the proxy now reads response *content*
+to count items (it always *could* — TLS-MITM is the whole design —
+but #16 makes that explicit). Only counts and byte sizes are
+logged; never JSON keys or values. See `docs/threat-model.md`
+"Content sampling" for the explicit statement.
+
 ## Logging
 - Normal mode: startup info and errors only
 - `charon serve -v`: debug logging (TLS handshakes, per-request details, connection close reasons)
@@ -267,6 +323,9 @@ charon instructions                                    # Markdown: agent-using-c
 charon scopes                                          # JSON: catalog of known scopes per provider (what's grantable)
 charon status                                          # check proxy
 charon vault set/delete                                # manual token management
+charon arm [--ttl 1h] / disarm                         # runtime-consent gate (#16); CLI fallback for the menubar
+charon who [--since 1h] [--json]                       # recent peer activity (group-by-exe view)
+charon stats [--since 1h] [--json]                     # aggregate (exe,host) → calls, items, bytes
 charon service install/uninstall/start/stop/status     # OS service management
 ```
 
