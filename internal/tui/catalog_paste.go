@@ -216,14 +216,14 @@ func (m catalogPasteModel) viewAccount() string {
 
 	if m.entry.SignupURL != "" {
 		b.WriteString("  Sign up:  ")
-		b.WriteString(mutedStyle.Render(m.entry.SignupURL))
+		b.WriteString(hyperlink(m.entry.SignupURL, mutedStyle.Render(m.entry.SignupURL)))
 		b.WriteString("\n")
 	}
 	if m.entry.KeyURL != "" {
 		b.WriteString("  Get key:  ")
-		b.WriteString(mutedStyle.Render(m.entry.KeyURL))
+		b.WriteString(hyperlink(m.entry.KeyURL, mutedStyle.Render(m.entry.KeyURL)))
 		b.WriteString("    ")
-		b.WriteString(actionHintStyle.Render("(ctrl+o to open)"))
+		b.WriteString(actionHintStyle.Render("(ctrl+o or click to open)"))
 		b.WriteString("\n")
 	}
 	if len(m.entry.HostnamePatterns) > 0 {

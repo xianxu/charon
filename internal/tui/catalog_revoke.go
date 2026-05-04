@@ -220,7 +220,7 @@ func (m catalogRevokeModel) View() string {
 			b.WriteString("  key remains active at the provider until you delete it\n")
 			b.WriteString("  manually:\n\n")
 			if m.entry.ConsoleURL != "" {
-				b.WriteString("    " + m.entry.ConsoleURL + "\n")
+				b.WriteString("    " + hyperlink(m.entry.ConsoleURL, m.entry.ConsoleURL) + "\n")
 			}
 		}
 		b.WriteString("\n")
@@ -236,7 +236,7 @@ func (m catalogRevokeModel) View() string {
 			b.WriteString("\n\n")
 		}
 		if m.entry.ConsoleURL != "" {
-			b.WriteString("  Manual cleanup: " + m.entry.ConsoleURL + "\n\n")
+			b.WriteString("  Manual cleanup: " + hyperlink(m.entry.ConsoleURL, m.entry.ConsoleURL) + "\n\n")
 		}
 		b.WriteString(helpStyle.Render("[esc/n/enter] keep credential, retry later    [d] delete locally anyway"))
 	}

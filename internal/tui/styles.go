@@ -39,6 +39,34 @@ var (
 	// the hint pops next to the affordance it describes. Bold
 	// default-fg works across terminal themes — no specific color.
 	actionHintStyle = lipgloss.NewStyle().Bold(true)
+)
+
+// hyperlink wraps text in an OSC 8 sequence so terminals that
+// support it render `text` as a clickable hyperlink to url.
+// Modern terminals (iTerm2, kitty, WezTerm, Ghostty, recent
+// Terminal.app, gnome-terminal, Alacritty ≥0.13, tmux ≥3.4 with
+// passthrough configured) strip the escape and show only `text`
+// when not clicked. Older terminals may render the raw bytes as
+// garbage — ctrl+o keybinds remain the universal fallback for
+// every URL we expose.
+//
+// Empty url disables the wrapping (returns text as-is). Empty
+// text falls back to url as the visible label.
+//
+// Composes safely with lipgloss styles: wrap pre-styled text and
+// the SGR sequences land inside the OSC 8 anchor (terminal
+// applies both color and clickability).
+func hyperlink(url, text string) string {
+	if url == "" {
+		return text
+	}
+	if text == "" {
+		text = url
+	}
+	return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\"
+}
+
+var (
 
 	// Row state styles. Diff colors (green/red) take priority over the
 	// requested badge tint, since target≠realized means the user has decided.
