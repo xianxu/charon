@@ -734,16 +734,29 @@ func (s *Server) resolveToken(p *Provider, account string) (token, resolvedAccou
 		return "", account, nil, err
 	}
 
-	// AuthURLParamKey routes (Google AI Studio): the credential is
-	// stored under "google" alongside the OAuth tokens; the key
-	// material lives in cred.AIStudio. No scopes, no refresh — the
-	// key is static until rotated/revoked.
-	if p.Auth == AuthURLParamKey {
+	// AI Studio: AuthQuery routes whose credential is stored under
+	// "google" alongside the OAuth tokens; the key material lives
+	// in cred.AIStudio. Distinct from generic catalog AuthQuery use
+	// because the AI Studio key piggybacks on an OAuth credential
+	// rather than being its own TypeCatalog entry. No scopes, no
+	// refresh — the key is static until rotated/revoked.
+	if p.Auth == AuthQuery && cred.CredType() == vault.TypeOAuth {
 		if cred.AIStudio == nil || cred.AIStudio.KeyMaterial == "" {
 			return "", account, nil, fmt.Errorf("no AI Studio key for %s/%s — run 'charon auth' and complete cloud-platform setup", vaultName, account)
 		}
 		s.tokenCache.Store(cacheKey, &cachedToken{token: cred.AIStudio.KeyMaterial})
 		return cred.AIStudio.KeyMaterial, account, nil, nil
+	}
+
+	// Catalog (Tier 3) credentials: pasted key in cred.Catalog.
+	// No scopes, no refresh — static until the user rotates locally
+	// or invokes the catalog revoke pathway (#15 M4b).
+	if cred.CredType() == vault.TypeCatalog {
+		if cred.Catalog == nil || cred.Catalog.KeyMaterial == "" {
+			return "", account, nil, fmt.Errorf("catalog credential %s/%s has no key material", vaultName, account)
+		}
+		s.tokenCache.Store(cacheKey, &cachedToken{token: cred.Catalog.KeyMaterial})
+		return cred.Catalog.KeyMaterial, account, nil, nil
 	}
 
 	// Admin-key credentials (OpenAI service-account keys, future

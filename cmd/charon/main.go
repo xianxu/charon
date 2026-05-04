@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/xianxu/charon/internal/oauth"
+	"github.com/xianxu/charon/internal/providers/catalog"
 	"github.com/xianxu/charon/internal/providers/gcp"
 	"github.com/xianxu/charon/internal/providers/openai"
 	"github.com/xianxu/charon/internal/proxy"
@@ -75,6 +76,13 @@ func serveCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Start the HTTPS credential proxy",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cat, err := catalog.Load()
+			if err != nil {
+				return fmt.Errorf("failed to load provider catalog: %w", err)
+			}
+			catalog.Register(cat)
+			log.Printf("catalog: registered %d Tier-3 provider(s)", len(cat.Entries))
+
 			ca, err := proxy.LoadOrCreateCA()
 			if err != nil {
 				return fmt.Errorf("failed to init CA: %w", err)
@@ -736,40 +744,61 @@ func vaultCmd() *cobra.Command {
 }
 
 func vaultSetCmd() *cobra.Command {
-	var provider, account, token, ttl string
+	var provider, account, token, ttl, credType string
 	cmd := &cobra.Command{
 		Use:   "set",
-		Short: "Manually store a token (for testing)",
+		Short: "Manually store a credential (for testing)",
+		Long: `Store a credential directly in the vault. Used for testing
+and bootstrap; the production path for catalog providers is the TUI
+add-account flow (#15 M4).
+
+  --type oauth   (default) reads --token; stores as flat AccessToken
+  --type catalog reads --token; stores as cred.Catalog.KeyMaterial
+                 (the format used by Tier-3 paste-and-revoke providers)`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if provider == "" || account == "" || token == "" {
 				return fmt.Errorf("--provider, --account, and --token are required")
 			}
 			cred := &vault.Credential{
-				Provider:    provider,
-				Account:     account,
-				AccessToken: token,
+				Provider: provider,
+				Account:  account,
 			}
-			if ttl != "" {
-				d, err := time.ParseDuration(ttl)
-				if err != nil {
-					return fmt.Errorf("invalid --ttl: %w", err)
+			switch credType {
+			case "", "oauth":
+				cred.AccessToken = token
+				if ttl != "" {
+					d, err := time.ParseDuration(ttl)
+					if err != nil {
+						return fmt.Errorf("invalid --ttl: %w", err)
+					}
+					cred.Expiry = time.Now().Add(d)
 				}
-				cred.Expiry = time.Now().Add(d)
+			case "catalog":
+				if ttl != "" {
+					return fmt.Errorf("--ttl not supported for --type catalog (catalog keys are static)")
+				}
+				cred.Type = vault.TypeCatalog
+				cred.Catalog = &vault.CatalogData{
+					KeyMaterial: token,
+					AddedAt:     time.Now(),
+				}
+			default:
+				return fmt.Errorf("--type %q must be one of {oauth, catalog}", credType)
 			}
 			v := newVault()
-			err := v.Set(cred)
-			if err != nil {
+			if err := v.Set(cred); err != nil {
 				return err
 			}
 			notifyProxyCacheClear(resolveAddr(cmd))
-			fmt.Fprintf(cmd.OutOrStdout(), "Stored token for %s/%s\n", provider, account)
+			fmt.Fprintf(cmd.OutOrStdout(), "Stored %s credential for %s/%s\n", cred.CredType(), provider, account)
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&provider, "provider", "", "credential provider (e.g. google)")
-	cmd.Flags().StringVar(&account, "account", "", "account identifier (e.g. user@gmail.com)")
-	cmd.Flags().StringVar(&token, "token", "", "access token")
-	cmd.Flags().StringVar(&ttl, "ttl", "", "token time-to-live (e.g. 1h, 30m, 3600s). omit for no expiry")
+	cmd.Flags().StringVar(&provider, "provider", "", "credential provider (e.g. google, anthropic)")
+	cmd.Flags().StringVar(&account, "account", "", "account identifier (e.g. user@gmail.com, personal)")
+	cmd.Flags().StringVar(&token, "token", "", "token / API key value")
+	cmd.Flags().StringVar(&ttl, "ttl", "", "token time-to-live (e.g. 1h, 30m, 3600s). omit for no expiry. oauth only")
+	cmd.Flags().StringVar(&credType, "type", "oauth", "credential type: oauth or catalog")
 	return cmd
 }
 

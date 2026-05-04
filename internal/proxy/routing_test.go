@@ -128,8 +128,8 @@ func TestInjectAuth_DefaultIsBearer(t *testing.T) {
 	}
 }
 
-func TestInjectAuth_URLParamKey(t *testing.T) {
-	p := &Provider{Name: "google-aistudio", Auth: AuthURLParamKey}
+func TestInjectAuth_QueryDefaultParam(t *testing.T) {
+	p := &Provider{Name: "google-aistudio", Auth: AuthQuery}
 	req := reqWithURL(t, "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent")
 	if err := p.InjectAuth(req, "AIzaSy_FAKE"); err != nil {
 		t.Fatal(err)
@@ -143,8 +143,8 @@ func TestInjectAuth_URLParamKey(t *testing.T) {
 	}
 }
 
-func TestInjectAuth_URLParamKeyPreservesExistingQuery(t *testing.T) {
-	p := &Provider{Name: "google-aistudio", Auth: AuthURLParamKey}
+func TestInjectAuth_QueryPreservesExistingQuery(t *testing.T) {
+	p := &Provider{Name: "google-aistudio", Auth: AuthQuery}
 	req := reqWithURL(t, "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?alt=json&prettyPrint=true")
 	if err := p.InjectAuth(req, "AIzaSy_FAKE"); err != nil {
 		t.Fatal(err)
@@ -158,6 +158,73 @@ func TestInjectAuth_URLParamKeyPreservesExistingQuery(t *testing.T) {
 	}
 }
 
+func TestInjectAuth_Header(t *testing.T) {
+	p := &Provider{
+		Name:       "anthropic",
+		Auth:       AuthHeader,
+		HeaderName: "x-api-key",
+	}
+	req := reqWithURL(t, "https://api.anthropic.com/v1/messages")
+	if err := p.InjectAuth(req, "sk-ant-FAKE"); err != nil {
+		t.Fatal(err)
+	}
+	if got := req.Header.Get("x-api-key"); got != "sk-ant-FAKE" {
+		t.Errorf("x-api-key = %q, want %q", got, "sk-ant-FAKE")
+	}
+	if got := req.Header.Get("Authorization"); got != "" {
+		t.Errorf("AuthHeader must not set Authorization, got %q", got)
+	}
+}
+
+func TestInjectAuth_HeaderRequiresName(t *testing.T) {
+	p := &Provider{Name: "x", Auth: AuthHeader}
+	if err := p.InjectAuth(reqWithURL(t, "https://example.com/x"), "tok"); err == nil {
+		t.Error("expected error when AuthHeader has no HeaderName")
+	}
+}
+
+func TestInjectAuth_BearerCustomPrefix(t *testing.T) {
+	// Some providers (e.g. Replicate) use "Token <key>" instead of "Bearer <key>".
+	p := &Provider{Name: "replicate", Auth: AuthBearer, HeaderPrefix: "Token "}
+	req := reqWithURL(t, "https://api.replicate.com/v1/predictions")
+	if err := p.InjectAuth(req, "r8_FAKE"); err != nil {
+		t.Fatal(err)
+	}
+	if got := req.Header.Get("Authorization"); got != "Token r8_FAKE" {
+		t.Errorf("Authorization = %q, want %q", got, "Token r8_FAKE")
+	}
+}
+
+func TestInjectAuth_ExtraHeaders(t *testing.T) {
+	p := &Provider{
+		Name:         "anthropic",
+		Auth:         AuthHeader,
+		HeaderName:   "x-api-key",
+		ExtraHeaders: map[string]string{"anthropic-version": "2023-06-01"},
+	}
+	req := reqWithURL(t, "https://api.anthropic.com/v1/messages")
+	if err := p.InjectAuth(req, "sk-ant-FAKE"); err != nil {
+		t.Fatal(err)
+	}
+	if got := req.Header.Get("anthropic-version"); got != "2023-06-01" {
+		t.Errorf("anthropic-version = %q, want %q", got, "2023-06-01")
+	}
+	if got := req.Header.Get("x-api-key"); got != "sk-ant-FAKE" {
+		t.Errorf("x-api-key = %q, want %q", got, "sk-ant-FAKE")
+	}
+}
+
+func TestInjectAuth_QueryCustomParam(t *testing.T) {
+	p := &Provider{Name: "x", Auth: AuthQuery, HeaderName: "api_key"}
+	req := reqWithURL(t, "https://api.example.com/v1/things")
+	if err := p.InjectAuth(req, "tok"); err != nil {
+		t.Fatal(err)
+	}
+	if got := req.URL.Query().Get("api_key"); got != "tok" {
+		t.Errorf("api_key param = %q, want tok", got)
+	}
+}
+
 func TestInjectAuth_UnsupportedMethod(t *testing.T) {
 	p := &Provider{Name: "test", Auth: "magic"}
 	if err := p.InjectAuth(reqWithURL(t, "https://example.com/x"), "tok"); err == nil {
@@ -165,13 +232,13 @@ func TestInjectAuth_UnsupportedMethod(t *testing.T) {
 	}
 }
 
-func TestProviderForHost_AIStudioGetsURLParamAuth(t *testing.T) {
+func TestProviderForHost_AIStudioGetsQueryAuth(t *testing.T) {
 	p := ProviderForHost("generativelanguage.googleapis.com")
 	if p == nil {
 		t.Fatal("expected AI Studio host to resolve")
 	}
-	if p.Auth != AuthURLParamKey {
-		t.Errorf("Auth = %q, want %q", p.Auth, AuthURLParamKey)
+	if p.Auth != AuthQuery {
+		t.Errorf("Auth = %q, want %q", p.Auth, AuthQuery)
 	}
 	if p.HasScopes {
 		t.Error("AI Studio routes have no scope semantics")

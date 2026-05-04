@@ -11,9 +11,9 @@ import (
 type AuthMethod string
 
 const (
-	AuthBearer      AuthMethod = "bearer"        // Authorization: Bearer <token>
-	AuthURLParamKey AuthMethod = "url_param_key" // ?key=<token> on URL (Google AI Studio)
-	// Future: AuthBasic, AuthHeader, AuthAWSSigV4
+	AuthBearer AuthMethod = "bearer" // Authorization: <prefix><token> (default prefix "Bearer ")
+	AuthHeader AuthMethod = "header" // <HeaderName>: <prefix><token> (custom header, e.g. x-api-key)
+	AuthQuery  AuthMethod = "query"  // append ?<HeaderName>=<token> (default param "key")
 )
 
 // Provider describes a credential provider and how to inject auth.
@@ -30,11 +30,26 @@ const (
 // when a routing provider piggybacks on another provider's credential
 // — e.g. the AI Studio route ("google-aistudio") looks up its key
 // from the underlying Google credential ("google").
+//
+// HeaderName, HeaderPrefix, and ExtraHeaders configure auth dispatch:
+//
+//   - AuthBearer: HeaderPrefix overrides "Bearer " (used by providers
+//     like Replicate that expect "Token <key>"). HeaderName ignored.
+//   - AuthHeader: HeaderName is required (e.g. "x-api-key").
+//     HeaderPrefix optional (empty = no prefix).
+//   - AuthQuery:  HeaderName is the query param name; defaults to "key"
+//     when empty (Google AI Studio's convention). HeaderPrefix ignored.
+//
+// ExtraHeaders are static headers attached to every proxied request
+// regardless of auth style (e.g. anthropic-version: 2023-06-01).
 type Provider struct {
 	Name          string
 	Auth          AuthMethod
 	HasScopes     bool
 	VaultProvider string
+	HeaderName    string
+	HeaderPrefix  string
+	ExtraHeaders  map[string]string
 }
 
 // VaultName returns the provider name to use for vault lookups,
@@ -46,23 +61,37 @@ func (p *Provider) VaultName() string {
 	return p.Name
 }
 
-// InjectAuth attaches credentials to req per the provider's AuthMethod.
-// AuthBearer sets the Authorization header; AuthURLParamKey appends
-// `?key=<token>` to the URL (Google AI Studio's auth model). The
-// proxy calls this once per request after resolving the credential.
+// InjectAuth attaches credentials to req per the provider's AuthMethod
+// and applies any static ExtraHeaders. The proxy calls this once per
+// request after resolving the credential.
 func (p *Provider) InjectAuth(req *http.Request, token string) error {
 	switch p.Auth {
 	case AuthBearer, "": // default to bearer
-		req.Header.Set("Authorization", "Bearer "+token)
-		return nil
-	case AuthURLParamKey:
+		prefix := p.HeaderPrefix
+		if prefix == "" {
+			prefix = "Bearer "
+		}
+		req.Header.Set("Authorization", prefix+token)
+	case AuthHeader:
+		if p.HeaderName == "" {
+			return fmt.Errorf("AuthHeader requires HeaderName")
+		}
+		req.Header.Set(p.HeaderName, p.HeaderPrefix+token)
+	case AuthQuery:
+		param := p.HeaderName
+		if param == "" {
+			param = "key"
+		}
 		q := req.URL.Query()
-		q.Set("key", token)
+		q.Set(param, token)
 		req.URL.RawQuery = q.Encode()
-		return nil
 	default:
 		return fmt.Errorf("unsupported auth method: %s", p.Auth)
 	}
+	for k, v := range p.ExtraHeaders {
+		req.Header.Set(k, v)
+	}
+	return nil
 }
 
 // HostToProvider maps exact API hosts to credential providers.
@@ -72,6 +101,10 @@ func (p *Provider) InjectAuth(req *http.Request, token string) error {
 // shares the host but doesn't transit through the agent's runtime
 // flow — admin calls go through internal/providers/openai during
 // the TUI mint/revoke flows, not via this proxy.
+//
+// Catalog (Tier 3) entries are registered into this map at startup
+// by catalog.Register(); compiled-provider entries declared here
+// take precedence on any hostname overlap.
 var HostToProvider = map[string]*Provider{
 	"api.openai.com": {Name: "openai", Auth: AuthBearer, HasScopes: false},
 	// AI Studio runs on its own host with API-key URL-param auth,
@@ -82,7 +115,7 @@ var HostToProvider = map[string]*Provider{
 	// cred.AIStudio.KeyMaterial.
 	"generativelanguage.googleapis.com": {
 		Name:          "google-aistudio",
-		Auth:          AuthURLParamKey,
+		Auth:          AuthQuery,
 		HasScopes:     false,
 		VaultProvider: "google",
 	},
