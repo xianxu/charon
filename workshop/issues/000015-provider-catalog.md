@@ -217,23 +217,27 @@ Caveats:
 Detailed plan in
 `workshop/plans/000015-provider-catalog-plan.md` after approval.
 
-Sketch milestones:
+Sketch milestones (post-2026-05-03 scope reduction — see `## Log`):
 
-1. **M1** — Define catalog schema; commit initial YAML with the
-   13 providers above.
+1. **M1** — Define catalog schema; commit initial YAML with
+   **Anthropic only** as the seed entry.
 2. **M2** — Catalog loader at startup; surface entries in the TUI
-   provider picker with fuzzy search.
+   provider picker with filterable list (`bubbles/list` filter is
+   sufficient; designed to grow).
 3. **M3** — Generic per-host router that consumes catalog entries
-   for hostname → auth-shape → keychain-entry lookup.
+   for hostname → auth-shape → keychain-entry lookup. Adds
+   `AuthHeader` and renames `AuthURLParamKey` → `AuthQuery`.
 4. **M4** — TUI add-account flow: pick from catalog → "[Open]"
-   buttons for signup / key URLs → paste → store. Test against
-   ~3 providers end-to-end.
-5. **M5** — `--verify` flag (optional health-check post-paste).
-6. **M6** — Docs: README mentions the catalog; new
-   `docs/providers.md` lists the curated set; threat model notes
-   the catalog is curated (not user-extensible to arbitrary URLs
-   for security).
-7. **M7** — Onboarding polish: when the user first runs `charon
+   buttons for signup / key URLs → paste → store. End-to-end
+   acceptance against Anthropic.
+5. **M4b** — Generic catalog revoke dispatcher (list_endpoint +
+   revoke_endpoint). Anthropic is the first user.
+6. **M5** — `--verify` flag (optional health-check post-paste).
+7. **M6** — Docs: README mentions the catalog; new
+   `docs/providers.md` frames it as a generic API-key paste-and-
+   revoke mechanism (not LLM-specific); threat model notes the
+   catalog is curated (not user-extensible to arbitrary URLs).
+8. **M7** — Onboarding polish: when the user first runs `charon
    auth` with no providers configured, default to "show catalog"
    rather than the empty-list view.
 
@@ -322,3 +326,17 @@ broader rationale.
 - Curating the catalog is ongoing work (#000012 item I called
   this out for KnownApps; same applies here). Bundle IDs and
   hostname patterns shift annually; PRs happen as needed.
+
+## Log
+
+- **2026-05-03 — Scope reduction.** Catalog mechanism preserved;
+  seed shrunk from 13 LLM-inference providers to **Anthropic only**.
+  Reframed as a generic API-key paste-and-revoke catalog (not LLM-
+  specific) — API-key auth covers many use cases beyond inference,
+  and the data-driven mechanism is worth building even with one
+  initial entry. The 12 dropped LLM providers (Groq, Cohere, Mistral,
+  xAI, Perplexity, Together, Fireworks, DeepInfra, Replicate,
+  OpenRouter, Voyage, Jina, Anyscale) become aspirational fodder —
+  added as YAML PRs when actually needed. Revised estimate ~7–8 hr
+  (vs. v2 best-guess of 12 hr). Detailed plan at
+  `workshop/plans/000015-provider-catalog-plan.md`.
