@@ -428,3 +428,61 @@ Caveats:
   prod proxy will boot disarmed. Existing agents will see 407s
   until `charon arm` is called. Phase D's menubar will be the
   ergonomic path; until then it's CLI.
+
+- **2026-05-01 — Phase B done.** Caller identification + audit
+  enrichment.
+  - `internal/proxy/peerinfo.go`: `ResolvePeer(peerPort)` shells
+    out to `lsof -nP -iTCP:<port> -sTCP:ESTABLISHED -Fpn` and
+    `ps -o comm=,ppid=` for the parent walk. Pure shell-out for
+    MVP; the spec's CGo path (proc_listpids + proc_pidinfo) is
+    deferred — saves ~50ms but adds 200 lines of CGo. Per-CONNECT
+    one-shot, amortized over the tunnel.
+  - `AuditEntry` gains `peer_pid`/`peer_exe`/`peer_argv0`/
+    `peer_parent_chain` (best-effort; absent when lookup fails).
+    Per the §3 contract: never on the auth path.
+  - `handleConnect` resolves once at CONNECT, stamps every
+    request entry inside the tunnel.
+  - Test: real-TCP self-test (test process is both client +
+    server, looks up its own PID via lsof). PID-match is the
+    contract; exe-via-ps is best-effort.
+
+- **2026-05-01 — Phase E done.** Stats Tier 1 + Tier 2.
+  - `internal/proxy/stats.go`: `bodyTap` wraps `resp.Body` to
+    count total bytes (Tier 1) and sample the first 1 MiB for
+    Tier 2 array counting. Sampling is non-destructive
+    observation — the body still streams unaltered to the
+    client.
+  - `countTopLevelItems` walks JSON: top-level array → len; top-
+    level object → sum of array-valued field lengths. Captures
+    Google's `messages`, OpenAI's `data`, GitHub's `items`,
+    AWS-style `Items`. Skip on streaming content-types
+    (text/event-stream, application/x-ndjson).
+  - `AuditEntry` gains `req_bytes` / `resp_bytes` /
+    `resp_content_type` / `items_returned`. items is a pointer
+    so 0-vs-unknown is distinguishable.
+  - Audit log moved to AFTER `resp.Write` so tap counters are
+    final.
+  - Tests: tap counts + samples, cap behavior under adversarial
+    read patterns, top-array shapes, Google list shape, multi-
+    array sum, null/scalar/parse-error rejection, content-type
+    matrix, secret-redaction (function only returns int+bool;
+    can't leak content even if tests evolve).
+
+- **2026-05-01 — Phase F done.** CLI: `charon who` and
+  `charon stats`.
+  - `AuditLog` keeps a bounded in-memory ring (5000 entries) of
+    recent audit entries alongside the file/stderr write. Memory
+    cost ~100KB at typical entry size.
+  - `GET /audit/recent?since=1h` exposes the ring as JSON.
+  - `charon who [--since 5m]` groups recent entries by caller exe,
+    shows top-N hosts per caller. Default window 5m for "what's
+    happening right now."
+  - `charon stats [--since 1h]` aggregates `(exe, host) → calls,
+    items, req_bytes, resp_bytes`. Sorted by call count desc.
+  - Both support `--json` for scripting.
+
+  Combined with B+E, this is the observability half of the issue:
+  the user can now see what's been talking to their proxy, from
+  which exes, at what volume, returning how many items. Without
+  C+D, there's no consent oracle UX yet — but the gate from A
+  works via CLI, and the audit story is complete.

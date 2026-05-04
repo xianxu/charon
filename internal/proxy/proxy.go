@@ -138,6 +138,8 @@ func (s *Server) handleDirect(w http.ResponseWriter, r *http.Request) {
 		s.handleSessionDisarm(w, r)
 	case "/session/status":
 		s.handleSessionStatus(w, r)
+	case "/audit/recent":
+		s.handleAuditRecent(w, r)
 	case "/healthz":
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"status":"ok","addr":%q}`, s.Addr)
@@ -158,6 +160,17 @@ func (s *Server) handleDirect(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "charon proxy — use HTTPS_PROXY to route traffic", http.StatusOK)
 	}
+}
+
+// resolvePeerFromConn extracts the remote (peer) port from a hijacked
+// TCP connection and runs the lsof+ps lookup. Returns nil on any
+// failure path; callers tolerate nil and audit "unknown".
+func resolvePeerFromConn(c net.Conn) *PeerInfo {
+	tcp, ok := c.RemoteAddr().(*net.TCPAddr)
+	if !ok {
+		return nil
+	}
+	return ResolvePeer(tcp.Port)
 }
 
 // handleConnect handles HTTPS CONNECT tunneling with token injection.
@@ -198,6 +211,12 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer clientConn.Close()
+
+	// Caller identification (#16 B): resolve once per CONNECT and
+	// reuse for every request inside the tunnel. The peer's local
+	// source port = our RemoteAddr port; passing that to ResolvePeer
+	// finds which process owns the socket.
+	peer := resolvePeerFromConn(clientConn)
 
 	_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 
@@ -245,6 +264,14 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 			Path:      req.URL.Path,
 			Provider:  provider.Name,
 			Account:   resolvedAccount,
+		}
+		// Stamp peer info onto every request entry inside this tunnel.
+		// Lookup happened once at CONNECT (above); cheap to copy.
+		if peer != nil {
+			entry.PeerPID = peer.PID
+			entry.PeerExe = peer.Exe
+			entry.PeerArgv0 = peer.Argv0
+			entry.PeerParentChain = peer.ParentChain
 		}
 
 		if err != nil {
@@ -304,6 +331,12 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		req.URL.Host = host
 		req.RequestURI = ""
 
+		// Tier 1 stats: req_bytes from request Content-Length (when
+		// known; -1 from Go's transport for chunked uploads).
+		if req.ContentLength > 0 {
+			entry.ReqBytes = req.ContentLength
+		}
+
 		resp, err := s.transport().RoundTrip(req)
 		if err != nil {
 			entry.Error = err.Error()
@@ -314,8 +347,14 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 
 		entry.StatusCode = resp.StatusCode
-		entry.LatencyMs = time.Since(start).Milliseconds()
-		s.Audit.Log(entry)
+		entry.RespContentType = resp.Header.Get("Content-Type")
+
+		// Wrap the body so we can count total bytes streamed (Tier 1)
+		// and sample the first statsBodyCap for Tier 2 array counting.
+		// Sampling is a non-destructive observation — the body still
+		// streams unaltered to the downstream client.
+		tap := newBodyTap(resp.Body, statsBodyCap)
+		resp.Body = tap
 
 		// Ensure response has proper framing so the client knows where the body ends.
 		// Go's transport strips Transfer-Encoding and dechunks the body, leaving
@@ -326,6 +365,18 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 		_ = resp.Write(tlsClientConn)
 		_ = resp.Body.Close()
+
+		// Stats finalization (post-write): byte count is exact;
+		// item count only if Content-Type is JSON-ish AND the body
+		// fit within the cap.
+		entry.RespBytes = tap.Total
+		if !tap.Capped && isJSONContentType(entry.RespContentType) {
+			if n, ok := countTopLevelItems(tap.sample.Bytes()); ok {
+				entry.ItemsReturned = &n
+			}
+		}
+		entry.LatencyMs = time.Since(start).Milliseconds()
+		s.Audit.Log(entry)
 
 		// Honor Connection: close from either client or upstream.
 		if req.Close || resp.Close {

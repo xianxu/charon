@@ -230,6 +230,9 @@ manifest), not OpenAI's internal project ID.
 | Declare required scopes (optional)  | `X-Charon-Scope: <short>,<short>` header         |
 | Vertex URL                          | Build from `manifest.vertex.project_id` + region |
 | AI Studio URL                       | `generativelanguage.googleapis.com` (key auto-attached) |
+| Arm / disarm consent gate           | `charon arm [--ttl 1h]` / `charon disarm`        |
+| See live activity                   | `charon who` / `charon who --since 1h`           |
+| Aggregated traffic                  | `charon stats --since 1h`                        |
 
 ---
 

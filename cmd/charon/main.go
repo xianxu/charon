@@ -58,6 +58,8 @@ func main() {
 	root.AddCommand(instructionsCmd())
 	root.AddCommand(armCmd())
 	root.AddCommand(disarmCmd())
+	root.AddCommand(whoCmd())
+	root.AddCommand(statsCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
