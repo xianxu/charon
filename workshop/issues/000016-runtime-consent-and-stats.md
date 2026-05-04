@@ -388,10 +388,11 @@ Caveats:
 
 ### Phase H — milestone code review
 
-- [ ] Invoke `superpowers:requesting-code-review` →
+- [x] Invoke `superpowers:requesting-code-review` →
       `superpowers:code-reviewer` after each multi-phase chunk
-      (A+B, C+D, E+F+G), `BASE_SHA` = previous milestone close
-- [ ] Address Critical / Important findings before next phase
+      (A+B+E+F → 9803c11; C+D+G → this commit), `BASE_SHA` =
+      previous milestone close
+- [x] Address Critical / Important findings before next phase
 
 ## Log
 
@@ -614,3 +615,82 @@ Caveats:
   drive arm directly?" finds the answer there: the gate doesn't
   defend against an actively-using user; it defends against
   agent activity while the user is away.
+
+- **2026-05-03 — Phase H done (C+D+G review).** Reviewed `9803c11..HEAD`
+  (5 commits: phases C, D MVP + refinements, G). Zero Critical;
+  4 Important; all four addressed in this commit. Minor and Notes
+  filed for follow-up where appropriate.
+
+  Important findings + fixes:
+
+  1. **`SecCodeCheckValidity` ran with `kSecCSDefaultFlags`.**
+     Default flags accept some forms of bundle tampering depending
+     on macOS version. For a security-critical trust edge that
+     gates the consent oracle, this needs strict validation. Fixed
+     by passing `kSecCSStrictValidate | kSecCSCheckAllArchitectures
+     | kSecCSCheckNestedCode` in `runtime_darwin.go`. Connect-time
+     check; perf cost irrelevant.
+
+  2. **Idle-TTL doc/code drift.** Atlas + threat-model claimed
+     "reset on each proxied request"; actually `IsArmed()` fires
+     once per CONNECT and once per plain-HTTP request — requests
+     multiplexed inside an open MITM tunnel never re-check. So a
+     long-running keep-alive tunnel with intermittent internal
+     traffic can let the idle timer lapse. Updated both docs to
+     match code. The behaviour itself is fine (mid-tunnel disarm
+     would RST live tunnels and confuse agents); the doc was
+     misleading.
+
+  3. **Disarmed-audit peer attribution didn't actually work in
+     production.** `connFromResponseWriter` relies on the writer
+     exposing `Conn() net.Conn`, which the stdlib `http.response`
+     does not — only test shims do. So every disarmed-gate audit
+     entry under `make install` was missing PID/exe — exactly the
+     visibility the feature exists to provide. Fixed by adding a
+     `ConnContext` hook on the proxy's `http.Server` that stashes
+     the per-conn `net.Conn` into the request context, plus a new
+     `peerConnForRequest(w, r)` helper that tries the writer
+     interface first (test path) and falls back to context lookup
+     (production). All pre-hijack peer-attribution call sites
+     migrated.
+
+  4. **No tests for `verifyPeerDR` / `peerPID`.** The trust edge's
+     C-side cgo wrappers had zero direct coverage; the existing
+     socket tests run under the dev-mode bypass and never hit the
+     cgo path. Added `runtime_peer_darwin_test.go` with five
+     tests: peerPID round-trip, peerPID type-assert, verifyPeerDR
+     against foreign identifier (negative), malformed requirement
+     (negative), and dead/foreign pid (negative). All fail-closed
+     pins — would catch a regression in finding 1's strict flags
+     or a polarity flip in the rc==0 check.
+
+  Minor findings logged for follow-up (all individually low
+  priority; none blocked closure):
+  - Wire-protocol version field on the runtime socket (defer
+    until we actually need rolling upgrades).
+  - `Listen` → `Chmod` race window for the unix socket (single-
+    user box; window is microseconds).
+  - Synchronous arm/disarm RPCs on the click goroutine (could
+    freeze UI on a stuck proxy; 3 s timeout makes the freeze
+    bounded).
+  - `pollLoop` lacks shutdown context (irrelevant today; matters
+    once anything besides systray's exit drives shutdown).
+  - `Close()` re-evaluates the socket path instead of unlinking
+    the bound one (test-only brittleness).
+
+  Notes worth recording:
+  - cgo memory ownership in `runtime_darwin.go` is correct — all
+    CF objects have matching CFRelease on every error path; ARC
+    is not on by design (this is plain C, not Obj-C).
+  - cgo memory ownership in `notify_darwin.go` is correct under
+    `-fobjc-arc`.
+  - Build-tag asymmetry between `runtime_{darwin,other}.go`
+    (`darwin && cgo`) and `runtime_peer_{darwin,other}.go`
+    (`darwin`) is gratuitous but fail-closed under
+    `darwin && !cgo` (no real builds).
+  - 0600 socket perms verified by existing test.
+  - Threat-model A1b claims verified against code:
+    `SessionDefaultTTL=1h`, `SessionAbsoluteCap=8h`,
+    `SessionIdleTTL=30m` (`session.go:8-20`).
+
+  #16 closes after this commit.

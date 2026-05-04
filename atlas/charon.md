@@ -221,8 +221,13 @@ disarmed; persisting armed state across restarts would defeat the
 whole point.
 
 Two timers gate an armed session, both in `internal/proxy/session.go`:
-- **Idle TTL — 30m.** Resets on every proxied request. Without
-  traffic, the session auto-disarms.
+- **Idle TTL — 30m.** Resets on every gate evaluation, which fires
+  once at CONNECT setup and once per plain-HTTP request. Requests
+  multiplexed inside an already-open MITM tunnel do *not* re-check
+  the gate, so a long-lived keep-alive tunnel with intermittent
+  internal activity can still see the idle timer lapse — at which
+  point the *next* CONNECT is rejected (existing tunnels drain by
+  design; agents tolerate TCP RST poorly).
 - **Absolute cap — 8h.** Hard ceiling regardless of activity; a
   chatty agent can't keep the session alive forever.
 - **Default TTL — 1h** when arm is called without an explicit

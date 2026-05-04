@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -106,10 +107,24 @@ func (s *Server) ListenAndServe() error {
 	srv := &http.Server{
 		Addr:    s.Addr,
 		Handler: s,
+		// Stash the underlying net.Conn into the request context so
+		// connFromResponseWriter can recover it pre-hijack. The stdlib
+		// http.response struct does not expose Conn(), so without this
+		// hook the disarmed-gate audit path (#16) can't resolve the
+		// peer's PID and the user loses visibility into who knocked
+		// while the session was off.
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			return context.WithValue(ctx, connCtxKey{}, c)
+		},
 	}
 	log.Printf("charon proxy listening on %s", s.Addr)
 	return srv.ListenAndServe()
 }
+
+// connCtxKey is the context-key type for the per-conn net.Conn
+// stashed by ConnContext. Unexported empty struct so it can't
+// collide with other packages' keys.
+type connCtxKey struct{}
 
 // ServeHTTP handles both CONNECT (HTTPS) and plain HTTP requests.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -437,7 +452,7 @@ func (s *Server) tunnelPassthrough(w http.ResponseWriter, r *http.Request, host 
 	}
 	// Best-effort peer attribution; same logic as the credentialed
 	// CONNECT path above.
-	if peer := resolvePeerFromConn(connFromResponseWriter(w)); peer != nil {
+	if peer := resolvePeerFromConn(peerConnForRequest(w, r)); peer != nil {
 		entry.PeerPID = peer.PID
 		entry.PeerExe = peer.Exe
 		entry.PeerArgv0 = peer.Argv0
@@ -509,8 +524,9 @@ func (s *Server) tunnelPassthrough(w http.ResponseWriter, r *http.Request, host 
 // background processes hammering the proxy while the user is away
 // should still appear in `charon who` so the user can see who and
 // where, even though no traffic actually flowed. Peer attribution
-// is best-effort (same as the credentialed paths); we don't have a
-// hijacked conn yet, so we go through connFromResponseWriter.
+// is best-effort (same as the credentialed paths); pre-hijack we
+// recover the conn via peerConnForRequest, which works for both
+// production traffic (Server.ConnContext) and test shims.
 func (s *Server) logDisarmedDenial(w http.ResponseWriter, r *http.Request, method, hostname, path string) {
 	if s.Audit == nil {
 		return
@@ -523,7 +539,7 @@ func (s *Server) logDisarmedDenial(w http.ResponseWriter, r *http.Request, metho
 		StatusCode: http.StatusProxyAuthRequired,
 		Error:      "session_disarmed",
 	}
-	if peer := resolvePeerFromConn(connFromResponseWriter(w)); peer != nil {
+	if peer := resolvePeerFromConn(peerConnForRequest(w, r)); peer != nil {
 		entry.PeerPID = peer.PID
 		entry.PeerExe = peer.Exe
 		entry.PeerArgv0 = peer.Argv0
@@ -532,16 +548,46 @@ func (s *Server) logDisarmedDenial(w http.ResponseWriter, r *http.Request, metho
 	s.Audit.Log(entry)
 }
 
-// connFromResponseWriter best-effort extracts a *net.Conn from a
-// ResponseWriter for peer-resolution before hijack. Returns nil if
-// the writer doesn't expose a connection (post-hijack we have a
-// real conn anyway).
+// connFromResponseWriter best-effort extracts the underlying
+// net.Conn from an http.ResponseWriter for peer resolution
+// before any hijack. The stdlib http.response struct doesn't
+// expose Conn(), so for production traffic we recover it from
+// the request context populated by Server.ConnContext (see
+// ListenAndServe). The interface fallback is kept for tests
+// that supply a custom ResponseWriter shim.
 func connFromResponseWriter(w http.ResponseWriter) net.Conn {
 	type connHolder interface{ Conn() net.Conn }
 	if h, ok := w.(connHolder); ok {
-		return h.Conn()
+		if c := h.Conn(); c != nil {
+			return c
+		}
 	}
 	return nil
+}
+
+// connFromRequest looks up the per-conn net.Conn stashed by the
+// Server.ConnContext hook. Returns nil if the request didn't go
+// through that hook (e.g. fully synthetic httptest requests).
+func connFromRequest(r *http.Request) net.Conn {
+	if r == nil || r.Context() == nil {
+		return nil
+	}
+	if c, ok := r.Context().Value(connCtxKey{}).(net.Conn); ok {
+		return c
+	}
+	return nil
+}
+
+// peerConnForRequest returns whichever conn-source yields a real
+// net.Conn first: the response-writer interface (hit by tests with
+// custom shims) or the request's stashed ConnContext value (hit
+// by production traffic). Pre-hijack callers use this instead of
+// connFromResponseWriter directly.
+func peerConnForRequest(w http.ResponseWriter, r *http.Request) net.Conn {
+	if c := connFromResponseWriter(w); c != nil {
+		return c
+	}
+	return connFromRequest(r)
 }
 
 // handleHTTP handles plain HTTP requests (non-CONNECT). Gated on

@@ -436,8 +436,13 @@ with a structured JSON body pointing the caller at `charon arm` or
 the menubar dot. `charon serve` boots **disarmed** — re-arming is a
 user click, never automatic. Two timers gate an armed session:
 
-- **Idle TTL — 30 min.** Reset on each proxied request. Without
-  traffic, auto-disarms.
+- **Idle TTL — 30 min.** Reset whenever the gate evaluates: once
+  per CONNECT setup, once per plain-HTTP request. Requests
+  multiplexed inside an open MITM tunnel do not re-check the gate,
+  so a long-running keep-alive tunnel with intermittent internal
+  activity can still let the idle timer lapse — at which point new
+  CONNECTs are rejected. Existing tunnels drain on disarm by
+  design (mid-tunnel RST breaks more agents than it protects).
 - **Absolute cap — 8 h.** Hard ceiling regardless of activity. The
   load-bearing one — a chatty agent could otherwise keep the idle
   timer alive forever on its own traffic.

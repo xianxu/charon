@@ -56,7 +56,15 @@ static int charon_peer_satisfies_requirement(int pid, const char *requirement_st
         return 0;
     }
 
-    rc = SecCodeCheckValidity(peer, kSecCSDefaultFlags, req);
+    // Strict validation: reject bundles with detached signatures,
+    // tampered nested code, or resource manifests broken outside
+    // the seal. kSecCSDefaultFlags accepts some of those depending
+    // on macOS version; this is a security-critical trust edge so
+    // the perf cost (one connect-time check) is irrelevant.
+    SecCSFlags checkFlags = kSecCSStrictValidate
+                          | kSecCSCheckAllArchitectures
+                          | kSecCSCheckNestedCode;
+    rc = SecCodeCheckValidity(peer, checkFlags, req);
     CFRelease(peer);
     CFRelease(req);
     return (rc == 0) ? 1 : 0;
