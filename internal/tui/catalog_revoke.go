@@ -168,14 +168,13 @@ func (m catalogRevokeModel) updateUpstreamFailed(msg tea.Msg) (catalogRevokeMode
 	switch k.String() {
 	case "ctrl+c":
 		return m, tea.Quit
-	case "n", "esc":
-		// Abort entirely — leave the credential in vault. User can
-		// retry revoke later.
-		return m, func() tea.Msg { return catalogRevokeCancelMsg{} }
-	default:
-		// Any other key → fall back to local-delete with a note that
-		// upstream still has the key live. Same posture as Google
-		// OAuth revoke flow handling AI Studio cleanup failures.
+	case "d":
+		// Explicit "delete locally anyway" — for the cases where
+		// upstream-revoke can't ever succeed (key already revoked at
+		// provider, provider deprecated, permanent auth-scope error
+		// the user accepts). Non-default key on purpose: the user is
+		// abandoning charon's handle on an upstream credential that
+		// might still be active.
 		if err := m.v.Delete(m.entry.ID, m.account); err != nil {
 			m.err = fmt.Errorf("local delete failed: %w", err)
 			return m, nil
@@ -187,6 +186,14 @@ func (m catalogRevokeModel) updateUpstreamFailed(msg tea.Msg) (catalogRevokeMode
 				m.entry.ID, m.account, m.err)
 		}
 		return m, func() tea.Msg { return catalogRevokeDoneMsg{statusNote: note} }
+	default:
+		// Any other key (including esc, n, enter) → cancel and
+		// preserve the credential. Catalog credentials are only
+		// useful as charon's handle on the upstream key; throwing
+		// away the handle on a transient failure (network blip, rate
+		// limit, scope-fixable auth) means the user has to re-paste
+		// to retry. Default safe action: keep, retry later.
+		return m, func() tea.Msg { return catalogRevokeCancelMsg{} }
 	}
 }
 
@@ -231,7 +238,7 @@ func (m catalogRevokeModel) View() string {
 		if m.entry.ConsoleURL != "" {
 			b.WriteString("  Manual cleanup: " + m.entry.ConsoleURL + "\n\n")
 		}
-		b.WriteString(helpStyle.Render("any key: remove locally anyway    [n/esc] keep credential"))
+		b.WriteString(helpStyle.Render("[esc/n/enter] keep credential, retry later    [d] delete locally anyway"))
 	}
 	return b.String()
 }

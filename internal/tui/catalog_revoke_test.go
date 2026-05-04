@@ -154,7 +154,12 @@ func TestCatalogRevoke_NoEndpoint_LocalDeleteWithConsoleHint(t *testing.T) {
 	}
 }
 
-func TestCatalogRevoke_UpstreamFailure_PromptsLocalDeleteAndCarries(t *testing.T) {
+func TestCatalogRevoke_UpstreamFailure_DefaultPreservesCredential(t *testing.T) {
+	// Default safe action on upstream-fail: any key that isn't `d`
+	// (esc/n/enter included) cancels and preserves the credential
+	// so the user can retry revoke later. Catalog credentials are
+	// only useful as charon's handle on the upstream key; throwing
+	// the handle away on transient failure forces a re-paste.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		io.WriteString(w, `{"error":"insufficient_scope"}`)
@@ -180,49 +185,68 @@ func TestCatalogRevoke_UpstreamFailure_PromptsLocalDeleteAndCarries(t *testing.T
 	if !strings.Contains(view, "console.anthropic.com") {
 		t.Errorf("error view missing console URL:\n%s", view)
 	}
+	// View should advertise both options.
+	if !strings.Contains(view, "keep credential") || !strings.Contains(view, "[d]") {
+		t.Errorf("error view help line missing keep/d affordances:\n%s", view)
+	}
 
-	// any key (other than n/esc) → fall back to local delete.
-	updated, doneCmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated
-	if doneCmd == nil {
-		t.Fatal("any-key after upstream-fail produced no cmd")
-	}
-	done, ok := doneCmd().(catalogRevokeDoneMsg)
-	if !ok {
-		t.Fatalf("cmd() = %T, want catalogRevokeDoneMsg", doneCmd())
-	}
-	if !strings.Contains(done.statusNote, "Removed") || !strings.Contains(done.statusNote, "upstream revoke failed") {
-		t.Errorf("statusNote = %q, want 'Removed … upstream revoke failed' phrasing", done.statusNote)
-	}
-	if _, err := v.Get("anthropic", "personal"); err == nil {
-		t.Error("vault entry should have been deleted on local-delete fallback")
+	// Each non-`d` key should preserve the credential.
+	for _, k := range []tea.KeyMsg{
+		{Type: tea.KeyEnter},
+		{Type: tea.KeyEsc},
+		{Runes: []rune{'n'}, Type: tea.KeyRunes},
+		{Runes: []rune{'x'}, Type: tea.KeyRunes}, // any random key
+	} {
+		// Each iteration uses a fresh model so we don't drain state.
+		mc, _ := newCatalogRevokeModel(entry, "personal", v)
+		mc, cmd := mc.Update(tea.KeyMsg{Runes: []rune{'y'}, Type: tea.KeyRunes})
+		mc, _ = mc.Update(cmd())
+		_, cmd2 := mc.Update(k)
+		if cmd2 == nil {
+			t.Fatalf("key %v produced no cmd", k)
+		}
+		if _, ok := cmd2().(catalogRevokeCancelMsg); !ok {
+			t.Errorf("key %v: cmd = %T, want catalogRevokeCancelMsg", k, cmd2())
+		}
+		if _, err := v.Get("anthropic", "personal"); err != nil {
+			t.Errorf("vault entry missing after key %v on upstream-fail; expected preserved", k)
+		}
 	}
 }
 
-func TestCatalogRevoke_UpstreamFailure_EscPreservesCredential(t *testing.T) {
+func TestCatalogRevoke_UpstreamFailure_DKeyForceLocalDelete(t *testing.T) {
+	// `d` is the explicit-force-delete affordance for cases where
+	// upstream-revoke can't ever succeed (key already revoked at
+	// provider, provider deprecated). Non-default key on purpose.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer srv.Close()
-	entry := anthropicLikeRevokeEntry(srv.URL, srv.URL+"/{key_id}", "")
+	entry := anthropicLikeRevokeEntry(srv.URL, srv.URL+"/{key_id}", "https://console.anthropic.com/settings/keys")
 	v := memory.New()
 	storeCatalogCred(t, v, "anthropic", "personal", matchingPastedKey)
-	m, _ := newCatalogRevokeModel(entry, "personal", v)
 
+	m, _ := newCatalogRevokeModel(entry, "personal", v)
 	m, cmd := m.Update(tea.KeyMsg{Runes: []rune{'y'}, Type: tea.KeyRunes})
 	m, _ = m.Update(cmd())
 	if m.state != catalogRevokeStateUpstreamFailed {
 		t.Fatalf("state = %d, want upstreamFailed", m.state)
 	}
-	_, escCmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if escCmd == nil {
-		t.Fatal("esc produced no cmd")
+	_, dCmd := m.Update(tea.KeyMsg{Runes: []rune{'d'}, Type: tea.KeyRunes})
+	if dCmd == nil {
+		t.Fatal("d produced no cmd")
 	}
-	if _, ok := escCmd().(catalogRevokeCancelMsg); !ok {
-		t.Fatalf("escCmd() = %T, want catalogRevokeCancelMsg", escCmd())
+	done, ok := dCmd().(catalogRevokeDoneMsg)
+	if !ok {
+		t.Fatalf("dCmd() = %T, want catalogRevokeDoneMsg", dCmd())
 	}
-	if _, err := v.Get("anthropic", "personal"); err != nil {
-		t.Errorf("vault entry missing after esc on upstream-fail; expected preserved")
+	if !strings.Contains(done.statusNote, "Removed") ||
+		!strings.Contains(done.statusNote, "upstream revoke failed") ||
+		!strings.Contains(done.statusNote, "console.anthropic.com") {
+		t.Errorf("statusNote = %q, want 'Removed … upstream revoke failed … console URL' phrasing", done.statusNote)
+	}
+	if _, err := v.Get("anthropic", "personal"); err == nil {
+		t.Error("vault entry should have been deleted on `d` (force local delete)")
 	}
 }
 
