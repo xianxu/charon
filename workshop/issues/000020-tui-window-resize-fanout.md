@@ -70,28 +70,45 @@ scopes-only branch, just exhaustive.
 
 ## Plan
 
-- [ ] Audit each sub-model (`providerPickerModel`, `pickerModel`,
-  `adminKeyListModel`, `adminKeyPasteModel`, `adminMintModel`,
-  `adminRevokeModel`, `adminKeyDetailModel`, `gcpSetupModel`,
-  `catalogPickerModel`, `catalogPasteModel`, `catalogAccountListModel`,
-  `catalogRevokeModel`) for which ones actually use width/height for
-  layout
-- [ ] Extend `model.Update`'s `WindowSizeMsg` branch to dispatch to
+- [x] Audit sub-models for width/height usage (only `scopesModel`
+  actually lays out against height today; `adminKeyPasteModel` stores
+  width/height but never reads them; everything else uses hardcoded
+  60-char separators)
+- [x] Extend `model.Update`'s `WindowSizeMsg` branch to dispatch to
   `m.current`'s sub-model
-- [ ] Add WindowSize handling to sub-models that need it but don't have
-  it yet
-- [ ] Add a "seed dimensions" step at every `m.current = ...`
-  transition — a small helper would avoid scattering the boilerplate
-- [ ] Manual verification: `stty rows N` (or just resize the terminal)
-  on each screen and confirm layout reflows
-- [ ] Consider an automated test analogous to
-  `internal/tui/render_dump_test.go` that drives a `WindowSizeMsg`
-  through each screen and snapshots the output
+- [x] Add a "seed dimensions" step at screen transitions via a wrapper
+  on `Update` that detects `m.current` changes and batches a synthetic
+  `tea.WindowSizeMsg` with cached dimensions
+- [x] Add automated tests covering the three new behaviors
+  (`TestWindowSizeFanout`, `TestWindowSizeFanoutToPaste`,
+  `TestSeedSizeOnScreenTransition`)
+- [ ] Manual verification: deferred — only `scopesModel` actually
+  reflows on resize today, and that path was already wired before this
+  fix. The new wiring is a structural correctness fix; the snapshot
+  test covers the message-routing contract that future
+  width/height-aware screens will rely on.
 
 ## Log
 
-### 2026-05-05
+### 2026-05-05 — session summary
 Filed after noticing the gap during a discussion about SIGWINCH
 handling. Discovery starts at `internal/tui/model.go:225` (parent
 forwarder) and `internal/tui/admin_key_paste.go:146` (orphaned child
 handler).
+
+Fix landed as a thin wrapper on `model.Update`: factored the existing
+big switch into `updateInner`, with a wrapper that (a) drops the
+`screenScopes`-only guard so `WindowSizeMsg` falls through to the
+bottom-of-function screen dispatch (forwarding to whichever child is
+current), and (b) detects `m.current` changes and batches a
+`seedSizeCmd` that re-delivers the cached dimensions to the new
+screen on the next tick. Added `internal/tui/model_resize_test.go`
+with three tests covering scopes-fanout, paste-fanout, and
+seed-on-transition. All `go test ./...` green.
+
+Behavioral surface today is small — `scopesModel` is the only screen
+that reflows on resize, and it was already wired. The change is a
+structural fix: `adminKeyPasteModel`'s orphaned `WindowSizeMsg`
+handler is no longer dead code, and any future screen that wants to
+react to resize gets it for free without having to remember to add a
+forwarding branch in the parent.

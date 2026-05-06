@@ -220,17 +220,50 @@ func newModel(v vault.Store, initialAccount string, opts ...Option) (model, erro
 
 func (m model) Init() tea.Cmd { return nil }
 
+// Update is a thin wrapper around updateInner that handles two cross-cutting
+// concerns:
+//   - WindowSizeMsg dimensions are cached on the parent so they can be replayed
+//     on screen transitions (see seedSizeCmd).
+//   - When updateInner changes m.current, a synthetic tea.WindowSizeMsg is
+//     queued so the new screen sees the latest dimensions on its first frame
+//     instead of zero. Without this, sub-models that lay out against width or
+//     height (today: scopesModel; tomorrow: anything else) render blank/clipped
+//     until the user resizes the terminal.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	prev := m.current
+	out, cmd := m.updateInner(msg)
+	mm := out.(model)
+	if mm.current != prev {
+		if seed := mm.seedSizeCmd(); seed != nil {
+			if cmd == nil {
+				return mm, seed
+			}
+			return mm, tea.Batch(cmd, seed)
+		}
+	}
+	return mm, cmd
+}
+
+// seedSizeCmd returns a Cmd that delivers the parent's cached dimensions as a
+// tea.WindowSizeMsg on the next tick. Returns nil before the first real
+// WindowSizeMsg arrives (m.width or m.height still zero) — there's nothing
+// useful to seed yet, and the real message will arrive shortly.
+func (m model) seedSizeCmd() tea.Cmd {
+	if m.width <= 0 || m.height <= 0 {
+		return nil
+	}
+	w, h := m.width, m.height
+	return func() tea.Msg { return tea.WindowSizeMsg{Width: w, Height: h} }
+}
+
+func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		// Forward to active screen so scopesModel can resize its row window.
-		if m.current == screenScopes {
-			var cmd tea.Cmd
-			m.scopes, cmd = m.scopes.Update(msg)
-			return m, cmd
-		}
-		return m, nil
+		// Cache dimensions then fall through to the current-screen
+		// dispatch at the bottom so the active sub-model gets the
+		// resize too. Previously only scopes was forwarded, leaving
+		// every other screen unable to react to SIGWINCH.
 
 	case providerSelectedMsg:
 		return m.handleProviderSelected(msg)

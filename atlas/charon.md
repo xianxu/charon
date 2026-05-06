@@ -335,6 +335,19 @@ Apply paths:
 - ^r (revoke account): confirmation modal → calls Google's revoke
   endpoint, deletes the credential from the keychain, exits
 
+### Window-resize contract
+
+`model.Update` (`internal/tui/model.go`) caches `tea.WindowSizeMsg`
+dimensions on the parent and dispatches the message to whichever
+sub-model is `m.current`. On every screen transition (when
+`m.current` changes) it batches a synthetic `WindowSizeMsg` carrying
+the cached dimensions so a freshly-opened screen sees real width/
+height on its first frame instead of zero — which matters for any
+sub-model that lays out against terminal size (today
+`scopesModel`'s row windowing; tomorrow anything else). New
+sub-models don't need a forwarding branch in the parent; just handle
+`tea.WindowSizeMsg` in their own `Update`. See #000020.
+
 ### TUI environment knobs
 
 - `CHARON_TUI_HEIGHT=N` — manual height override (raw value, no -1
