@@ -1,12 +1,12 @@
 ---
 id: 000020
-status: working
+status: done
 deps: []
 github_issue:
 created: 2026-05-05
 updated: 2026-05-05
 estimate_hours: 2
-actual_hours:
+actual_hours: 1
 ---
 
 # TUI doesn't propagate window resize to non-scopes screens
@@ -90,6 +90,8 @@ scopes-only branch, just exhaustive.
 
 ## Log
 
+
+- 2026-05-05: closed — go test ./... PASS; new tests TestWindowSizeFanout/ToPaste/SeedSizeOnScreenTransition cover scopes-fanout, paste-fanout, and seed-on-transition. Manual verification deferred (no current screen besides scopes reflows on resize; structural fix verified via tests). Atlas updated with the new resize contract.
 ### 2026-05-05 — session summary
 Filed after noticing the gap during a discussion about SIGWINCH
 handling. Discovery starts at `internal/tui/model.go:225` (parent
